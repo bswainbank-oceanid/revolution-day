@@ -1,0 +1,179 @@
+{
+  "game": "Revolution Day",
+  "designer": "Ben Swainbank",
+  "publisher": "The Mithril Mine",
+  "players": "2-8 (best with 3-5)",
+  "playtime_minutes": "30-60",
+  "locations_in_order": ["Street", "HQ", "Street", "Arena", "Street", "Palace"],
+  "location_types": {
+    "Street": "Street",
+    "HQ": "Secure",
+    "Arena": "Public",
+    "Palace": "Secure"
+  },
+  "leaders": [
+    {
+      "name": "Head of Security", "faction": "Regime", "locations": ["Public", "Street", "Secure"], "attributes": ["Protected"],
+      "win_conditions": ["President not eliminated.", "Survive."],
+      "abilities": [
+        {"type": "Activate", "text": "Activate any non-leader regime card, controlled by any player, at any location."},
+        {"type": "Response", "text": "Eliminate a target."}
+      ]
+    },
+    {
+      "name": "Commander General", "faction": "Regime", "locations": ["Secure"], "attributes": ["Protected"],
+      "win_conditions": ["President eliminated.", "Survive.", "Regime cards outnumber rebels at HQ at the end of the game."],
+      "abilities": [
+        {"type": "Activate", "text": "Play any number of regime cards at this location."},
+        {"type": "Activate", "text": "Activate any number of your regime cards at this location."},
+        {"type": "Activate", "text": "Reveal all blended characters at this location."}
+      ]
+    },
+    {
+      "name": "Wife", "faction": "Regime", "locations": ["Secure"], "attributes": ["Protected", "Blend"],
+      "win_conditions": ["President eliminated at the Palace."],
+      "abilities": [
+        {"type": "Activate", "text": "Eliminate the President (ignores protected)."}
+      ]
+    },
+    {
+      "name": "Heir Apparent", "faction": "Regime", "locations": ["Public", "Street", "Secure"], "attributes": ["Protected"],
+      "win_conditions": ["Survive.", "No other surviving leaders."],
+      "abilities": [
+        {"type": "Activate", "text": "Gain 2 actions."},
+        {"type": "Activate", "alarm": true, "text": "Eliminate one or two targets."},
+        {"type": "Response", "text": "Eliminate one or two targets."}
+      ]
+    },
+    {
+      "name": "Opposition Leader", "faction": "Rebel", "locations": ["Public", "Street"], "attributes": ["Protected"],
+      "win_conditions": ["Survive.", "At least one rebel at 5 or more locations at the end of the game."],
+      "abilities": [
+        {"type": "Activate", "text": "Place 2 rebels at any locations (ignore location restrictions)."},
+        {"type": "Activate", "text": "Draw 3 cards."},
+        {"type": "Activate", "text": "Reveal a blended target at any location. If it is a non-leader rebel card, gain control of it."}
+      ]
+    },
+    {
+      "name": "Guerrilla Commander", "faction": "Rebel", "locations": ["Public", "Street"], "attributes": ["Blend"],
+      "win_conditions": ["President eliminated.", "No regime leader wins.", "Rebels outnumber regime cards at the Palace at the end of the game."],
+      "abilities": [
+        {"type": "Activate", "text": "Activate any non-leader rebel card, controlled by any player, at any location."},
+        {"type": "Activate", "text": "Reveal a blended target. If it is a regime card, eliminate it. If it is a non-leader rebel card, gain control of it."}
+      ]
+    },
+    {
+      "name": "Master Assassin", "faction": "Rebel", "locations": ["Public", "Street", "Secure"], "attributes": ["Blend"],
+      "win_conditions": ["Eliminate the President or 2 leaders with cards you control.", "Survive."],
+      "abilities": [
+        {"type": "Activate", "text": "Return this card to its controller's hand and play a card."},
+        {"type": "Activate", "text": "Eliminate a target and blend."},
+        {"type": "Activate", "alarm": true, "text": "Eliminate 2 targets."},
+        {"type": "Response", "text": "Eliminate a target."}
+      ]
+    },
+    {
+      "name": "Puppet-Master", "faction": "Rebel", "locations": ["Public", "Street", "Secure"], "attributes": ["Protected", "Blend"],
+      "win_conditions": ["No other player wins.", "Survive."],
+      "abilities": [
+        {"type": "Activate", "text": "Play 2 cards."},
+        {"type": "Activate", "text": "Activate any non-leader card, controlled by any player, at any location."}
+      ]
+    }
+  ],
+  "president": {
+    "name": "President", "faction": "Regime President", "attributes": ["Protected"],
+    "notes": "Begins the game out of play. Enters at the first Street location when the first Motorcade card is played. Advances one location per Motorcade card. Game ends immediately if a Motorcade is played while at the Palace (President survives)."
+  },
+  "motorcade": {
+    "name": "Motorcade", "count_in_deck": 9,
+    "text": "Move the President forward one location. After the President has been eliminated, move a card you control to any location.",
+    "notes": "Cannot be played on a player's first turn. If the deck is empty, the President has not been eliminated, and a player holds a Motorcade card, it must be played immediately (does not count as an action)."
+  },
+  "non_leader_cards": [
+    {"name": "Bodyguard", "faction": "Regime", "copies": 2, "locations": ["Public", "Street", "Secure"], "attributes": [],
+      "abilities": [{"type": "Response", "text": "Eliminate a rebel target."}],
+      "passive": "If the President moves from this location, move this card to the same location."},
+    {"name": "Secret Police", "faction": "Regime", "copies": 2, "locations": ["Public", "Street", "Secure"], "attributes": ["Blend"],
+      "abilities": [
+        {"type": "Activate", "text": "Reveal a blended target. If it is a rebel, eliminate it. If it is regime, eliminate this card instead."},
+        {"type": "Response", "text": "Eliminate a rebel target."}
+      ]},
+    {"name": "Throng of Admirers", "faction": "Regime", "copies": 1, "locations": ["Public", "Street"], "attributes": [],
+      "passive": "If this card is at the President's location when a Motorcade card is played, its controller can eliminate this card to prevent the President from moving."},
+    {"name": "Celebrity", "faction": "Regime", "copies": 1, "locations": ["Public", "Street", "Secure"], "attributes": [],
+      "passive": "If this card is eliminated, all players can immediately play any number of cards at this location (ignore location restrictions)."},
+    {"name": "Republican Guard", "faction": "Regime", "copies": 2, "locations": ["Secure"], "attributes": [],
+      "abilities": [{"type": "Activate", "text": "Eliminate a target."}]},
+    {"name": "Death Squad", "faction": "Regime", "copies": 2, "locations": ["Street"], "attributes": [],
+      "abilities": [
+        {"type": "Activate", "alarm": true, "text": "Eliminate one or two targets."},
+        {"type": "Response", "text": "Eliminate one or two targets."}
+      ]},
+    {"name": "Traffic Cop", "faction": "Regime", "copies": 2, "locations": ["Street"], "attributes": [],
+      "abilities": [{"type": "Activate", "text": "Move the President from this location forward or backwards to an adjacent location."}]},
+    {"name": "Army Sniper", "faction": "Regime", "copies": 1, "locations": ["Public", "Street", "Secure"], "attributes": [],
+      "abilities": [
+        {"type": "Activate", "alarm": true, "text": "Eliminate a rebel target at this or an adjacent location."},
+        {"type": "Response", "text": "Eliminate a target."}
+      ]},
+    {"name": "Prominent Citizen", "faction": "Regime", "copies": 2, "locations": ["Public", "Street", "Secure"], "attributes": ["Blend"], "abilities": []},
+    {"name": "Mr. Lucky", "faction": "Rebel", "copies": 1, "locations": ["Public", "Street"], "attributes": ["Blend"],
+      "passive": "If Mr. Lucky would be eliminated, return him to his controller's hand instead."},
+    {"name": "Rebel Soldier", "faction": "Rebel", "copies": 2, "locations": ["Street"], "attributes": [],
+      "abilities": [{"type": "Activate", "alarm": true, "text": "Eliminate one or two regime targets."}]},
+    {"name": "Gunman", "faction": "Rebel", "copies": 2, "locations": ["Street"], "attributes": ["Blend"],
+      "abilities": [
+        {"type": "Activate", "alarm": true, "text": "Eliminate a target."},
+        {"type": "Response", "text": "Eliminate a regime target."}
+      ]},
+    {"name": "Assassin", "faction": "Rebel", "copies": 2, "locations": ["Street"], "attributes": ["Blend"],
+      "abilities": [
+        {"type": "Activate", "text": "Eliminate a target."},
+        {"type": "Response", "text": "Eliminate a target."}
+      ]},
+    {"name": "Angry Mob", "faction": "Rebel", "copies": 2, "locations": ["Public", "Street"], "attributes": [],
+      "abilities": [{"type": "Activate", "alarm": true, "text": "Trigger an Alarm."}],
+      "passive": "If this card is at the President's location when a Motorcade card is played, its controller can eliminate this card to prevent the President from moving."},
+    {"name": "Martyr", "faction": "Rebel", "copies": 1, "locations": ["Public", "Street"], "attributes": ["Blend"],
+      "passive": "If this card is eliminated, its controller can immediately play any number of rebel cards at this location (ignore location restrictions)."},
+    {"name": "Journalist", "faction": "Rebel", "copies": 1, "locations": ["Public", "Street"], "attributes": ["Blend"],
+      "abilities": [{"type": "Activate", "text": "Look at a blended target at this location."}]},
+    {"name": "Suicide Bomber", "faction": "Rebel", "copies": 2, "locations": ["Street"], "attributes": ["Blend"],
+      "abilities": [{"type": "Activate", "alarm": true, "text": "Eliminate 4 random targets. These cards can include cards you control. Protected cards are eliminated only if there are no other targets. Then eliminate this card."}]},
+    {"name": "Insurgent Sniper", "faction": "Rebel", "copies": 1, "locations": ["Street"], "attributes": ["Blend"],
+      "abilities": [{"type": "Activate", "alarm": true, "text": "Eliminate a regime target at an adjacent location."}]},
+    {"name": "Anarchist", "faction": "Rebel", "copies": 1, "locations": ["Public", "Street"], "attributes": ["Blend"],
+      "abilities": [{"type": "Activate", "text": "Trigger an Alarm at any location."}]}
+  ],
+  "attributes": {
+    "Protected": "Cannot be targeted for elimination while there are other cards in the same faction at the location. The President can only be targeted once all other regime cards at his location are eliminated. Cards you control do not count toward this protection.",
+    "Blend": "May be played face-down to conceal identity. Must reveal to use an Activate ability or to respond to an alarm. Can be revealed at any time except mid-Activate-ability targeting a blended character. Face-down cards do not count as regime or rebel for targeting purposes."
+  },
+  "alarm_response_rules": [
+    "Alarms are resolved before the rest of the triggering ability.",
+    "Resolution proceeds around the table; each player may respond in turn with one character they control at that location.",
+    "Blended characters must reveal to respond.",
+    "The triggering player responds last, after everyone else.",
+    "The character that triggered the alarm cannot itself respond.",
+    "If the triggering character is eliminated by a response, the rest of the original ability does not resolve."
+  ],
+  "turn_structure": {
+    "draw_phase": "Draw one card from the top of the deck. If the deck is empty, the President is still alive, and you hold a Motorcade card, you must play it immediately (does not count as an action).",
+    "action_phase": "Take two actions. Each action is one of: draw a card, play a character card, play a Motorcade card, move a character you control to an adjacent location, or activate an Activate ability on a character you control."
+  },
+  "ending_the_game": "If the President reaches the Palace and then advances one more time, he survives and the game ends immediately. If the President is eliminated, every player (including the current player) gets three more turns, then the game ends.",
+  "additional_rulings": [
+    "If all players win, then everyone loses.",
+    "In a two-player game, the President cannot be eliminated until after he has passed through HQ.",
+    "With six or more players, everyone begins with only their leader card in hand (no draw up to 5).",
+    "Protected characters are not protected by other protected characters; if only protected targets remain, either may be eliminated.",
+    "Effects that specify a location for placing characters let you ignore normal location-type restrictions.",
+    "Blended characters cannot reveal during an Activated action that targets a blended character, but can reveal during any other Activated action, including just before targets are chosen.",
+    "You are never required to take both actions on your turn.",
+    "Effects triggered by elimination (Celebrity, Martyr) resolve after the current Activated action fully resolves.",
+    "Protected + Blend characters get no Protection benefit while blended.",
+    "Characters cannot target themselves, but can target other characters you control.",
+    "The Master Assassin's hand-return ability can still be used after the President is eliminated; if any leader is in your hand after the President is eliminated, you must play it as your first action."
+  ]
+}
