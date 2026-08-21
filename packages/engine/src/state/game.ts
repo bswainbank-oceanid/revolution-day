@@ -8,6 +8,9 @@ export type PlayerId = string;
 export interface Player {
   readonly id: PlayerId;
   readonly seatIndex: number;
+  // True once this player's turn has ended at least once — backs the
+  // Motorcade restriction "cannot be played on a player's first turn".
+  readonly hasTakenFirstTurn: boolean;
 }
 
 export interface PresidentState {

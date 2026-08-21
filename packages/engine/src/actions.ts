@@ -8,7 +8,14 @@
 export type TurnAction =
   | { readonly type: "draw" }
   | { readonly type: "playCard"; readonly cardId: string; readonly locationId: string }
-  | { readonly type: "playMotorcade"; readonly cardId: string }
+  | {
+      readonly type: "playMotorcade";
+      readonly cardId: string;
+      // Required once the President has been eliminated — "move a card
+      // you control to any location" replaces the forward-move.
+      readonly moveOwnCardId?: string;
+      readonly moveToLocationId?: string;
+    }
   | { readonly type: "moveCard"; readonly cardId: string; readonly toLocationId: string }
   | { readonly type: "activateAbility"; readonly cardId: string; readonly abilityIndex: number }
   | { readonly type: "endTurn" };

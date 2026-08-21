@@ -29,7 +29,7 @@ export type { Action, TurnAction, ResolutionAction } from "./actions";
 export { setupGame } from "./setup";
 export type { SetupOptions } from "./setup";
 export { applyAction } from "./reducer";
-export { hasAttribute } from "./state/cardLookup";
+export { hasAttribute, getAllowedLocationTypes } from "./state/cardLookup";
 export type {
   AbilityDefinition,
   EffectNode,

@@ -1,4 +1,4 @@
-import type { CardData } from "../types";
+import type { CardData, LocationType } from "../types";
 import type { CardInstance } from "./cards";
 
 // CardInstance carries only defRef/kind, not the static definition — these
@@ -14,4 +14,11 @@ export function hasAttribute(
   const defs = card.kind === "leader" ? cardData.leaders : cardData.non_leader_cards;
   const def = defs.find((d) => d.name === card.defRef);
   return def?.attributes.includes(attribute) ?? false;
+}
+
+export function getAllowedLocationTypes(cardData: CardData, card: CardInstance): readonly LocationType[] {
+  if (card.kind === "motorcade") return [];
+  const defs = card.kind === "leader" ? cardData.leaders : cardData.non_leader_cards;
+  const def = defs.find((d) => d.name === card.defRef);
+  return def?.locations ?? [];
 }

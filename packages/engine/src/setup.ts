@@ -84,7 +84,7 @@ export function setupGame(options: SetupOptions): GameState {
   return {
     rng,
     board,
-    players: playerIds.map((id, seatIndex): Player => ({ id, seatIndex })),
+    players: playerIds.map((id, seatIndex): Player => ({ id, seatIndex, hasTakenFirstTurn: false })),
     cards: [...leaderInstances, ...dealtHandCards, ...remainingDeck],
     president: { status: "notEntered", locationId: null },
     turn: {
