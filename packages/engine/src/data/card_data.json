@@ -144,19 +144,33 @@
     {"name": "Insurgent Sniper", "faction": "Rebel", "copies": 1, "locations": ["Street"], "attributes": ["Blend"],
       "abilities": [{"type": "Activate", "alarm": true, "text": "Eliminate a regime target at an adjacent location."}]},
     {"name": "Anarchist", "faction": "Rebel", "copies": 1, "locations": ["Public", "Street"], "attributes": ["Blend"],
-      "abilities": [{"type": "Activate", "text": "Trigger an Alarm at any location."}]}
+      "abilities": [{"type": "Activate", "alarm": true, "text": "Trigger an Alarm at any location."}]}
   ],
   "attributes": {
     "Protected": "Cannot be targeted for elimination while there are other cards in the same faction at the location. The President can only be targeted once all other regime cards at his location are eliminated. Cards you control do not count toward this protection.",
     "Blend": "May be played face-down to conceal identity. Must reveal to use an Activate ability or to respond to an alarm. Can be revealed at any time except mid-Activate-ability targeting a blended character. Face-down cards do not count as regime or rebel for targeting purposes."
   },
+  "protected_targeting_rules": [
+    "When a declared target for an ability or response would be a Protected character (including the President), proceed around the table once, starting with the player after whoever declared the target. The player who declared the target is skipped.",
+    "On their turn in this pass, a player with one or more blended characters at that location may reveal any number of them; players with none at that location are skipped. Once the pass completes, it is not repeated.",
+    "If a reveal introduces a new, non-Protected character of the required faction at the location, the ability's target is reassigned to that character instead of the originally declared Protected target.",
+    "A multi-target ability may target a Protected character together with the last other same-faction card(s) at that location in a single activation — Protected-immunity is evaluated against the full set of simultaneously declared targets, not sequentially."
+  ],
+  "motorcade_interception_rules": [
+    "Throng of Admirers and Angry Mob share this passive: if the card is at the President's location when a Motorcade card is played, its controller may eliminate it to prevent the President from moving.",
+    "Before a Motorcade's move effect applies, check for eligible interceptors: any player controlling such a card at the President's location before the move. If none exist, the move applies immediately.",
+    "If any exist, offer them the choice (eliminate to cancel, or pass) in table order starting with the player after whoever played the Motorcade. The first player to accept cancels the move immediately; no further players are asked. If all pass, the move applies as normal.",
+    "The Motorcade card itself is still spent (played from hand, action used) even if the move it would cause is cancelled — only the movement is prevented, not the play.",
+    "This applies identically whether the Motorcade was played voluntarily or via the forced empty-deck rule, and a player may use this passive on their own card to cancel their own Motorcade's move."
+  ],
   "alarm_response_rules": [
     "Alarms are resolved before the rest of the triggering ability.",
     "Resolution proceeds around the table; each player may respond in turn with one character they control at that location.",
     "Blended characters must reveal to respond.",
     "The triggering player responds last, after everyone else.",
     "The character that triggered the alarm cannot itself respond.",
-    "If the triggering character is eliminated by a response, the rest of the original ability does not resolve."
+    "If the triggering character is eliminated by a response, the rest of the original ability does not resolve.",
+    "If the alarm was triggered via a remote-activation effect (e.g. Head of Security), the acting player who chose to activate the ability is the triggering player for response-ordering purposes, regardless of who controls the character that actually triggered the alarm. Response proceeds around the table starting to the acting player's left, and the acting player responds last. The triggering character itself can never be used to respond, even by its own controller, but that controller (and the acting player) may still respond using any other character they control at that location."
   ],
   "turn_structure": {
     "draw_phase": "Draw one card from the top of the deck. If the deck is empty, the President is still alive, and you hold a Motorcade card, you must play it immediately (does not count as an action).",
@@ -174,6 +188,8 @@
     "Effects triggered by elimination (Celebrity, Martyr) resolve after the current Activated action fully resolves.",
     "Protected + Blend characters get no Protection benefit while blended.",
     "Characters cannot target themselves, but can target other characters you control.",
-    "The Master Assassin's hand-return ability can still be used after the President is eliminated; if any leader is in your hand after the President is eliminated, you must play it as your first action."
+    "The Master Assassin's hand-return ability can still be used after the President is eliminated; if any leader is in your hand after the President is eliminated, you must play it as your first action.",
+    "All blended (face-down) characters are revealed at the end of the game; win conditions that count cards by faction use true affiliation, not Blend-concealed identity.",
+    "The President's faction ('Regime President') counts as Regime for all faction-based counting and protection rules; the distinct label identifies the singular special President entity, not a different game faction. In practice this rarely changes an outcome on its own, since the President is himself Protected and so never serves as the 'other viable non-Protected target' that shields another Protected character — if the only remaining cards at a location are the President and another Protected character, either may be targeted, per the existing protected-doesn't-protect-protected ruling above."
   ]
 }
