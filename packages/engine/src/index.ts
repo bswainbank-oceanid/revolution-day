@@ -26,6 +26,8 @@ export type {
   PendingPassiveTrigger,
 } from "./state/resolution";
 export type { Action, TurnAction, ResolutionAction } from "./actions";
+export { setupGame } from "./setup";
+export type { SetupOptions } from "./setup";
 export type {
   AbilityDefinition,
   EffectNode,
