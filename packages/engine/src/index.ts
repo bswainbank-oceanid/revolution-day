@@ -14,9 +14,32 @@ export type {
 export { boardLayoutFromCardData, adjacentLocationIds } from "./state/board";
 export type { BoardLayout, LocationInstance } from "./state/board";
 export type { CardInstance, Zone, CardKind } from "./state/cards";
-export type { GameState, Player, PlayerId, PresidentState, TurnState, ResolutionFrame } from "./state/game";
+export type { GameState, Player, PlayerId, PresidentState, TurnState } from "./state/game";
 export { createRng, nextFloat, nextInt, shuffle } from "./state/rng";
 export type { RngState } from "./state/rng";
+export type {
+  AbilityResolutionFrame,
+  AlarmResolutionFrame,
+  ProtectedTargetingWindowFrame,
+  MotorcadeInterceptionWindowFrame,
+  ResolutionFrame,
+  PendingPassiveTrigger,
+} from "./state/resolution";
+export type { Action, TurnAction, ResolutionAction } from "./actions";
+export type {
+  AbilityDefinition,
+  EffectNode,
+  TargetSelector,
+  TargetCount,
+  TargetSelection,
+  CardKindFilter,
+  ControllerFilter,
+  LocationScope,
+  RandomPool,
+  Condition,
+  ConditionOperand,
+  MoveDestination,
+} from "./effects/dsl";
 
 import { cardData } from "./data/cardData";
 

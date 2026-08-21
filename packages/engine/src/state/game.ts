@@ -1,5 +1,6 @@
 import type { BoardLayout } from "./board";
 import type { CardInstance } from "./cards";
+import type { PendingPassiveTrigger, ResolutionFrame } from "./resolution";
 import type { RngState } from "./rng";
 
 export type PlayerId = string;
@@ -29,12 +30,6 @@ export interface TurnState {
   readonly endgameTurnsRemaining: number | null;
 }
 
-// Resolution-stack frame types (AbilityResolution, AlarmResolution,
-// ProtectedTargetingWindow, MotorcadeInterceptionWindow) are not yet
-// defined — see rev_day_engine_design memory for their specs. Placeholder
-// until that's built out.
-export type ResolutionFrame = unknown;
-
 export interface GameState {
   readonly rng: RngState;
   readonly board: BoardLayout;
@@ -43,4 +38,6 @@ export interface GameState {
   readonly president: PresidentState;
   readonly turn: TurnState;
   readonly resolutionStack: readonly ResolutionFrame[];
+  // FIFO, not part of the stack — see resolution.ts.
+  readonly pendingPassiveQueue: readonly PendingPassiveTrigger[];
 }
