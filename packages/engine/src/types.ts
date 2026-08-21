@@ -55,7 +55,9 @@ export interface CardData {
   motorcade: MotorcadeData;
   non_leader_cards: NonLeaderCard[];
   attributes: Record<Attribute, string>;
+  protected_targeting_rules: string[];
   alarm_response_rules: string[];
+  motorcade_interception_rules: string[];
   turn_structure: {
     draw_phase: string;
     action_phase: string;
