@@ -31,6 +31,9 @@ export interface TurnState {
   readonly actionsRemaining: number;
   // null until the President is eliminated, then counts down from 3.
   readonly endgameTurnsRemaining: number | null;
+  // "cardId#abilityIndex" keys — backs "each Activate ability can only be
+  // used once each turn". Reset every time a turn ends.
+  readonly usedAbilities: readonly string[];
 }
 
 export interface GameState {

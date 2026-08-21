@@ -396,3 +396,114 @@ describe("applyAction: playMotorcade", () => {
     expect(() => act(state, player, { type: "playMotorcade", cardId: notMotorcade.id })).toThrow();
   });
 });
+
+describe("applyAction: activateAbility / chooseTargets", () => {
+  it("activates a simple ability, pushes a resolution frame, and resolves it on chooseTargets", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const target = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen" && c.id !== guard.id,
+    )!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, target.id, loc, other);
+    state = act(state, player, { type: "draw" });
+
+    const activated = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+    expect(activated.resolutionStack).toHaveLength(1);
+    expect(activated.turn.actionsRemaining).toBe(1);
+    expect(activated.turn.usedAbilities).toContain(`${guard.id}#0`);
+
+    const resolved = act(activated, player, { type: "chooseTargets", targetIds: [target.id] });
+    expect(resolved.resolutionStack).toHaveLength(0);
+    const eliminated = resolved.cards.find((c) => c.id === target.id)!;
+    expect(eliminated.zone).toBe("eliminated");
+    expect(eliminated.locationId).toBeUndefined();
+  });
+
+  it("only the activating player may choose targets, even mid-resolution", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const target = state.cards.find((c) => c.kind === "nonLeader" && c.id !== guard.id)!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, target.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+
+    expect(() => act(state, other, { type: "chooseTargets", targetIds: [target.id] })).toThrow();
+  });
+
+  it("rejects targeting a card at a different location", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const farTarget = state.cards.find((c) => c.kind === "nonLeader" && c.id !== guard.id)!;
+    state = placeInPlay(state, guard.id, state.board[0]!.id, player);
+    state = placeInPlay(state, farTarget.id, state.board[1]!.id, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: [farTarget.id] })).toThrow();
+  });
+
+  it("rejects using the same ability twice in one turn", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const t1 = state.cards.find((c) => c.kind === "nonLeader" && c.id !== guard.id)!;
+    const t2 = state.cards.find((c) => c.kind === "nonLeader" && c.id !== guard.id && c.id !== t1.id)!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, t1.id, loc, player);
+    state = placeInPlay(state, t2.id, loc, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [t1.id] });
+
+    expect(() =>
+      act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 }),
+    ).toThrow();
+  });
+
+  it("rejects self-activating a Response-type ability", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const bodyguard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Bodyguard")!;
+    state = placeInPlay(state, bodyguard.id, state.board[0]!.id, player);
+    state = act(state, player, { type: "draw" });
+
+    expect(() =>
+      act(state, player, { type: "activateAbility", cardId: bodyguard.id, abilityIndex: 0 }),
+    ).toThrow();
+  });
+
+  it("rejects an alarm-triggering ability (not yet implemented)", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const deathSquad = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Death Squad")!;
+    state = placeInPlay(state, deathSquad.id, state.board[0]!.id, player);
+    state = act(state, player, { type: "draw" });
+
+    expect(() =>
+      act(state, player, { type: "activateAbility", cardId: deathSquad.id, abilityIndex: 0 }),
+    ).toThrow();
+  });
+
+  it("rejects activating a card you don't control", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    state = placeInPlay(state, guard.id, state.board[0]!.id, other);
+    state = act(state, player, { type: "draw" });
+
+    expect(() =>
+      act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 }),
+    ).toThrow();
+  });
+});

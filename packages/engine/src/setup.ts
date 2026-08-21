@@ -92,6 +92,7 @@ export function setupGame(options: SetupOptions): GameState {
       phase: "draw",
       actionsRemaining: 2,
       endgameTurnsRemaining: null,
+      usedAbilities: [],
     },
     resolutionStack: [],
     pendingPassiveQueue: [],

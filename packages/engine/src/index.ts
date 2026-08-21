@@ -29,7 +29,9 @@ export type { Action, TurnAction, ResolutionAction } from "./actions";
 export { setupGame } from "./setup";
 export type { SetupOptions } from "./setup";
 export { applyAction } from "./reducer";
-export { hasAttribute, getAllowedLocationTypes } from "./state/cardLookup";
+export { hasAttribute, getAllowedLocationTypes, getAbilities, getFaction } from "./state/cardLookup";
+export { getAbilityEffects, abilityEffects } from "./data/abilityEffects";
+export { resolveEligibleTargets } from "./effects/targeting";
 export type {
   AbilityDefinition,
   EffectNode,

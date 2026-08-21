@@ -1,22 +1,31 @@
 import type { Action } from "./actions";
+import { getAbilityEffects } from "./data/abilityEffects";
+import { resolveEligibleTargets } from "./effects/targeting";
 import { adjacentLocationIds } from "./state/board";
-import { getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
+import { getAbilities, getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
+import type { CardInstance } from "./state/cards";
 import type { GameState, PlayerId } from "./state/game";
+import type { AbilityResolutionFrame } from "./state/resolution";
 import type { CardData } from "./types";
 
 // The reducer: (state, action) -> newState. Pure — no I/O, no hidden
 // randomness (the RNG lives in and is advanced through GameState itself).
 // cardData is passed explicitly (not imported as a singleton) so a future
 // variant's card set works unmodified, same as setupGame. "draw", "endTurn",
-// "moveCard", "playCard", and "playMotorcade" are implemented so far;
-// everything else is an explicit "not yet implemented" until the
-// resolution stack and effect interpreter are built out.
+// "moveCard", "playCard", "playMotorcade", and a first slice of
+// "activateAbility"/"chooseTargets" are implemented so far; everything
+// else is an explicit "not yet implemented".
 //
 // playMotorcade is deliberately incomplete in two ways, both noted inline:
 // it doesn't yet check for a Throng of Admirers/Angry Mob interception
-// (needs resolution-stack frame dispatch, not built yet), and it doesn't
-// implement the forced "must play immediately" trigger on an empty deck
-// (same gap already noted in applyDraw).
+// (needs resolution-stack frame dispatch), and it doesn't implement the
+// forced "must play immediately" trigger on an empty deck (same gap
+// already noted in applyDraw). activateAbility only handles non-alarm,
+// single-target `eliminate` abilities that have been encoded in
+// abilityEffects.ts (currently just Republican Guard and Assassin) — no
+// alarm resolution, no remote-activation, no Protected-immunity
+// enforcement yet. See rev_day_engine_design memory for the full design
+// this is incrementally building toward.
 export function applyAction(
   state: GameState,
   actingPlayerId: PlayerId,
@@ -24,9 +33,7 @@ export function applyAction(
   cardData: CardData,
 ): GameState {
   if (state.resolutionStack.length > 0) {
-    throw new Error(
-      `Resolution-stack actions are not yet implemented (top frame pending, action: ${action.type})`,
-    );
+    return applyResolutionAction(state, actingPlayerId, action, cardData);
   }
 
   if (actingPlayerId !== state.turn.currentPlayerId) {
@@ -44,8 +51,33 @@ export function applyAction(
       return applyPlayCard(state, cardData, action);
     case "playMotorcade":
       return applyPlayMotorcade(state, action);
+    case "activateAbility":
+      return applyActivateAbility(state, cardData, action);
     default:
       throw new Error(`Action not yet implemented: ${action.type}`);
+  }
+}
+
+// Dispatches to whatever the top resolution-stack frame expects next. Only
+// "abilityResolution" is handled so far — the other three frame kinds
+// (alarm response, protected-targeting reveal, Motorcade interception)
+// have no dispatch logic yet, since nothing can push them onto the stack
+// yet either.
+function applyResolutionAction(
+  state: GameState,
+  actingPlayerId: PlayerId,
+  action: Action,
+  cardData: CardData,
+): GameState {
+  const frame = state.resolutionStack[state.resolutionStack.length - 1]!;
+  switch (frame.kind) {
+    case "abilityResolution":
+      if (action.type !== "chooseTargets") {
+        throw new Error(`Expected chooseTargets while an ability awaits targets, got: ${action.type}`);
+      }
+      return applyChooseTargets(state, cardData, frame, actingPlayerId, action);
+    default:
+      throw new Error(`Resolution frame not yet implemented: ${frame.kind}`);
   }
 }
 
@@ -118,6 +150,7 @@ function applyEndTurn(state: GameState): GameState {
       phase: "draw",
       actionsRemaining: 2,
       endgameTurnsRemaining,
+      usedAbilities: [],
     },
   };
 }
@@ -276,4 +309,104 @@ function applyPlayMotorcade(
   // still gets discarded and the action still gets spent above.
 
   return { ...state, cards, president, turn: spendAction(state) };
+}
+
+function applyActivateAbility(
+  state: GameState,
+  cardData: CardData,
+  action: Extract<Action, { type: "activateAbility" }>,
+): GameState {
+  requireBudgetedAction(state);
+
+  const currentPlayerId = state.turn.currentPlayerId;
+  const card = state.cards.find((c) => c.id === action.cardId);
+  if (!card) {
+    throw new Error(`Unknown card: ${action.cardId}`);
+  }
+  // No remote-activation yet (Head of Security etc.) — only the card's own
+  // controller can activate it, on their own turn.
+  if (card.zone !== "inPlay" || card.controller !== currentPlayerId || card.locationId === undefined) {
+    throw new Error(`Card ${action.cardId} is not an in-play card controlled by ${currentPlayerId}`);
+  }
+
+  const usageKey = `${card.id}#${action.abilityIndex}`;
+  if (state.turn.usedAbilities.includes(usageKey)) {
+    throw new Error(`Ability ${action.abilityIndex} on ${card.defRef} has already been used this turn`);
+  }
+
+  const rawAbility = getAbilities(cardData, card)[action.abilityIndex];
+  if (!rawAbility) {
+    throw new Error(`${card.defRef} has no ability at index ${action.abilityIndex}`);
+  }
+  if (rawAbility.type !== "Activate") {
+    throw new Error(`${card.defRef}'s ability ${action.abilityIndex} is a Response, not self-activatable`);
+  }
+  if (rawAbility.alarm) {
+    throw new Error("Alarm-triggering abilities are not yet implemented (needs AlarmResolutionFrame)");
+  }
+
+  const effects = getAbilityEffects(card.defRef, action.abilityIndex);
+  if (!effects) {
+    throw new Error(`${card.defRef}'s ability ${action.abilityIndex} has no encoded effects yet`);
+  }
+
+  const frame: AbilityResolutionFrame = {
+    kind: "abilityResolution",
+    sourceCardId: card.id,
+    actingPlayerId: currentPlayerId,
+    abilityIndex: action.abilityIndex,
+    locationId: card.locationId,
+    targetIds: null,
+  };
+
+  return {
+    ...state,
+    resolutionStack: [frame],
+    turn: { ...spendAction(state), usedAbilities: [...state.turn.usedAbilities, usageKey] },
+  };
+}
+
+function applyChooseTargets(
+  state: GameState,
+  cardData: CardData,
+  frame: AbilityResolutionFrame,
+  actingPlayerId: PlayerId,
+  action: Extract<Action, { type: "chooseTargets" }>,
+): GameState {
+  if (actingPlayerId !== frame.actingPlayerId) {
+    throw new Error(`It is not ${actingPlayerId}'s turn to choose targets for this ability`);
+  }
+
+  const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId)!;
+  const definition = getAbilityEffects(sourceCard.defRef, frame.abilityIndex)!;
+  // This first slice only interprets a single top-level `eliminate` effect
+  // — not the general recursive interpreter (conditionals, bindings,
+  // sequencing) the DSL is designed for. Extend when an encoded ability
+  // needs more than that.
+  const effect = definition.effects[0];
+  if (!effect || effect.verb !== "eliminate" || definition.effects.length > 1) {
+    throw new Error("Only single-effect eliminate abilities are interpreted so far");
+  }
+  if (effect.target.ref !== "filter") {
+    throw new Error("Only filter-based targeting is interpreted so far");
+  }
+
+  const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
+  const eligibleIds = new Set(eligible.map((c) => c.id));
+  const requiredCount = effect.target.count.mode === "exact" ? effect.target.count.value : undefined;
+  if (requiredCount !== undefined && action.targetIds.length !== requiredCount) {
+    throw new Error(`This ability requires exactly ${requiredCount} target(s)`);
+  }
+  for (const targetId of action.targetIds) {
+    if (!eligibleIds.has(targetId)) {
+      throw new Error(`${targetId} is not a legal target for this ability`);
+    }
+  }
+
+  const targetSet = new Set(action.targetIds);
+  const cards: readonly CardInstance[] = state.cards.map((c) =>
+    targetSet.has(c.id) ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+  );
+
+  return { ...state, cards, resolutionStack: [] };
 }
