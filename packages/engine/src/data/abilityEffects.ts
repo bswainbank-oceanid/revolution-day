@@ -20,7 +20,27 @@ const eliminateOneAtSelf = (faction?: "Regime" | "Rebel") =>
     },
   });
 
-export const abilityEffects: Record<string, readonly AbilityDefinition[]> = {
+// "Activate any [faction] card, controlled by any player, at any
+// location" — no location/controller filter at all (unrestricted means
+// unfiltered, same convention as an omitted faction/kind filter).
+const activateRemoteNonLeader = (faction?: "Regime" | "Rebel") =>
+  ({
+    verb: "activateRemote" as const,
+    count: { mode: "exact" as const, value: 1 },
+    target: {
+      ref: "filter" as const,
+      kind: "nonLeader" as const,
+      count: { mode: "exact" as const, value: 1 },
+      selection: "playerChoice" as const,
+      ...(faction ? { faction } : {}),
+    },
+  });
+
+// A card's array here may have gaps (e.g. Puppet-Master's remote-activate
+// is its second ability) — an un-encoded index is simply absent/undefined,
+// not a placeholder value, so getAbilityEffects reports it the same way
+// as a wholly unencoded card.
+export const abilityEffects: Record<string, readonly (AbilityDefinition | undefined)[]> = {
   "Republican Guard": [{ type: "Activate", effects: [eliminateOneAtSelf()] }],
   Assassin: [
     { type: "Activate", effects: [eliminateOneAtSelf()] },
@@ -51,6 +71,11 @@ export const abilityEffects: Record<string, readonly AbilityDefinition[]> = {
       ],
     },
   ],
+  "Head of Security": [{ type: "Activate", effects: [activateRemoteNonLeader("Regime")] }],
+  "Guerrilla Commander": [{ type: "Activate", effects: [activateRemoteNonLeader("Rebel")] }],
+  // Puppet-Master's remote-activate is its *second* ability — index 0
+  // ("Play 2 cards") isn't encoded, so this array has a gap.
+  "Puppet-Master": [undefined, { type: "Activate", effects: [activateRemoteNonLeader()] }],
 };
 
 export function getAbilityEffects(defRef: string, abilityIndex: number): AbilityDefinition | undefined {

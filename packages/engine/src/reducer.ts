@@ -1,6 +1,6 @@
 import type { Action } from "./actions";
 import { getAbilityEffects } from "./data/abilityEffects";
-import type { AbilityDefinition, TargetCount } from "./effects/dsl";
+import type { AbilityDefinition, EffectNode, TargetCount } from "./effects/dsl";
 import { isLegalEliminationTarget, isLegalPresidentTarget, resolveEligibleTargets } from "./effects/targeting";
 import { adjacentLocationIds } from "./state/board";
 import { getAbilities, getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
@@ -23,13 +23,13 @@ import type { CardData } from "./types";
 // (needs the Motorcade interception window, a different frame kind with
 // no dispatch logic yet), and it doesn't implement the forced "must play
 // immediately" trigger on an empty deck (same gap already noted in
-// applyDraw). activateAbility/chooseTargets/useResponse only handle
+// applyDraw). activateAbility/chooseTargets/useResponse handle
 // single-effect, single-target (`count.mode === "exact"`) `eliminate`
-// abilities that have been encoded in abilityEffects.ts — no
-// remote-activation, no Protected-immunity enforcement, no random
-// targeting, and no general multi-effect/conditional interpreter yet. See
-// rev_day_engine_design memory for the full design this is incrementally
-// building toward.
+// abilities and single-card `activateRemote` (count 1 only — Commander
+// General's "any number" variant isn't implemented) that have been
+// encoded in abilityEffects.ts — no random targeting, no general
+// multi-effect/conditional interpreter yet. See rev_day_engine_design
+// memory for the full design this is incrementally building toward.
 export function applyAction(
   state: GameState,
   actingPlayerId: PlayerId,
@@ -410,9 +410,107 @@ function applyChooseTargets(
 
   const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId)!;
   const definition = getAbilityEffects(sourceCard.defRef, frame.abilityIndex)!;
-  const { cards, president } = applySingleEliminateEffect(state, cardData, definition, sourceCard, action.targetIds);
+  const effect = definition.effects[0];
+  if (!effect || definition.effects.length > 1) {
+    throw new Error("Only single-effect abilities are interpreted so far");
+  }
 
-  return { ...state, cards, president, resolutionStack: [] };
+  if (effect.verb === "activateRemote") {
+    return applyActivateRemote(
+      state,
+      cardData,
+      sourceCard,
+      effect,
+      actingPlayerId,
+      action.targetIds,
+      action.remoteAbilityIndex,
+    );
+  }
+  if (effect.verb !== "eliminate") {
+    throw new Error(`Effect verb not yet interpreted: ${effect.verb}`);
+  }
+
+  const { cards, president } = applySingleEliminateEffect(state, cardData, definition, sourceCard, action.targetIds);
+  return { ...state, cards, president, resolutionStack: state.resolutionStack.slice(0, -1) };
+}
+
+// "Activate any [faction] card, controlled by any player, at any
+// location" (Head of Security, Guerrilla Commander, Puppet-Master) —
+// composes recursively rather than being a flat effect: pick another card
+// + one of its unused Activate abilities, then push a *new*
+// AbilityResolutionFrame for that ability (respecting its own alarm flag
+// and once-per-turn-per-card usage), replacing this frame rather than
+// nesting beneath it. Only single-card remote-activation (count 1) is
+// implemented — Commander General's "any number of your regime cards"
+// variant would need a queue of pending activations, not built yet.
+function applyActivateRemote(
+  state: GameState,
+  cardData: CardData,
+  sourceCard: CardInstance,
+  effect: Extract<EffectNode, { verb: "activateRemote" }>,
+  actingPlayerId: PlayerId,
+  targetIds: readonly string[],
+  remoteAbilityIndex: number | undefined,
+): GameState {
+  if (effect.target.ref !== "filter") {
+    throw new Error("Only filter-based targeting is interpreted so far");
+  }
+  if (effect.count.mode !== "exact" || effect.count.value !== 1) {
+    throw new Error("Only single-card remote activation is interpreted so far");
+  }
+  if (targetIds.length !== 1) {
+    throw new Error("Remote activation requires exactly one target card");
+  }
+  if (remoteAbilityIndex === undefined) {
+    throw new Error("Remote activation requires remoteAbilityIndex");
+  }
+
+  const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
+  const remoteCard = eligible.find((c) => c.id === targetIds[0]);
+  if (!remoteCard || remoteCard.locationId === undefined) {
+    throw new Error(`${targetIds[0]} is not a legal card to remotely activate`);
+  }
+
+  const usageKey = `${remoteCard.id}#${remoteAbilityIndex}`;
+  if (state.turn.usedAbilities.includes(usageKey)) {
+    throw new Error(`Ability ${remoteAbilityIndex} on ${remoteCard.defRef} has already been used this turn`);
+  }
+
+  const rawAbility = getAbilities(cardData, remoteCard)[remoteAbilityIndex];
+  if (!rawAbility) {
+    throw new Error(`${remoteCard.defRef} has no ability at index ${remoteAbilityIndex}`);
+  }
+  if (rawAbility.type !== "Activate") {
+    throw new Error(`${remoteCard.defRef}'s ability ${remoteAbilityIndex} is a Response, not activatable`);
+  }
+  if (!getAbilityEffects(remoteCard.defRef, remoteAbilityIndex)) {
+    throw new Error(`${remoteCard.defRef}'s ability ${remoteAbilityIndex} has no encoded effects yet`);
+  }
+
+  // Must reveal to use an Activate ability — same rule as direct activation.
+  const cards = state.cards.map((c) => (c.id === remoteCard.id ? { ...c, faceUp: true } : c));
+
+  // The original acting player is the "triggering player" for any alarm
+  // response ordering, not remoteCard's controller — see the
+  // remote-activation ruling in card_data.json's alarm_response_rules.
+  const newAbilityFrame: AbilityResolutionFrame = {
+    kind: "abilityResolution",
+    sourceCardId: remoteCard.id,
+    actingPlayerId,
+    abilityIndex: remoteAbilityIndex,
+    locationId: remoteCard.locationId,
+    targetIds: null,
+  };
+  const newFrames: ResolutionFrame[] = rawAbility.alarm
+    ? [newAbilityFrame, buildAlarmFrame(state, remoteCard.id, actingPlayerId, remoteCard.locationId)]
+    : [newAbilityFrame];
+
+  return {
+    ...state,
+    cards,
+    resolutionStack: [...state.resolutionStack.slice(0, -1), ...newFrames],
+    turn: { ...state.turn, usedAbilities: [...state.turn.usedAbilities, usageKey] },
+  };
 }
 
 // The President isn't a CardInstance, so he can't appear in `state.cards`

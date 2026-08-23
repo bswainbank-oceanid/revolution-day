@@ -23,8 +23,16 @@ export type TurnAction =
 // Legal only when the resolution stack is non-empty — what the top frame
 // demands. Each variant corresponds to one ResolutionFrame kind.
 export type ResolutionAction =
-  // AbilityResolutionFrame, once its alarm (if any) has resolved.
-  | { readonly type: "chooseTargets"; readonly targetIds: readonly string[] }
+  // AbilityResolutionFrame, once its alarm (if any) has resolved. For a
+  // remote-activation effect, targetIds holds the one chosen card and
+  // remoteAbilityIndex picks which of its Activate abilities to trigger —
+  // otherwise targetIds are elimination targets and remoteAbilityIndex is
+  // unused.
+  | {
+      readonly type: "chooseTargets";
+      readonly targetIds: readonly string[];
+      readonly remoteAbilityIndex?: number;
+    }
   // AlarmResolutionFrame: use a Response ability, or decline.
   | {
       readonly type: "useResponse";

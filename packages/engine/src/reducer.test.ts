@@ -680,3 +680,117 @@ describe("applyAction: President targeting (Wife)", () => {
     expect(() => act(state, player, { type: "chooseTargets", targetIds: ["president"] })).toThrow();
   });
 });
+
+describe("applyAction: remote activation", () => {
+  it("remotely activates another player's card and resolves its effect as the original acting player", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const hos = state.cards.find((c) => c.defRef === "Head of Security")!;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const target = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen" && c.id !== guard.id,
+    )!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, hos.id, loc, player);
+    state = placeInPlay(state, guard.id, loc, other); // controlled by someone else entirely
+    state = placeInPlay(state, target.id, loc, other, false);
+    state = act(state, player, { type: "draw" });
+
+    const activated = act(state, player, { type: "activateAbility", cardId: hos.id, abilityIndex: 0 });
+    const remoted = act(activated, player, {
+      type: "chooseTargets",
+      targetIds: [guard.id],
+      remoteAbilityIndex: 0,
+    });
+    // Guard's own once-per-turn usage is marked (not Head of Security's).
+    expect(remoted.turn.usedAbilities).toContain(`${guard.id}#0`);
+    expect(remoted.resolutionStack).toHaveLength(1);
+
+    // The original player, not Republican Guard's controller, resolves it.
+    const resolved = act(remoted, player, { type: "chooseTargets", targetIds: [target.id] });
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+  });
+
+  it("rejects a faction-filtered remote card outside the ability's faction", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const hos = state.cards.find((c) => c.defRef === "Head of Security")!; // Regime-only
+    const rebelCard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Assassin")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, hos.id, loc, player);
+    state = placeInPlay(state, rebelCard.id, loc, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: hos.id, abilityIndex: 0 });
+
+    expect(() =>
+      act(state, player, { type: "chooseTargets", targetIds: [rebelCard.id], remoteAbilityIndex: 0 }),
+    ).toThrow();
+  });
+
+  it("Puppet-Master's remote-activate has no faction filter", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const puppetMaster = state.cards.find((c) => c.defRef === "Puppet-Master")!;
+    const rebelCard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Assassin")!;
+    const target = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen" && c.id !== rebelCard.id,
+    )!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, puppetMaster.id, loc, player);
+    state = placeInPlay(state, rebelCard.id, loc, player);
+    state = placeInPlay(state, target.id, loc, player);
+    state = act(state, player, { type: "draw" });
+    // Ability index 1 — Puppet-Master's first ability ("Play 2 cards") isn't encoded.
+    state = act(state, player, { type: "activateAbility", cardId: puppetMaster.id, abilityIndex: 1 });
+    state = act(state, player, {
+      type: "chooseTargets",
+      targetIds: [rebelCard.id],
+      remoteAbilityIndex: 0,
+    });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [target.id] });
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+  });
+
+  it("remotely activating an alarm-triggering ability makes the original acting player the triggering player", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    // Guerrilla Commander's remote-activate is Rebel-only, matching Gunman.
+    const guerrillaCommander = state.cards.find((c) => c.defRef === "Guerrilla Commander")!;
+    const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guerrillaCommander.id, loc, player);
+    state = placeInPlay(state, gunman.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guerrillaCommander.id, abilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [gunman.id], remoteAbilityIndex: 0 });
+
+    expect(state.resolutionStack).toHaveLength(2);
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    expect(alarmFrame.triggeringPlayerId).toBe(player); // not gunman's controller (other)
+    expect(alarmFrame.order.at(-1)).toBe(player); // triggering player still responds last
+  });
+
+  it("rejects remotely activating a card whose ability was already used this turn", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const hos = state.cards.find((c) => c.defRef === "Head of Security")!;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const t1 = state.cards.find((c) => c.kind === "nonLeader" && c.id !== guard.id)!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, hos.id, loc, player);
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, t1.id, loc, player);
+    state = act(state, player, { type: "draw" });
+    // Guard activates directly first, using up its once-per-turn ability.
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [t1.id] });
+
+    const activated = act(state, player, { type: "activateAbility", cardId: hos.id, abilityIndex: 0 });
+    expect(() =>
+      act(activated, player, { type: "chooseTargets", targetIds: [guard.id], remoteAbilityIndex: 0 }),
+    ).toThrow();
+  });
+});
