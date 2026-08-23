@@ -87,11 +87,27 @@ function applyResolutionAction(
 ): GameState {
   const frame = state.resolutionStack[state.resolutionStack.length - 1]!;
   switch (frame.kind) {
-    case "abilityResolution":
+    case "abilityResolution": {
       if (action.type !== "chooseTargets") {
         throw new Error(`Expected chooseTargets while an ability awaits targets, got: ${action.type}`);
       }
+      // If the ability's own source card has since been eliminated — e.g.
+      // one of Commander General's remote activations triggered an alarm,
+      // and a response during that alarm's pass eliminated Commander
+      // General himself (a different card than the alarm's own triggering
+      // character, which is already handled by advanceAlarmPass) — the
+      // rest of the ability does not resolve. For a multi-activation queue
+      // (activateRemote's "unbounded" case) this is what makes "the
+      // ability ends": the loop frame reappears here on the next dispatch
+      // and is cancelled outright rather than re-offering another choice.
+      // Same cancellation principle as the alarm-triggering-character
+      // rule, generalized to ability resolution as a whole.
+      const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId);
+      if (!sourceCard || sourceCard.zone === "eliminated") {
+        return popCurrentFrame(state);
+      }
       return applyChooseTargets(state, cardData, frame, actingPlayerId, action);
+    }
     case "alarmResolution":
       return applyAlarmAction(state, cardData, frame, actingPlayerId, action);
     case "protectedTargetingWindow":

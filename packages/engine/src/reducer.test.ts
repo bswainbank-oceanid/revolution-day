@@ -487,15 +487,17 @@ describe("applyAction: activateAbility / chooseTargets", () => {
     ).toThrow();
   });
 
-  it("rejects an alarm-triggering ability (not yet implemented)", () => {
+  it("rejects an alarm-triggering ability with no encoded effects yet", () => {
     let state = freshGame();
     const player = state.turn.currentPlayerId;
-    const deathSquad = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Death Squad")!;
-    state = placeInPlay(state, deathSquad.id, state.board[0]!.id, player);
+    // Rebel Soldier's alarm ability isn't encoded (unlike Death Squad's,
+    // now that Commander General's remote-activation queue needs one).
+    const rebelSoldier = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Rebel Soldier")!;
+    state = placeInPlay(state, rebelSoldier.id, state.board[0]!.id, player);
     state = act(state, player, { type: "draw" });
 
     expect(() =>
-      act(state, player, { type: "activateAbility", cardId: deathSquad.id, abilityIndex: 0 }),
+      act(state, player, { type: "activateAbility", cardId: rebelSoldier.id, abilityIndex: 0 }),
     ).toThrow();
   });
 
@@ -1170,5 +1172,78 @@ describe("applyAction: Commander General", () => {
     expect(() =>
       act(state, player, { type: "chooseTargets", targetIds: [guard.id], remoteAbilityIndex: 0 }),
     ).toThrow();
+  });
+
+  it("cancels a pending ability outright once its own source card is eliminated", () => {
+    // Direct check of the cancellation rule itself, independent of how the
+    // source card came to be eliminated.
+    const { state, player, cg } = freshCommanderGeneralGame();
+    let s = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 1 });
+    expect(s.resolutionStack).toHaveLength(1);
+
+    s = {
+      ...s,
+      cards: s.cards.map((c) =>
+        c.id === cg.id ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+      ),
+    };
+
+    // Whatever is submitted is irrelevant — the ability is simply over.
+    const resolved = act(s, player, { type: "chooseTargets", targetIds: [] });
+    expect(resolved.resolutionStack).toHaveLength(0);
+  });
+
+  it("ends the 'activate any number' queue if Commander General dies during a nested alarm, without disturbing the in-flight activation", () => {
+    let { state, player, cg, loc } = freshCommanderGeneralGame();
+    const deathSquad = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Death Squad")!;
+    const assassin = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Assassin")!;
+    const deathSquadTarget = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen",
+    )!;
+    state = placeInPlay(state, deathSquad.id, loc, player);
+    state = placeInPlay(state, assassin.id, loc, player); // the activator's own responding card
+    state = placeInPlay(state, deathSquadTarget.id, loc, player);
+    state = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 1 });
+
+    // Remotely activate Death Squad's alarm ability.
+    state = act(state, player, {
+      type: "chooseTargets",
+      targetIds: [deathSquad.id],
+      remoteAbilityIndex: 0,
+    });
+    expect(state.resolutionStack).toHaveLength(3); // [CG loop, Death Squad, alarm]
+
+    const alarmFrame = state.resolutionStack[2] as AlarmResolutionFrame;
+    expect(alarmFrame.triggeringPlayerId).toBe(player); // the activator, not Death Squad's controller (same here, but by rule)
+    expect(alarmFrame.order.at(-1)).toBe(player); // activator (triggering player) responds last
+
+    // Everyone else passes.
+    for (const responder of alarmFrame.order.slice(0, -1)) {
+      state = act(state, responder, { type: "passResponse" });
+    }
+
+    // The activator, responding last, uses their OWN Assassin (not Death
+    // Squad, and not controlled by anyone else, so it doesn't shield
+    // Commander General) to eliminate Commander General himself.
+    state = act(state, player, {
+      type: "useResponse",
+      cardId: assassin.id,
+      abilityIndex: 1,
+      targetIds: [cg.id],
+    });
+    expect(state.cards.find((c) => c.id === cg.id)!.zone).toBe("eliminated");
+
+    // Death Squad — the alarm's actual triggering character — survived,
+    // so its own ability still resolves normally: back to
+    // [CG loop, Death Squad], awaiting Death Squad's own targets.
+    expect(state.resolutionStack).toHaveLength(2);
+    state = act(state, player, { type: "chooseTargets", targetIds: [deathSquadTarget.id] });
+    expect(state.cards.find((c) => c.id === deathSquadTarget.id)!.zone).toBe("eliminated");
+
+    // Only now, with Commander General's own loop frame back on top, does
+    // the ability actually end — the queue does not re-offer another card.
+    expect(state.resolutionStack).toHaveLength(1);
+    const closed = act(state, player, { type: "chooseTargets", targetIds: [] });
+    expect(closed.resolutionStack).toHaveLength(0);
   });
 });

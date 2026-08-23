@@ -36,6 +36,18 @@ const activateRemoteNonLeader = (faction?: "Regime" | "Rebel") =>
     },
   });
 
+const eliminateOneOrTwoAtSelf = (faction?: "Regime" | "Rebel") =>
+  ({
+    verb: "eliminate" as const,
+    target: {
+      ref: "filter" as const,
+      location: { mode: "self" as const },
+      count: { mode: "range" as const, min: 1, max: 2 },
+      selection: "playerChoice" as const,
+      ...(faction ? { faction } : {}),
+    },
+  });
+
 // A card's array here may have gaps (e.g. Puppet-Master's remote-activate
 // is its second ability) — an un-encoded index is simply absent/undefined,
 // not a placeholder value, so getAbilityEffects reports it the same way
@@ -76,6 +88,10 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
   // Puppet-Master's remote-activate is its *second* ability — index 0
   // ("Play 2 cards") isn't encoded, so this array has a gap.
   "Puppet-Master": [undefined, { type: "Activate", effects: [activateRemoteNonLeader()] }],
+  "Death Squad": [
+    { type: "Activate", alarm: true, effects: [eliminateOneOrTwoAtSelf()] },
+    { type: "Response", effects: [eliminateOneOrTwoAtSelf()] },
+  ],
   "Commander General": [
     {
       type: "Activate",
