@@ -604,3 +604,42 @@ describe("applyAction: alarm resolution", () => {
     ).toThrow();
   });
 });
+
+describe("applyAction: Protected immunity (integration)", () => {
+  it("rejects eliminating a Protected leader while another same-faction card protects it", () => {
+    // 8 players so all 8 leaders are dealt — guarantees Head of Security exists.
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const target = state.cards.find((c) => c.kind === "leader" && c.defRef === "Head of Security")!;
+    const protector = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen" && c.id !== guard.id,
+    )!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, target.id, loc, other);
+    state = placeInPlay(state, protector.id, loc, other); // Regime, non-Protected — shields the leader
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: [target.id] })).toThrow();
+  });
+
+  it("allows eliminating a Protected leader once no protector remains", () => {
+    // 8 players so all 8 leaders are dealt — guarantees Head of Security exists.
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const target = state.cards.find((c) => c.kind === "leader" && c.defRef === "Head of Security")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, target.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [target.id] });
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+  });
+});

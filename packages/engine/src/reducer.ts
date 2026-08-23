@@ -1,7 +1,7 @@
 import type { Action } from "./actions";
 import { getAbilityEffects } from "./data/abilityEffects";
 import type { AbilityDefinition } from "./effects/dsl";
-import { resolveEligibleTargets } from "./effects/targeting";
+import { isLegalEliminationTarget, resolveEligibleTargets } from "./effects/targeting";
 import { adjacentLocationIds } from "./state/board";
 import { getAbilities, getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
 import type { CardInstance } from "./state/cards";
@@ -435,7 +435,9 @@ function applySingleEliminateEffect(
     throw new Error("Only filter-based targeting is interpreted so far");
   }
 
-  const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
+  const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard).filter(
+    (c) => effect.ignoreProtected || isLegalEliminationTarget(state, cardData, c, sourceCard.controller),
+  );
   const eligibleIds = new Set(eligible.map((c) => c.id));
   const requiredCount = effect.target.count.mode === "exact" ? effect.target.count.value : undefined;
   if (requiredCount !== undefined && targetIds.length !== requiredCount) {

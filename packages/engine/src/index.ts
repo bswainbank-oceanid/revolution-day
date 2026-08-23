@@ -31,7 +31,7 @@ export type { SetupOptions } from "./setup";
 export { applyAction } from "./reducer";
 export { hasAttribute, getAllowedLocationTypes, getAbilities, getFaction } from "./state/cardLookup";
 export { getAbilityEffects, abilityEffects } from "./data/abilityEffects";
-export { resolveEligibleTargets } from "./effects/targeting";
+export { resolveEligibleTargets, isLegalEliminationTarget } from "./effects/targeting";
 export type {
   AbilityDefinition,
   EffectNode,
