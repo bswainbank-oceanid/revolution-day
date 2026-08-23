@@ -3,7 +3,7 @@ import { cardData } from "../data/cardData";
 import { setupGame } from "../setup";
 import type { CardInstance } from "../state/cards";
 import type { GameState } from "../state/game";
-import { isLegalEliminationTarget } from "./targeting";
+import { isLegalEliminationTarget, isLegalPresidentTarget } from "./targeting";
 
 function baseState(): GameState {
   return setupGame({ playerIds: ["a", "b"], seed: 1, cardData });
@@ -91,5 +91,71 @@ describe("isLegalEliminationTarget", () => {
     });
     const s = { ...state, cards: [target, hiddenWife] };
     expect(isLegalEliminationTarget(s, cardData, target, "a")).toBe(false);
+  });
+});
+
+function withPresident(state: GameState, overrides: Partial<GameState["president"]>): GameState {
+  return { ...state, president: { ...state.president, ...overrides } };
+}
+
+describe("isLegalPresidentTarget", () => {
+  it("is never a legal target before he's entered the board", () => {
+    const state = baseState();
+    expect(isLegalPresidentTarget(state, cardData, "a", false)).toBe(false);
+  });
+
+  it("is never a legal target once already eliminated or survived", () => {
+    const eliminated = withPresident(baseState(), { status: "eliminated", locationId: null });
+    const survived = withPresident(baseState(), { status: "survived", locationId: null });
+    expect(isLegalPresidentTarget(eliminated, cardData, "a", false)).toBe(false);
+    expect(isLegalPresidentTarget(survived, cardData, "a", false)).toBe(false);
+  });
+
+  it("is eliminable when alive with no Regime protector at his location (3+ players)", () => {
+    let state = setupGame({ playerIds: ["a", "b", "c"], seed: 1, cardData });
+    state = withPresident(state, { status: "alive", locationId: "loc-2" });
+    expect(isLegalPresidentTarget(state, cardData, "a", false)).toBe(true);
+  });
+
+  it("is protected by another Regime card at his location", () => {
+    let state = setupGame({ playerIds: ["a", "b", "c"], seed: 1, cardData });
+    state = withPresident(state, { status: "alive", locationId: "loc-2" });
+    const guard = card({ id: "g", defRef: "Republican Guard", kind: "nonLeader", controller: "b", locationId: "loc-2" });
+    state = { ...state, cards: [guard] };
+    expect(isLegalPresidentTarget(state, cardData, "a", false)).toBe(false);
+  });
+
+  it("does not count the acting player's own Regime card as protection", () => {
+    let state = setupGame({ playerIds: ["a", "b", "c"], seed: 1, cardData });
+    state = withPresident(state, { status: "alive", locationId: "loc-2" });
+    const own = card({ id: "g", defRef: "Republican Guard", kind: "nonLeader", controller: "a", locationId: "loc-2" });
+    state = { ...state, cards: [own] };
+    expect(isLegalPresidentTarget(state, cardData, "a", false)).toBe(true);
+  });
+
+  it("ignoreProtection bypasses the guard check (Wife's ability)", () => {
+    let state = setupGame({ playerIds: ["a", "b", "c"], seed: 1, cardData });
+    state = withPresident(state, { status: "alive", locationId: "loc-2" });
+    const guard = card({ id: "g", defRef: "Republican Guard", kind: "nonLeader", controller: "b", locationId: "loc-2" });
+    state = { ...state, cards: [guard] };
+    expect(isLegalPresidentTarget(state, cardData, "a", true)).toBe(true);
+  });
+
+  it("is not eliminable before position 3 in a two-player game, even with ignoreProtection", () => {
+    let state = setupGame({ playerIds: ["a", "b"], seed: 1, cardData });
+    state = withPresident(state, { status: "alive", locationId: "loc-1" }); // position 2
+    expect(isLegalPresidentTarget(state, cardData, "a", true)).toBe(false);
+  });
+
+  it("is eliminable from position 3 onward in a two-player game", () => {
+    let state = setupGame({ playerIds: ["a", "b"], seed: 1, cardData });
+    state = withPresident(state, { status: "alive", locationId: "loc-2" }); // position 3
+    expect(isLegalPresidentTarget(state, cardData, "a", false)).toBe(true);
+  });
+
+  it("the two-player restriction does not apply with 3+ players", () => {
+    let state = setupGame({ playerIds: ["a", "b", "c"], seed: 1, cardData });
+    state = withPresident(state, { status: "alive", locationId: "loc-0" }); // position 1
+    expect(isLegalPresidentTarget(state, cardData, "a", false)).toBe(true);
   });
 });

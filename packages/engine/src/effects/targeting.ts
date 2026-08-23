@@ -14,13 +14,13 @@ import type { TargetSelector } from "./dsl";
 // general; see isLegalEliminationTarget below, applied at the call site in
 // applySingleEliminateEffect instead.
 //
-// Deliberately incomplete for now, documented gaps rather than oversights
-// (see rev_day_engine_design memory): does NOT support `selection:
-// "random"` (needs Suicide Bomber-style pool/fallback logic), and can't
-// resolve `kind: "president"` (the President isn't a CardInstance in
-// `state.cards`, so no ability targeting him specifically can be encoded
-// yet — also means the President's own Protected rule and the two-player
-// "not eliminable until past HQ" rule aren't implemented anywhere yet).
+// Deliberately incomplete for now, a documented gap rather than an
+// oversight (see rev_day_engine_design memory): does NOT support
+// `selection: "random"` (needs Suicide Bomber-style pool/fallback logic).
+// `kind: "president"` is deliberately excluded here too — the President
+// isn't a CardInstance, so ability targeting him is handled as a separate
+// path in applySingleEliminateEffect using isLegalPresidentTarget below,
+// not through this function.
 export function resolveEligibleTargets(
   state: GameState,
   cardData: CardData,
@@ -71,9 +71,6 @@ function isProtectedActive(cardData: CardData, card: CardInstance): boolean {
 // valid protector ("if only protected targets remain, either may be
 // eliminated").
 //
-// Does NOT handle the President (not a CardInstance) or the two-player
-// "not eliminable until past HQ" rule — both deferred until something
-// actually targets him.
 export function isLegalEliminationTarget(
   state: GameState,
   cardData: CardData,
@@ -89,6 +86,45 @@ export function isLegalEliminationTarget(
       c.locationId === target.locationId &&
       c.controller !== actingPlayerId &&
       getFaction(cardData, c) === targetFaction &&
+      !isProtectedActive(cardData, c),
+  );
+  return !hasProtector;
+}
+
+// The President's own targeting legality. His card_data.json text
+// ("can only be targeted once all other regime cards at his location are
+// eliminated") reads like a special case, but per the ruling that his
+// faction counts as Regime for all these purposes, it's the same
+// mechanic as isLegalEliminationTarget above — just against
+// GameState.president instead of a CardInstance, since he isn't one.
+//
+// ignoreProtection (Wife's "ignores protected") bypasses only the
+// guard-protection check, not the two-player rule below — that's a
+// separate procedural restriction ("hasn't reached a vulnerable position
+// yet"), not a form of being shielded by guards, so nothing should bypass
+// it. This reading isn't spelled out explicitly in the rules text; flag if
+// wrong.
+export function isLegalPresidentTarget(
+  state: GameState,
+  cardData: CardData,
+  actingPlayerId: string | null,
+  ignoreProtection: boolean,
+): boolean {
+  if (state.president.status !== "alive" || state.president.locationId === null) return false;
+
+  if (state.players.length === 2) {
+    const positionIndex = state.board.findIndex((l) => l.id === state.president.locationId);
+    if (positionIndex < 2) return false; // "not eliminable until past HQ" — position 3, 1-based
+  }
+
+  if (ignoreProtection) return true;
+
+  const hasProtector = state.cards.some(
+    (c) =>
+      c.zone === "inPlay" &&
+      c.locationId === state.president.locationId &&
+      c.controller !== actingPlayerId &&
+      getFaction(cardData, c) === "Regime" &&
       !isProtectedActive(cardData, c),
   );
   return !hasProtector;

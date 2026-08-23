@@ -1,7 +1,7 @@
 import type { Action } from "./actions";
 import { getAbilityEffects } from "./data/abilityEffects";
-import type { AbilityDefinition } from "./effects/dsl";
-import { isLegalEliminationTarget, resolveEligibleTargets } from "./effects/targeting";
+import type { AbilityDefinition, TargetCount } from "./effects/dsl";
+import { isLegalEliminationTarget, isLegalPresidentTarget, resolveEligibleTargets } from "./effects/targeting";
 import { adjacentLocationIds } from "./state/board";
 import { getAbilities, getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
 import type { CardInstance } from "./state/cards";
@@ -410,10 +410,16 @@ function applyChooseTargets(
 
   const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId)!;
   const definition = getAbilityEffects(sourceCard.defRef, frame.abilityIndex)!;
-  const cards = applySingleEliminateEffect(state, cardData, definition, sourceCard, action.targetIds);
+  const { cards, president } = applySingleEliminateEffect(state, cardData, definition, sourceCard, action.targetIds);
 
-  return { ...state, cards, resolutionStack: [] };
+  return { ...state, cards, president, resolutionStack: [] };
 }
+
+// The President isn't a CardInstance, so he can't appear in `state.cards`
+// — this sentinel represents him within the same targetIds/eligible-set
+// mechanism used for ordinary card targets, rather than needing a second
+// parallel target-selection type.
+const PRESIDENT_TARGET_ID = "president";
 
 // This first slice only interprets a single top-level `eliminate` effect
 // with filter-based, exact-count targeting — not the general recursive
@@ -426,7 +432,7 @@ function applySingleEliminateEffect(
   definition: AbilityDefinition,
   sourceCard: CardInstance,
   targetIds: readonly string[],
-): readonly CardInstance[] {
+): Pick<GameState, "cards" | "president"> {
   const effect = definition.effects[0];
   if (!effect || effect.verb !== "eliminate" || definition.effects.length > 1) {
     throw new Error("Only single-effect eliminate abilities are interpreted so far");
@@ -435,24 +441,52 @@ function applySingleEliminateEffect(
     throw new Error("Only filter-based targeting is interpreted so far");
   }
 
+  if (effect.target.kind === "president") {
+    const legal = isLegalPresidentTarget(
+      state,
+      cardData,
+      sourceCard.controller,
+      effect.ignoreProtected ?? false,
+    );
+    validateTargets(effect.target.count, targetIds, legal ? [PRESIDENT_TARGET_ID] : []);
+    const targetsPresident = targetIds.includes(PRESIDENT_TARGET_ID);
+    const president: GameState["president"] = targetsPresident
+      ? {
+          status: "eliminated",
+          locationId: null,
+          eliminatedAtLocationId: state.president.locationId ?? undefined,
+        }
+      : state.president;
+    return { cards: state.cards, president };
+  }
+
   const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard).filter(
     (c) => effect.ignoreProtected || isLegalEliminationTarget(state, cardData, c, sourceCard.controller),
   );
-  const eligibleIds = new Set(eligible.map((c) => c.id));
-  const requiredCount = effect.target.count.mode === "exact" ? effect.target.count.value : undefined;
+  validateTargets(
+    effect.target.count,
+    targetIds,
+    eligible.map((c) => c.id),
+  );
+
+  const targetSet = new Set(targetIds);
+  const cards = state.cards.map((c) =>
+    targetSet.has(c.id) ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+  );
+  return { cards, president: state.president };
+}
+
+function validateTargets(count: TargetCount, targetIds: readonly string[], eligibleIds: readonly string[]): void {
+  const eligibleSet = new Set(eligibleIds);
+  const requiredCount = count.mode === "exact" ? count.value : undefined;
   if (requiredCount !== undefined && targetIds.length !== requiredCount) {
     throw new Error(`This ability requires exactly ${requiredCount} target(s)`);
   }
   for (const targetId of targetIds) {
-    if (!eligibleIds.has(targetId)) {
+    if (!eligibleSet.has(targetId)) {
       throw new Error(`${targetId} is not a legal target for this ability`);
     }
   }
-
-  const targetSet = new Set(targetIds);
-  return state.cards.map((c) =>
-    targetSet.has(c.id) ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
-  );
 }
 
 function applyAlarmAction(
@@ -496,7 +530,7 @@ function applyAlarmAction(
 
   // Must reveal to respond — unconditional, same principle as activating.
   const revealedCards = state.cards.map((c) => (c.id === card.id ? { ...c, faceUp: true } : c));
-  const cards = applySingleEliminateEffect(
+  const { cards, president } = applySingleEliminateEffect(
     { ...state, cards: revealedCards },
     cardData,
     effects,
@@ -504,7 +538,7 @@ function applyAlarmAction(
     action.targetIds,
   );
 
-  return advanceAlarmPass({ ...state, cards }, frame);
+  return advanceAlarmPass({ ...state, cards, president }, frame);
 }
 
 function advanceAlarmPass(state: GameState, frame: AlarmResolutionFrame): GameState {

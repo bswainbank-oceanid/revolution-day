@@ -34,6 +34,23 @@ export const abilityEffects: Record<string, readonly AbilityDefinition[]> = {
     { type: "Activate", alarm: true, effects: [eliminateOneAtSelf()] },
     { type: "Response", effects: [eliminateOneAtSelf("Regime")] },
   ],
+  Wife: [
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "eliminate",
+          ignoreProtected: true,
+          target: {
+            ref: "filter",
+            kind: "president",
+            count: { mode: "exact", value: 1 },
+            selection: "playerChoice",
+          },
+        },
+      ],
+    },
+  ],
 };
 
 export function getAbilityEffects(defRef: string, abilityIndex: number): AbilityDefinition | undefined {

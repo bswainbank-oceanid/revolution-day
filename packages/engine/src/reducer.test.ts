@@ -643,3 +643,40 @@ describe("applyAction: Protected immunity (integration)", () => {
     expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
   });
 });
+
+describe("applyAction: President targeting (Wife)", () => {
+  it("eliminates the President, ignoring protection, when he's alive and reachable", () => {
+    // 8 players so Wife is guaranteed to be dealt (to whichever player,
+    // reassigned to the current player below via placeInPlay).
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const wife = state.cards.find((c) => c.defRef === "Wife")!;
+    const loc = state.board[0]!.id;
+    // A Regime guard is present too — Wife's ability ignores protection.
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    state = placeInPlay(state, wife.id, loc, player);
+    state = placeInPlay(state, guard.id, loc, state.players.find((p) => p.id !== player)!.id);
+    state = { ...state, president: { status: "alive", locationId: loc } };
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: wife.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: ["president"] });
+    expect(resolved.president).toEqual({
+      status: "eliminated",
+      locationId: null,
+      eliminatedAtLocationId: loc,
+    });
+  });
+
+  it("rejects targeting the President before he's entered the board", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const wife = state.cards.find((c) => c.defRef === "Wife")!;
+    state = placeInPlay(state, wife.id, state.board[0]!.id, player);
+    // president.status stays "notEntered" — never placed.
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: wife.id, abilityIndex: 0 });
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: ["president"] })).toThrow();
+  });
+});
