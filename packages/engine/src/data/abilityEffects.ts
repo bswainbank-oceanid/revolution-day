@@ -76,6 +76,57 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
   // Puppet-Master's remote-activate is its *second* ability — index 0
   // ("Play 2 cards") isn't encoded, so this array has a gap.
   "Puppet-Master": [undefined, { type: "Activate", effects: [activateRemoteNonLeader()] }],
+  "Commander General": [
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "play",
+          location: { mode: "self" },
+          ignoreLocationRestrictions: true,
+          target: {
+            ref: "filter",
+            faction: "Regime",
+            count: { mode: "unbounded" },
+            selection: "playerChoice",
+          },
+        },
+      ],
+    },
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "activateRemote",
+          count: { mode: "unbounded" },
+          target: {
+            ref: "filter",
+            kind: "nonLeader",
+            faction: "Regime",
+            controller: "self",
+            location: { mode: "self" },
+            count: { mode: "unbounded" },
+            selection: "playerChoice",
+          },
+        },
+      ],
+    },
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "reveal",
+          target: {
+            ref: "filter",
+            location: { mode: "self" },
+            blendState: "faceDown",
+            count: { mode: "all" },
+            selection: "playerChoice",
+          },
+        },
+      ],
+    },
+  ],
 };
 
 export function getAbilityEffects(defRef: string, abilityIndex: number): AbilityDefinition | undefined {

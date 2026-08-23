@@ -1028,3 +1028,147 @@ describe("applyAction: nested reveal window during an alarm response", () => {
     expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("inPlay");
   });
 });
+
+describe("applyAction: Commander General", () => {
+  function freshCommanderGeneralGame() {
+    // 8 players so Commander General is guaranteed to be dealt.
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const cg = state.cards.find((c) => c.defRef === "Commander General")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, cg.id, loc, player);
+    state = act(state, player, { type: "draw" });
+    return { state, player, cg, loc };
+  }
+
+  it("reveals every blended character at the location, any faction, with no choice to make", () => {
+    let { state, player, cg, loc } = freshCommanderGeneralGame();
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const regimeBlend = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Secret Police")!;
+    const rebelBlend = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Gunman" && c.id !== regimeBlend.id,
+    )!;
+    const alreadyUp = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Republican Guard" && c.id !== regimeBlend.id,
+    )!;
+    state = placeInPlay(state, regimeBlend.id, loc, other, false);
+    state = placeInPlay(state, rebelBlend.id, loc, other, false);
+    state = placeInPlay(state, alreadyUp.id, loc, other, true);
+    state = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 2 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [] });
+
+    expect(resolved.resolutionStack).toHaveLength(0);
+    expect(resolved.cards.find((c) => c.id === regimeBlend.id)!.faceUp).toBe(true);
+    expect(resolved.cards.find((c) => c.id === rebelBlend.id)!.faceUp).toBe(true);
+    expect(resolved.cards.find((c) => c.id === alreadyUp.id)!.faceUp).toBe(true);
+  });
+
+  it("rejects passing targets to a 'reveal all' effect — there's nothing to choose", () => {
+    const { state, player, cg } = freshCommanderGeneralGame();
+    const activated = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 2 });
+    const someCard = activated.cards.find((c) => c.zone === "deck")!;
+
+    expect(() => act(activated, player, { type: "chooseTargets", targetIds: [someCard.id] })).toThrow();
+  });
+
+  it("plays any number (including zero) of Regime cards from hand at its location", () => {
+    let { state, player, cg, loc } = freshCommanderGeneralGame();
+    const regime1 = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const regime2 = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Secret Police" && c.id !== regime1.id,
+    )!; // Secret Police has Blend — confirms auto-face-down on play
+    const rebelCard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Assassin")!;
+    state = placeInHand(state, regime1.id, player);
+    state = placeInHand(state, regime2.id, player);
+    state = placeInHand(state, rebelCard.id, player);
+    state = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 0 });
+
+    // The Rebel card isn't a legal choice at all.
+    expect(() =>
+      act(state, player, { type: "chooseTargets", targetIds: [regime1.id, rebelCard.id] }),
+    ).toThrow();
+
+    const resolved = act(state, player, {
+      type: "chooseTargets",
+      targetIds: [regime1.id, regime2.id],
+    });
+
+    expect(resolved.resolutionStack).toHaveLength(0);
+    const played1 = resolved.cards.find((c) => c.id === regime1.id)!;
+    const played2 = resolved.cards.find((c) => c.id === regime2.id)!;
+    expect(played1.zone).toBe("inPlay");
+    expect(played1.locationId).toBe(loc);
+    expect(played1.faceUp).toBe(true); // Republican Guard has no Blend
+    expect(played2.faceUp).toBe(false); // Secret Police has Blend — auto face-down
+    expect(resolved.cards.find((c) => c.id === rebelCard.id)!.zone).toBe("hand");
+  });
+
+  it("allows choosing zero cards to play", () => {
+    const { state, player, cg } = freshCommanderGeneralGame();
+    const activated = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 0 });
+
+    const resolved = act(activated, player, { type: "chooseTargets", targetIds: [] });
+    expect(resolved.resolutionStack).toHaveLength(0);
+  });
+
+  it("remotely activates any number of your own Regime cards at its location, one at a time", () => {
+    let { state, player, cg, loc } = freshCommanderGeneralGame();
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const [guard1, guard2] = state.cards.filter((c) => c.defRef === "Republican Guard");
+    const t1 = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
+    const t2 = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen" && c.id !== t1.id,
+    )!;
+    state = placeInPlay(state, guard1!.id, loc, player);
+    state = placeInPlay(state, guard2!.id, loc, player);
+    state = placeInPlay(state, t1.id, loc, other);
+    state = placeInPlay(state, t2.id, loc, other);
+    state = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 1 });
+    expect(state.resolutionStack).toHaveLength(1);
+
+    // Round 1: activate guard1, resolve its own eliminate ability.
+    state = act(state, player, {
+      type: "chooseTargets",
+      targetIds: [guard1!.id],
+      remoteAbilityIndex: 0,
+    });
+    expect(state.resolutionStack).toHaveLength(2); // [CG loop frame, guard1's frame]
+    state = act(state, player, { type: "chooseTargets", targetIds: [t1.id] });
+    expect(state.resolutionStack).toHaveLength(1); // back to just the CG loop frame
+    expect(state.cards.find((c) => c.id === t1.id)!.zone).toBe("eliminated");
+
+    // Round 2: activate guard2 the same way.
+    state = act(state, player, {
+      type: "chooseTargets",
+      targetIds: [guard2!.id],
+      remoteAbilityIndex: 0,
+    });
+    state = act(state, player, { type: "chooseTargets", targetIds: [t2.id] });
+    expect(state.resolutionStack).toHaveLength(1);
+    expect(state.cards.find((c) => c.id === t2.id)!.zone).toBe("eliminated");
+
+    // Done — submit no more targets to close the queue for good.
+    const finished = act(state, player, { type: "chooseTargets", targetIds: [] });
+    expect(finished.resolutionStack).toHaveLength(0);
+    expect(finished.turn.usedAbilities).toContain(`${guard1!.id}#0`);
+    expect(finished.turn.usedAbilities).toContain(`${guard2!.id}#0`);
+    expect(finished.turn.usedAbilities).toContain(`${cg.id}#1`);
+  });
+
+  it("rejects remotely activating the same card+ability twice in the same queue", () => {
+    let { state, player, cg, loc } = freshCommanderGeneralGame();
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const t1 = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, t1.id, loc, other);
+    state = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 1 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [guard.id], remoteAbilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [t1.id] });
+
+    expect(() =>
+      act(state, player, { type: "chooseTargets", targetIds: [guard.id], remoteAbilityIndex: 0 }),
+    ).toThrow();
+  });
+});

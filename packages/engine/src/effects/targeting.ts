@@ -12,7 +12,8 @@ import type { TargetSelector } from "./dsl";
 // NOT apply Protected-immunity, since that's specific to the `eliminate`
 // verb ("cannot be targeted *for elimination*"), not to targeting in
 // general; see isLegalEliminationTarget below, applied at the call site in
-// applySingleEliminateEffect instead.
+// reducer.ts's declareEliminateTarget instead. Only for *in-play* cards —
+// see resolveEligibleHandCards below for selecting from a hand instead.
 //
 // Deliberately incomplete for now, a documented gap rather than an
 // oversight (see rev_day_engine_design memory): does NOT support
@@ -47,6 +48,26 @@ export function resolveEligibleTargets(
     if (selector.blendState === "faceDown" && card.faceUp !== false) return false;
     if (selector.blendState === "faceUp" && card.faceUp !== true) return false;
 
+    return true;
+  });
+}
+
+// Resolves which of `actingPlayerId`'s *hand* cards a filter-based
+// TargetSelector could pick from — for the `play` verb (Commander
+// General's "play any number of regime cards"), a genuinely different
+// pool from resolveEligibleTargets' in-play cards. "Play a card" always
+// means from your own hand, even when the ability text doesn't say so
+// explicitly — you can't play a card from someone else's hand.
+export function resolveEligibleHandCards(
+  state: GameState,
+  cardData: CardData,
+  selector: Extract<TargetSelector, { ref: "filter" }>,
+  actingPlayerId: PlayerId,
+): CardInstance[] {
+  return state.cards.filter((card) => {
+    if (card.zone !== "hand" || card.controller !== actingPlayerId) return false;
+    if (selector.kind && card.kind !== selector.kind) return false;
+    if (selector.faction && getFaction(cardData, card) !== selector.faction) return false;
     return true;
   });
 }

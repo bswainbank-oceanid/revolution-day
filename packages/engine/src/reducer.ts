@@ -6,6 +6,7 @@ import {
   isLegalEliminationTarget,
   isLegalPresidentTarget,
   isProtectedActive,
+  resolveEligibleHandCards,
   resolveEligibleTargets,
 } from "./effects/targeting";
 import { adjacentLocationIds } from "./state/board";
@@ -432,12 +433,19 @@ function applyChooseTargets(
     return applyActivateRemote(
       state,
       cardData,
+      frame,
       sourceCard,
       effect,
       actingPlayerId,
       action.targetIds,
       action.remoteAbilityIndex,
     );
+  }
+  if (effect.verb === "reveal") {
+    return applyRevealEffect(state, cardData, sourceCard, effect, action.targetIds);
+  }
+  if (effect.verb === "play") {
+    return applyPlayEffect(state, cardData, sourceCard, actingPlayerId, effect, action.targetIds);
   }
   if (effect.verb !== "eliminate") {
     throw new Error(`Effect verb not yet interpreted: ${effect.verb}`);
@@ -534,12 +542,21 @@ function declareEliminateTarget(
 // + one of its unused Activate abilities, then push a *new*
 // AbilityResolutionFrame for that ability (respecting its own alarm flag
 // and once-per-turn-per-card usage), replacing this frame rather than
-// nesting beneath it. Only single-card remote-activation (count 1) is
-// implemented — Commander General's "any number of your regime cards"
-// variant would need a queue of pending activations, not built yet.
+// nesting beneath it.
+//
+// Commander General's "activate any number of your regime cards" is the
+// same effect with `count: "unbounded"` — handled as a queue, one card at
+// a time: submitting one target+ability activates it and, once it (and any
+// of its own alarm/window nesting) fully resolves, *re-offers* the same
+// choice by leaving a fresh copy of this frame (targetIds reset to null)
+// underneath rather than popping it — see the loopFrame branch below.
+// Submitting zero targets means "no more" and pops for real. No special
+// handling is needed for how the loop frame reappears — it's an ordinary
+// AbilityResolutionFrame, dispatched the same generic way as any other.
 function applyActivateRemote(
   state: GameState,
   cardData: CardData,
+  frame: AbilityResolutionFrame,
   sourceCard: CardInstance,
   effect: Extract<EffectNode, { verb: "activateRemote" }>,
   actingPlayerId: PlayerId,
@@ -549,11 +566,19 @@ function applyActivateRemote(
   if (effect.target.ref !== "filter") {
     throw new Error("Only filter-based targeting is interpreted so far");
   }
-  if (effect.count.mode !== "exact" || effect.count.value !== 1) {
-    throw new Error("Only single-card remote activation is interpreted so far");
+  const isUnbounded = effect.count.mode === "unbounded";
+  if (!isUnbounded && (effect.count.mode !== "exact" || effect.count.value !== 1)) {
+    throw new Error("Only exact-one or unbounded remote activation is interpreted so far");
+  }
+
+  if (targetIds.length === 0) {
+    if (!isUnbounded) {
+      throw new Error("Remote activation requires exactly one target card");
+    }
+    return popCurrentFrame(state); // "no more" — done choosing.
   }
   if (targetIds.length !== 1) {
-    throw new Error("Remote activation requires exactly one target card");
+    throw new Error("Choose one card to remotely activate at a time");
   }
   if (remoteAbilityIndex === undefined) {
     throw new Error("Remote activation requires remoteAbilityIndex");
@@ -598,13 +623,80 @@ function applyActivateRemote(
   const newFrames: ResolutionFrame[] = rawAbility.alarm
     ? [newAbilityFrame, buildAlarmFrame(state, remoteCard.id, actingPlayerId, remoteCard.locationId)]
     : [newAbilityFrame];
+  const loopFrame: ResolutionFrame[] = isUnbounded ? [{ ...frame, targetIds: null }] : [];
 
   return {
     ...state,
     cards,
-    resolutionStack: [...state.resolutionStack.slice(0, -1), ...newFrames],
+    resolutionStack: [...state.resolutionStack.slice(0, -1), ...loopFrame, ...newFrames],
     turn: { ...state.turn, usedAbilities: [...state.turn.usedAbilities, usageKey] },
   };
+}
+
+// "Reveal all blended characters at this location" (Commander General) —
+// deterministic, no player choice, so targetIds is just a confirmation and
+// must be empty. Only `count: "all"` is implemented; a player-chosen
+// partial reveal isn't needed by any encoded ability yet.
+function applyRevealEffect(
+  state: GameState,
+  cardData: CardData,
+  sourceCard: CardInstance,
+  effect: Extract<EffectNode, { verb: "reveal" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (effect.target.ref !== "filter") {
+    throw new Error("Only filter-based targeting is interpreted so far");
+  }
+  if (effect.target.count.mode !== "all") {
+    throw new Error("Only 'reveal all' is interpreted so far");
+  }
+  if (targetIds.length > 0) {
+    throw new Error("This ability reveals everyone matching automatically — no targets to choose");
+  }
+
+  const toReveal = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
+  const revealSet = new Set(toReveal.map((c) => c.id));
+  const cards = state.cards.map((c) => (revealSet.has(c.id) ? { ...c, faceUp: true } : c));
+  return popCurrentFrame({ ...state, cards });
+}
+
+// "Play any number of regime cards at this location" (Commander General)
+// — unlike activateRemote's unbounded variant, this needs no per-card
+// follow-up decision, so the whole chosen set is submitted and applied in
+// one chooseTargets call rather than a queue. Selects from the acting
+// player's *hand* (resolveEligibleHandCards), not state.cards' in-play
+// pool. Blend-attribute cards still always enter play face-down
+// automatically, same principle as the playCard action.
+function applyPlayEffect(
+  state: GameState,
+  cardData: CardData,
+  sourceCard: CardInstance,
+  actingPlayerId: PlayerId,
+  effect: Extract<EffectNode, { verb: "play" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (effect.target.ref !== "filter") {
+    throw new Error("Only filter-based targeting is interpreted so far");
+  }
+  if (effect.location.mode !== "self") {
+    throw new Error("Only location: self is interpreted so far");
+  }
+  const locationId = sourceCard.locationId!;
+
+  const eligible = resolveEligibleHandCards(state, cardData, effect.target, actingPlayerId);
+  validateTargets(
+    effect.target.count,
+    targetIds,
+    eligible.map((c) => c.id),
+  );
+
+  const targetSet = new Set(targetIds);
+  const cards = state.cards.map((c) => {
+    if (!targetSet.has(c.id)) return c;
+    const faceUp = !hasAttribute(cardData, c, "Blend");
+    return { ...c, zone: "inPlay" as const, locationId, faceUp };
+  });
+  return popCurrentFrame({ ...state, cards });
 }
 
 // The President isn't a CardInstance, so he can't appear in `state.cards`
@@ -640,20 +732,28 @@ function eliminateSingleTarget(state: GameState, targetId: string): Pick<GameSta
 // window) and pops the AbilityResolutionFrame that was awaiting it.
 function finalizeEliminateEffect(state: GameState, targetId: string): GameState {
   const { cards, president } = eliminateSingleTarget(state, targetId);
-  const popped = { ...state, cards, president, resolutionStack: state.resolutionStack.slice(0, -1) };
-  return resumeAlarmIfPaused(popped);
+  return popCurrentFrame({ ...state, cards, president });
 }
 
-// If finishing this ability's resolution leaves a paused AlarmResolutionFrame
-// as the new top of the stack, this was a Response resolved via
-// useResponse (not a top-level direct activation) — its target declaration
-// pushed a pending AbilityResolutionFrame + reveal window *on top of* the
-// still-paused alarm frame rather than advancing it. Now that the
-// response (and any nested window/re-choice) is fully done, advance the
-// pass — the response consumed its turn. A direct activation never has an
-// AlarmResolutionFrame beneath its own frame at this point (its own alarm,
-// if any, already resolved and popped *before* targets were chosen), so
-// this is a no-op there.
+// Pops the current top resolution frame and, if that leaves a paused
+// AlarmResolutionFrame as the new top, resumes it — see the comment below.
+// Shared by every effect-finalization path (eliminate, reveal, play, the
+// "no more" end of an activateRemote queue, ...), since any of them could
+// in principle be reached via a nested Response resolution.
+function popCurrentFrame(state: GameState): GameState {
+  return resumeAlarmIfPaused({ ...state, resolutionStack: state.resolutionStack.slice(0, -1) });
+}
+
+// If popping a frame leaves a paused AlarmResolutionFrame as the new top of
+// the stack, this was a Response resolved via useResponse (not a top-level
+// direct activation) — its target declaration pushed a pending
+// AbilityResolutionFrame + reveal window *on top of* the still-paused
+// alarm frame rather than advancing it. Now that the response (and any
+// nested window/re-choice) is fully done, advance the pass — the response
+// consumed its turn. A direct activation never has an AlarmResolutionFrame
+// beneath its own frame at this point (its own alarm, if any, already
+// resolved and popped *before* targets were chosen), so this is a no-op
+// there.
 function resumeAlarmIfPaused(state: GameState): GameState {
   const top = state.resolutionStack[state.resolutionStack.length - 1];
   if (top && top.kind === "alarmResolution") {
@@ -759,10 +859,16 @@ function applyProtectedTargetingWindowAction(
 
 function validateTargets(count: TargetCount, targetIds: readonly string[], eligibleIds: readonly string[]): void {
   const eligibleSet = new Set(eligibleIds);
-  const requiredCount = count.mode === "exact" ? count.value : undefined;
-  if (requiredCount !== undefined && targetIds.length !== requiredCount) {
-    throw new Error(`This ability requires exactly ${requiredCount} target(s)`);
+  if (count.mode === "exact" && targetIds.length !== count.value) {
+    throw new Error(`This ability requires exactly ${count.value} target(s)`);
   }
+  if (count.mode === "range" && (targetIds.length < count.min || targetIds.length > count.max)) {
+    throw new Error(`This ability requires between ${count.min} and ${count.max} target(s)`);
+  }
+  if (count.mode === "all" && targetIds.length !== eligibleIds.length) {
+    throw new Error("This ability requires selecting every eligible target");
+  }
+  // "unbounded": any subset, including none, is fine — no count check.
   for (const targetId of targetIds) {
     if (!eligibleSet.has(targetId)) {
       throw new Error(`${targetId} is not a legal target for this ability`);
