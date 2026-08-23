@@ -77,11 +77,14 @@ describe("isLegalEliminationTarget", () => {
     expect(isLegalEliminationTarget(s, cardData, target, "a")).toBe(false);
   });
 
-  it("a face-down Protected+Blend card still counts as a protector for others (not 'active' Protected)", () => {
+  it("a face-down card's faction is invisible, so it doesn't count as a protector either", () => {
     const state = baseState();
     const target = card({ id: "t", defRef: "Head of Security", kind: "leader", controller: "b" });
-    // Wife, face-down, is Regime + not currently Protected-active — should
-    // still count as a valid (non-Protected) protector for Head of Security.
+    // Wife, face-down: "face-down cards do not count as regime or rebel
+    // for targeting purposes" — her true Regime faction isn't usable here
+    // until she's revealed. This is exactly what the protected-targeting
+    // reveal window (not built yet at the isLegalEliminationTarget level)
+    // exists to let other players do mid-declaration.
     const hiddenWife = card({
       id: "w",
       defRef: "Wife",
@@ -90,6 +93,24 @@ describe("isLegalEliminationTarget", () => {
       faceUp: false,
     });
     const s = { ...state, cards: [target, hiddenWife] };
+    expect(isLegalEliminationTarget(s, cardData, target, "a")).toBe(true);
+  });
+
+  it("does count as a protector once that same card is revealed (Blend but not itself Protected)", () => {
+    const state = baseState();
+    const target = card({ id: "t", defRef: "Head of Security", kind: "leader", controller: "b" });
+    // Secret Police: Regime + Blend, but no Protected attribute, so once
+    // revealed it's a valid (non-Protected) protector — unlike Wife, whose
+    // own Protected status would disqualify her per "protected doesn't
+    // protect protected".
+    const revealedSecretPolice = card({
+      id: "s",
+      defRef: "Secret Police",
+      kind: "nonLeader",
+      controller: "c",
+      faceUp: true,
+    });
+    const s = { ...state, cards: [target, revealedSecretPolice] };
     expect(isLegalEliminationTarget(s, cardData, target, "a")).toBe(false);
   });
 });

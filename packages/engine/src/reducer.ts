@@ -1,12 +1,23 @@
 import type { Action } from "./actions";
 import { getAbilityEffects } from "./data/abilityEffects";
 import type { AbilityDefinition, EffectNode, TargetCount } from "./effects/dsl";
-import { isLegalEliminationTarget, isLegalPresidentTarget, resolveEligibleTargets } from "./effects/targeting";
+import {
+  hasRevealOpportunity,
+  isLegalEliminationTarget,
+  isLegalPresidentTarget,
+  isProtectedActive,
+  resolveEligibleTargets,
+} from "./effects/targeting";
 import { adjacentLocationIds } from "./state/board";
 import { getAbilities, getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
 import type { CardInstance } from "./state/cards";
 import type { GameState, PlayerId } from "./state/game";
-import type { AbilityResolutionFrame, AlarmResolutionFrame, ResolutionFrame } from "./state/resolution";
+import type {
+  AbilityResolutionFrame,
+  AlarmResolutionFrame,
+  ProtectedTargetingWindowFrame,
+  ResolutionFrame,
+} from "./state/resolution";
 import type { CardData } from "./types";
 
 // The reducer: (state, action) -> newState. Pure — no I/O, no hidden
@@ -82,6 +93,8 @@ function applyResolutionAction(
       return applyChooseTargets(state, cardData, frame, actingPlayerId, action);
     case "alarmResolution":
       return applyAlarmAction(state, cardData, frame, actingPlayerId, action);
+    case "protectedTargetingWindow":
+      return applyProtectedTargetingWindowAction(state, frame, actingPlayerId, action);
     default:
       throw new Error(`Resolution frame not yet implemented: ${frame.kind}`);
   }
@@ -429,9 +442,61 @@ function applyChooseTargets(
   if (effect.verb !== "eliminate") {
     throw new Error(`Effect verb not yet interpreted: ${effect.verb}`);
   }
+  if (effect.target.ref !== "filter") {
+    throw new Error("Only filter-based targeting is interpreted so far");
+  }
 
-  const { cards, president } = applySingleEliminateEffect(state, cardData, definition, sourceCard, action.targetIds);
-  return { ...state, cards, president, resolutionStack: state.resolutionStack.slice(0, -1) };
+  // Bypass Protected-immunity entirely (no window, ever) both for an
+  // ability that already ignores it (Wife) and for a target chosen after
+  // a reveal window already ran once this resolution — that re-choice is
+  // final by design, not a fresh declaration that could reopen a window.
+  const bypassProtection = (effect.ignoreProtected ?? false) || (frame.reselectingAfterReveal ?? false);
+
+  // Determine the declared target and whether a hidden card could still
+  // change its legality — declaration itself only ever uses currently
+  // *visible* information (isLegalEliminationTarget/isLegalPresidentTarget
+  // both only count visible protectors now).
+  let declaredTargetId: string;
+  let locationId: string;
+  let protectedActive: boolean;
+  if (effect.target.kind === "president") {
+    const legal = isLegalPresidentTarget(state, cardData, actingPlayerId, bypassProtection);
+    validateTargets(effect.target.count, action.targetIds, legal ? [PRESIDENT_TARGET_ID] : []);
+    declaredTargetId = PRESIDENT_TARGET_ID;
+    locationId = state.president.locationId!;
+    // The President has no Blend attribute, so his Protected status is
+    // always active while alive.
+    protectedActive = !bypassProtection && state.president.status === "alive";
+  } else {
+    const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard).filter(
+      (c) => bypassProtection || isLegalEliminationTarget(state, cardData, c, actingPlayerId),
+    );
+    validateTargets(
+      effect.target.count,
+      action.targetIds,
+      eligible.map((c) => c.id),
+    );
+    declaredTargetId = action.targetIds[0]!;
+    const declaredCard = state.cards.find((c) => c.id === declaredTargetId)!;
+    locationId = declaredCard.locationId!;
+    protectedActive = !bypassProtection && isProtectedActive(cardData, declaredCard);
+  }
+
+  if (protectedActive && hasRevealOpportunity(state, locationId, actingPlayerId)) {
+    const updatedFrame: AbilityResolutionFrame = { ...frame, targetIds: [declaredTargetId] };
+    const windowFrame = buildProtectedTargetingWindowFrame(
+      state,
+      locationId,
+      actingPlayerId,
+      declaredTargetId,
+    );
+    return {
+      ...state,
+      resolutionStack: [...state.resolutionStack.slice(0, -1), updatedFrame, windowFrame],
+    };
+  }
+
+  return finalizeEliminateEffect(state, declaredTargetId);
 }
 
 // "Activate any [faction] card, controlled by any player, at any
@@ -547,15 +612,7 @@ function applySingleEliminateEffect(
       effect.ignoreProtected ?? false,
     );
     validateTargets(effect.target.count, targetIds, legal ? [PRESIDENT_TARGET_ID] : []);
-    const targetsPresident = targetIds.includes(PRESIDENT_TARGET_ID);
-    const president: GameState["president"] = targetsPresident
-      ? {
-          status: "eliminated",
-          locationId: null,
-          eliminatedAtLocationId: state.president.locationId ?? undefined,
-        }
-      : state.president;
-    return { cards: state.cards, president };
+    return eliminateSingleTarget(state, targetIds[0]!);
   }
 
   const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard).filter(
@@ -566,12 +623,132 @@ function applySingleEliminateEffect(
     targetIds,
     eligible.map((c) => c.id),
   );
+  return eliminateSingleTarget(state, targetIds[0]!);
+}
 
-  const targetSet = new Set(targetIds);
-  const cards = state.cards.map((c) =>
-    targetSet.has(c.id) ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+// Applies a single, already-finalized elimination target — either a card
+// or the President sentinel. Every currently-encoded ability is
+// count-exact-1, so "single" isn't a limitation in practice yet.
+function eliminateSingleTarget(state: GameState, targetId: string): Pick<GameState, "cards" | "president"> {
+  if (targetId === PRESIDENT_TARGET_ID) {
+    return {
+      cards: state.cards,
+      president: {
+        status: "eliminated",
+        locationId: null,
+        eliminatedAtLocationId: state.president.locationId ?? undefined,
+      },
+    };
+  }
+  return {
+    president: state.president,
+    cards: state.cards.map((c) =>
+      c.id === targetId ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+    ),
+  };
+}
+
+// Applies a fully-resolved eliminate effect (target already finalized —
+// either as originally declared, or reassigned by a protected-targeting
+// window) and pops the AbilityResolutionFrame that was awaiting it.
+function finalizeEliminateEffect(state: GameState, targetId: string): GameState {
+  const { cards, president } = eliminateSingleTarget(state, targetId);
+  return { ...state, cards, president, resolutionStack: state.resolutionStack.slice(0, -1) };
+}
+
+// Single, non-repeating pass: starts after the declaring player, skips
+// them and any player with no blended character at the location — see
+// card_data.json's protected_targeting_rules.
+function buildProtectedTargetingWindowFrame(
+  state: GameState,
+  locationId: string,
+  declaringPlayerId: PlayerId,
+  declaredTargetId: string,
+): ProtectedTargetingWindowFrame {
+  const seats = state.players.slice().sort((a, b) => a.seatIndex - b.seatIndex);
+  const declarerSeat = seats.find((p) => p.id === declaringPlayerId)!.seatIndex;
+  const n = seats.length;
+  const rotated = Array.from(
+    { length: n - 1 },
+    (_, i) => seats.find((p) => p.seatIndex === (declarerSeat + i + 1) % n)!.id,
   );
-  return { cards, president: state.president };
+  const order = rotated.filter((playerId) =>
+    state.cards.some(
+      (c) =>
+        c.zone === "inPlay" && c.locationId === locationId && c.controller === playerId && c.faceUp === false,
+    ),
+  );
+  return {
+    kind: "protectedTargetingWindow",
+    declaringPlayerId,
+    declaredTargetId,
+    locationId,
+    order,
+    nextIndex: 0,
+    anyRevealed: false,
+  };
+}
+
+// If nobody reveals anything during the pass, the originally declared
+// target stands. If *anyone* reveals *anything* — regardless of whether it
+// would actually have protected the original target — the target is not
+// automatically reassigned; instead control returns to the declaring
+// player (AbilityResolutionFrame.reselectingAfterReveal) to freely
+// re-choose from the now-current board, Protected and still-blended
+// characters included, and that choice is final.
+function applyProtectedTargetingWindowAction(
+  state: GameState,
+  frame: ProtectedTargetingWindowFrame,
+  actingPlayerId: PlayerId,
+  action: Action,
+): GameState {
+  const expectedPlayerId = frame.order[frame.nextIndex]!;
+  if (actingPlayerId !== expectedPlayerId) {
+    throw new Error(`It is not ${actingPlayerId}'s turn in this protected-targeting reveal pass`);
+  }
+
+  let cards = state.cards;
+  let revealedThisTurn = false;
+  if (action.type === "revealBlended") {
+    for (const cardId of action.cardIds) {
+      const card = state.cards.find((c) => c.id === cardId);
+      if (
+        !card ||
+        card.zone !== "inPlay" ||
+        card.controller !== actingPlayerId ||
+        card.locationId !== frame.locationId ||
+        card.faceUp !== false
+      ) {
+        throw new Error(`${cardId} is not a blended card ${actingPlayerId} controls at this location`);
+      }
+    }
+    const revealSet = new Set(action.cardIds);
+    cards = state.cards.map((c) => (revealSet.has(c.id) ? { ...c, faceUp: true } : c));
+    revealedThisTurn = action.cardIds.length > 0;
+  } else if (action.type !== "passReveal") {
+    throw new Error(`Expected revealBlended or passReveal, got: ${action.type}`);
+  }
+
+  const anyRevealed = frame.anyRevealed || revealedThisTurn;
+  const withCards = { ...state, cards };
+  const nextIndex = frame.nextIndex + 1;
+  if (nextIndex < frame.order.length) {
+    const updatedFrame: ProtectedTargetingWindowFrame = { ...frame, nextIndex, anyRevealed };
+    return { ...withCards, resolutionStack: [...withCards.resolutionStack.slice(0, -1), updatedFrame] };
+  }
+
+  const abilityFrame = withCards.resolutionStack[withCards.resolutionStack.length - 2] as AbilityResolutionFrame;
+  if (!anyRevealed) {
+    const withoutWindow = { ...withCards, resolutionStack: [...withCards.resolutionStack.slice(0, -2), abilityFrame] };
+    return finalizeEliminateEffect(withoutWindow, frame.declaredTargetId);
+  }
+
+  const reselectFrame: AbilityResolutionFrame = {
+    ...abilityFrame,
+    targetIds: null,
+    reselectingAfterReveal: true,
+  };
+  return { ...withCards, resolutionStack: [...withCards.resolutionStack.slice(0, -2), reselectFrame] };
 }
 
 function validateTargets(count: TargetCount, targetIds: readonly string[], eligibleIds: readonly string[]): void {

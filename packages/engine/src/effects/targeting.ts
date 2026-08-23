@@ -1,7 +1,7 @@
 import { getFaction, hasAttribute } from "../state/cardLookup";
 import type { CardInstance } from "../state/cards";
-import type { GameState } from "../state/game";
-import type { CardData } from "../types";
+import type { GameState, PlayerId } from "../state/game";
+import type { CardData, Faction } from "../types";
 import type { TargetSelector } from "./dsl";
 
 // Resolves which card instances a filter-based TargetSelector could
@@ -55,11 +55,66 @@ export function resolveEligibleTargets(
 // a card only actually shields (or is shielded) while its Protected status
 // is active. This same "active" notion governs both whether a card is
 // itself immune, and whether it counts as a valid protector for others
-// (see isLegalEliminationTarget) — a face-down Protected+Blend card acts
-// as an ordinary card for both purposes while hidden.
-function isProtectedActive(cardData: CardData, card: CardInstance): boolean {
+// (see findProtectorCards) — a face-down Protected+Blend card acts as an
+// ordinary card for both purposes while hidden.
+export function isProtectedActive(cardData: CardData, card: CardInstance): boolean {
   if (!hasAttribute(cardData, card, "Protected")) return false;
   return !hasAttribute(cardData, card, "Blend") || card.faceUp === true;
+}
+
+// "Face-down cards do not count as regime or rebel for targeting
+// purposes" — a card's faction is only usable in a legality check while
+// it's visible (not Blend, or Blend and revealed). This is what makes the
+// protected-targeting reveal window meaningful: a hidden same-faction card
+// does NOT yet count as a protector, only as a *potential* one once
+// revealed.
+function isFactionVisible(cardData: CardData, card: CardInstance): boolean {
+  return !hasAttribute(cardData, card, "Blend") || card.faceUp === true;
+}
+
+// Cards that would currently shield `faction` at `locationId` from
+// `excludedControllerId` (the acting/declaring player — "cards you
+// control do not count toward this protection"): other active, visible,
+// same-faction, non-Protected cards. Shared by isLegalEliminationTarget,
+// isLegalPresidentTarget, and the reveal window's reassignment logic
+// (finding a newly-revealed protector is the same query as finding an
+// already-visible one).
+export function findProtectorCards(
+  state: GameState,
+  cardData: CardData,
+  locationId: string,
+  faction: Faction,
+  excludedControllerId: string | null,
+  excludedCardId?: string,
+): CardInstance[] {
+  return state.cards.filter(
+    (c) =>
+      c.id !== excludedCardId &&
+      c.zone === "inPlay" &&
+      c.locationId === locationId &&
+      c.controller !== excludedControllerId &&
+      isFactionVisible(cardData, c) &&
+      getFaction(cardData, c) === faction &&
+      !isProtectedActive(cardData, c),
+  );
+}
+
+// Whether any player other than the declaring player controls a currently
+// face-down (Blend) card at the location — if not, no reveal could change
+// the outcome, so the reveal window shouldn't open at all (an instant,
+// no-op pass isn't meaningfully different from skipping it).
+export function hasRevealOpportunity(
+  state: GameState,
+  locationId: string,
+  declaringPlayerId: PlayerId,
+): boolean {
+  return state.cards.some(
+    (c) =>
+      c.zone === "inPlay" &&
+      c.locationId === locationId &&
+      c.controller !== declaringPlayerId &&
+      c.faceUp === false,
+  );
 }
 
 // "Cannot be targeted for elimination while there are other cards in the
@@ -69,8 +124,10 @@ function isProtectedActive(cardData: CardData, card: CardInstance): boolean {
 // characters are not protected by other Protected characters — only an
 // *active*, non-Protected same-faction card at the location counts as a
 // valid protector ("if only protected targets remain, either may be
-// eliminated").
-//
+// eliminated"). This is a declaration-time check using only currently
+// *visible* information — see the protected-targeting reveal window
+// (ProtectedTargetingWindowFrame, dispatched in reducer.ts) for what
+// happens when a hidden card could still change the outcome.
 export function isLegalEliminationTarget(
   state: GameState,
   cardData: CardData,
@@ -79,16 +136,11 @@ export function isLegalEliminationTarget(
 ): boolean {
   if (!isProtectedActive(cardData, target)) return true;
   const targetFaction = getFaction(cardData, target);
-  const hasProtector = state.cards.some(
-    (c) =>
-      c.id !== target.id &&
-      c.zone === "inPlay" &&
-      c.locationId === target.locationId &&
-      c.controller !== actingPlayerId &&
-      getFaction(cardData, c) === targetFaction &&
-      !isProtectedActive(cardData, c),
+  if (!targetFaction) return true;
+  return (
+    findProtectorCards(state, cardData, target.locationId!, targetFaction, actingPlayerId, target.id)
+      .length === 0
   );
-  return !hasProtector;
 }
 
 // The President's own targeting legality. His card_data.json text
@@ -119,13 +171,7 @@ export function isLegalPresidentTarget(
 
   if (ignoreProtection) return true;
 
-  const hasProtector = state.cards.some(
-    (c) =>
-      c.zone === "inPlay" &&
-      c.locationId === state.president.locationId &&
-      c.controller !== actingPlayerId &&
-      getFaction(cardData, c) === "Regime" &&
-      !isProtectedActive(cardData, c),
+  return (
+    findProtectorCards(state, cardData, state.president.locationId, "Regime", actingPlayerId).length === 0
   );
-  return !hasProtector;
 }

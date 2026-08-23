@@ -18,6 +18,12 @@ export interface AbilityResolutionFrame {
   readonly locationId: string;
   // null until targets have been chosen.
   readonly targetIds: readonly string[] | null;
+  // True once a protected-targeting reveal window has completed with at
+  // least one reveal, and control has returned here for the acting player
+  // to freely re-choose (Protected and still-blended characters included)
+  // — that re-choice is final and never re-opens the window, even if it's
+  // Protected again.
+  readonly reselectingAfterReveal?: boolean;
 }
 
 // Walks seating order starting after the triggering (acting) player,
@@ -35,6 +41,11 @@ export interface AlarmResolutionFrame {
 // Opens when a declared target would be a Protected character. A single,
 // non-repeating pass starting after the declaring player, skipping both
 // the declarer and any player with no blended character at the location.
+// If *anyone* reveals *anything* during the pass (regardless of whether it
+// would actually have protected the original target), control returns to
+// the declaring player to freely re-choose afterward — see
+// AbilityResolutionFrame.reselectingAfterReveal — rather than the target
+// being automatically reassigned.
 export interface ProtectedTargetingWindowFrame {
   readonly kind: "protectedTargetingWindow";
   readonly declaringPlayerId: PlayerId;
@@ -42,6 +53,7 @@ export interface ProtectedTargetingWindowFrame {
   readonly locationId: string;
   readonly order: readonly PlayerId[];
   readonly nextIndex: number;
+  readonly anyRevealed: boolean;
 }
 
 // Opens before a Motorcade's move effect applies. Offered only to eligible

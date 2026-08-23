@@ -3,7 +3,11 @@ import { cardData } from "./data/cardData";
 import { applyAction } from "./reducer";
 import type { Action } from "./actions";
 import type { GameState, PlayerId } from "./state/game";
-import type { AlarmResolutionFrame } from "./state/resolution";
+import type {
+  AbilityResolutionFrame,
+  AlarmResolutionFrame,
+  ProtectedTargetingWindowFrame,
+} from "./state/resolution";
 import { setupGame } from "./setup";
 
 function freshGame(playerIds: readonly string[] = ["a", "b", "c"], seed = 1) {
@@ -792,5 +796,138 @@ describe("applyAction: remote activation", () => {
     expect(() =>
       act(activated, player, { type: "chooseTargets", targetIds: [guard.id], remoteAbilityIndex: 0 }),
     ).toThrow();
+  });
+});
+
+describe("applyAction: protected-targeting reveal window", () => {
+  function setupWindowScenario() {
+    // 8 players so Head of Security is guaranteed to be dealt.
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const declarer = state.turn.currentPlayerId;
+    const [otherA, otherB] = state.players.filter((p) => p.id !== declarer).map((p) => p.id) as [string, string];
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const target = state.cards.find((c) => c.defRef === "Head of Security")!;
+    const hiddenProtector = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Secret Police" && c.id !== guard.id,
+    )!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guard.id, loc, declarer);
+    state = placeInPlay(state, target.id, loc, otherA); // no reveal opportunity of its own
+    state = placeInPlay(state, hiddenProtector.id, loc, otherB, false); // face-down
+    state = act(state, declarer, { type: "draw" });
+    state = act(state, declarer, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+    return { state, declarer, otherA, otherB, guard, target, hiddenProtector, loc };
+  }
+
+  it("opens a window and skips straight to the only player with a blended card there", () => {
+    const { state, declarer, target, otherB } = setupWindowScenario();
+    const activated = act(state, declarer, { type: "chooseTargets", targetIds: [target.id] });
+
+    expect(activated.resolutionStack).toHaveLength(2);
+    const window = activated.resolutionStack[1] as ProtectedTargetingWindowFrame;
+    expect(window.order).toEqual([otherB]);
+  });
+
+  it("after any reveal, hands control back to the declaring player to freely re-choose", () => {
+    const { state, declarer, otherB, target, hiddenProtector } = setupWindowScenario();
+    const activated = act(state, declarer, { type: "chooseTargets", targetIds: [target.id] });
+
+    const returned = act(activated, otherB, { type: "revealBlended", cardIds: [hiddenProtector.id] });
+
+    expect(returned.resolutionStack).toHaveLength(1);
+    const reselectFrame = returned.resolutionStack[0] as AbilityResolutionFrame;
+    expect(reselectFrame.reselectingAfterReveal).toBe(true);
+    expect(reselectFrame.targetIds).toBeNull();
+
+    // The declaring player can now pick the newly revealed card...
+    const resolved = act(returned, declarer, { type: "chooseTargets", targetIds: [hiddenProtector.id] });
+    expect(resolved.resolutionStack).toHaveLength(0);
+    expect(resolved.cards.find((c) => c.id === hiddenProtector.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("inPlay");
+  });
+
+  it("lets the re-choice target the same (still Protected) character with no new window", () => {
+    const { state, declarer, otherB, target, hiddenProtector } = setupWindowScenario();
+    const activated = act(state, declarer, { type: "chooseTargets", targetIds: [target.id] });
+    const returned = act(activated, otherB, { type: "revealBlended", cardIds: [hiddenProtector.id] });
+
+    // Head of Security is *still* Protected (hiddenProtector, now revealed,
+    // would normally shield it) — but this re-choice bypasses that check
+    // entirely and does not reopen a window.
+    const resolved = act(returned, declarer, { type: "chooseTargets", targetIds: [target.id] });
+
+    expect(resolved.resolutionStack).toHaveLength(0);
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+  });
+
+  it("triggers the same hand-back even from a reveal of an unrelated faction", () => {
+    const { state, declarer, otherB, target, hiddenProtector } = setupWindowScenario();
+    // Give otherB a second blended card that's the wrong faction — per the
+    // corrected rule, *any* reveal hands control back, regardless of
+    // whether it would have protected the original target.
+    const wrongFactionCard = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Gunman" && c.zone === "deck",
+    )!;
+    const withExtra = placeInPlay(state, wrongFactionCard.id, state.board[0]!.id, otherB, false);
+    const activated = act(withExtra, declarer, { type: "chooseTargets", targetIds: [target.id] });
+
+    const returned = act(activated, otherB, { type: "revealBlended", cardIds: [wrongFactionCard.id] });
+
+    expect(returned.resolutionStack).toHaveLength(1);
+    expect((returned.resolutionStack[0] as AbilityResolutionFrame).reselectingAfterReveal).toBe(true);
+    // hiddenProtector is still face-down — the *other* card was revealed.
+    expect(returned.cards.find((c) => c.id === hiddenProtector.id)!.faceUp).toBe(false);
+
+    const resolved = act(returned, declarer, { type: "chooseTargets", targetIds: [target.id] });
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+  });
+
+  it("eliminates the originally declared target directly if nobody reveals anything", () => {
+    const { state, declarer, otherB, target, hiddenProtector } = setupWindowScenario();
+    const activated = act(state, declarer, { type: "chooseTargets", targetIds: [target.id] });
+
+    const resolved = act(activated, otherB, { type: "passReveal" });
+
+    expect(resolved.resolutionStack).toHaveLength(0);
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === hiddenProtector.id)!.zone).toBe("inPlay");
+    expect(resolved.cards.find((c) => c.id === hiddenProtector.id)!.faceUp).toBe(false);
+  });
+
+  it("rejects a reveal or pass out of turn in the pass", () => {
+    const { state, declarer, target } = setupWindowScenario();
+    const activated = act(state, declarer, { type: "chooseTargets", targetIds: [target.id] });
+
+    expect(() => act(activated, declarer, { type: "passReveal" })).toThrow();
+  });
+
+  it("rejects revealing a card you don't control at that location", () => {
+    const { state, declarer, otherB, target, hiddenProtector } = setupWindowScenario();
+    const activated = act(state, declarer, { type: "chooseTargets", targetIds: [target.id] });
+
+    expect(() =>
+      act(activated, otherB, { type: "revealBlended", cardIds: [target.id] }), // not otherB's card
+    ).toThrow();
+    // sanity: hiddenProtector itself is a legal reveal for comparison
+    expect(() =>
+      act(activated, otherB, { type: "revealBlended", cardIds: [hiddenProtector.id] }),
+    ).not.toThrow();
+  });
+
+  it("does not open a window at all when nobody has anything to reveal", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const target = state.cards.find((c) => c.defRef === "Head of Security")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, target.id, loc, other); // alone, nothing else at this location
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [target.id] });
+    expect(resolved.resolutionStack).toHaveLength(0);
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
   });
 });

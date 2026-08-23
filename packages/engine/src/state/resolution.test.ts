@@ -56,6 +56,7 @@ describe("resolution frames", () => {
       locationId: "loc-0",
       order: ["p2", "p3"],
       nextIndex: 0,
+      anyRevealed: false,
     };
     expect(frame.order).not.toContain(frame.declaringPlayerId);
   });
