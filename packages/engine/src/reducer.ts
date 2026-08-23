@@ -1,31 +1,35 @@
 import type { Action } from "./actions";
 import { getAbilityEffects } from "./data/abilityEffects";
+import type { AbilityDefinition } from "./effects/dsl";
 import { resolveEligibleTargets } from "./effects/targeting";
 import { adjacentLocationIds } from "./state/board";
 import { getAbilities, getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
 import type { CardInstance } from "./state/cards";
 import type { GameState, PlayerId } from "./state/game";
-import type { AbilityResolutionFrame } from "./state/resolution";
+import type { AbilityResolutionFrame, AlarmResolutionFrame, ResolutionFrame } from "./state/resolution";
 import type { CardData } from "./types";
 
 // The reducer: (state, action) -> newState. Pure — no I/O, no hidden
 // randomness (the RNG lives in and is advanced through GameState itself).
 // cardData is passed explicitly (not imported as a singleton) so a future
 // variant's card set works unmodified, same as setupGame. "draw", "endTurn",
-// "moveCard", "playCard", "playMotorcade", and a first slice of
-// "activateAbility"/"chooseTargets" are implemented so far; everything
+// "moveCard", "playCard", "playMotorcade", "activateAbility"/"chooseTargets"
+// (including alarm-triggering abilities now), and "useResponse"/
+// "passResponse" for the alarm-response window are implemented; everything
 // else is an explicit "not yet implemented".
 //
 // playMotorcade is deliberately incomplete in two ways, both noted inline:
 // it doesn't yet check for a Throng of Admirers/Angry Mob interception
-// (needs resolution-stack frame dispatch), and it doesn't implement the
-// forced "must play immediately" trigger on an empty deck (same gap
-// already noted in applyDraw). activateAbility only handles non-alarm,
-// single-target `eliminate` abilities that have been encoded in
-// abilityEffects.ts (currently just Republican Guard and Assassin) — no
-// alarm resolution, no remote-activation, no Protected-immunity
-// enforcement yet. See rev_day_engine_design memory for the full design
-// this is incrementally building toward.
+// (needs the Motorcade interception window, a different frame kind with
+// no dispatch logic yet), and it doesn't implement the forced "must play
+// immediately" trigger on an empty deck (same gap already noted in
+// applyDraw). activateAbility/chooseTargets/useResponse only handle
+// single-effect, single-target (`count.mode === "exact"`) `eliminate`
+// abilities that have been encoded in abilityEffects.ts — no
+// remote-activation, no Protected-immunity enforcement, no random
+// targeting, and no general multi-effect/conditional interpreter yet. See
+// rev_day_engine_design memory for the full design this is incrementally
+// building toward.
 export function applyAction(
   state: GameState,
   actingPlayerId: PlayerId,
@@ -58,11 +62,11 @@ export function applyAction(
   }
 }
 
-// Dispatches to whatever the top resolution-stack frame expects next. Only
-// "abilityResolution" is handled so far — the other three frame kinds
-// (alarm response, protected-targeting reveal, Motorcade interception)
-// have no dispatch logic yet, since nothing can push them onto the stack
-// yet either.
+// Dispatches to whatever the top resolution-stack frame expects next.
+// "abilityResolution" and "alarmResolution" are handled — the other two
+// frame kinds (protected-targeting reveal, Motorcade interception) have no
+// dispatch logic yet, since nothing can push them onto the stack yet
+// either.
 function applyResolutionAction(
   state: GameState,
   actingPlayerId: PlayerId,
@@ -76,6 +80,8 @@ function applyResolutionAction(
         throw new Error(`Expected chooseTargets while an ability awaits targets, got: ${action.type}`);
       }
       return applyChooseTargets(state, cardData, frame, actingPlayerId, action);
+    case "alarmResolution":
+      return applyAlarmAction(state, cardData, frame, actingPlayerId, action);
     default:
       throw new Error(`Resolution frame not yet implemented: ${frame.kind}`);
   }
@@ -341,16 +347,17 @@ function applyActivateAbility(
   if (rawAbility.type !== "Activate") {
     throw new Error(`${card.defRef}'s ability ${action.abilityIndex} is a Response, not self-activatable`);
   }
-  if (rawAbility.alarm) {
-    throw new Error("Alarm-triggering abilities are not yet implemented (needs AlarmResolutionFrame)");
-  }
 
   const effects = getAbilityEffects(card.defRef, action.abilityIndex);
   if (!effects) {
     throw new Error(`${card.defRef}'s ability ${action.abilityIndex} has no encoded effects yet`);
   }
 
-  const frame: AbilityResolutionFrame = {
+  // Must reveal to use an Activate ability — unconditional, not a choice
+  // (same principle as "must reveal to respond" below).
+  const cards = state.cards.map((c) => (c.id === card.id ? { ...c, faceUp: true } : c));
+
+  const abilityFrame: AbilityResolutionFrame = {
     kind: "abilityResolution",
     sourceCardId: card.id,
     actingPlayerId: currentPlayerId,
@@ -358,12 +365,36 @@ function applyActivateAbility(
     locationId: card.locationId,
     targetIds: null,
   };
+  const resolutionStack: ResolutionFrame[] = rawAbility.alarm
+    ? [abilityFrame, buildAlarmFrame(state, card.id, currentPlayerId, card.locationId)]
+    : [abilityFrame];
 
   return {
     ...state,
-    resolutionStack: [frame],
+    cards,
+    resolutionStack,
     turn: { ...spendAction(state), usedAbilities: [...state.turn.usedAbilities, usageKey] },
   };
+}
+
+// Seating order for an alarm's response pass: starts with the player after
+// the triggering (acting) player, wraps around, ends with the triggering
+// player — everyone gets a turn, no skipping (contrast the
+// protected-targeting reveal window, not built yet, which does skip).
+function buildAlarmFrame(
+  state: GameState,
+  triggeringCardId: string,
+  triggeringPlayerId: PlayerId,
+  locationId: string,
+): AlarmResolutionFrame {
+  const seats = state.players.slice().sort((a, b) => a.seatIndex - b.seatIndex);
+  const triggerSeat = seats.find((p) => p.id === triggeringPlayerId)!.seatIndex;
+  const n = seats.length;
+  const order = Array.from({ length: n }, (_, i) => {
+    const seat = (triggerSeat + i + 1) % n;
+    return seats.find((p) => p.seatIndex === seat)!.id;
+  });
+  return { kind: "alarmResolution", triggeringCardId, triggeringPlayerId, locationId, order, nextIndex: 0 };
 }
 
 function applyChooseTargets(
@@ -379,10 +410,23 @@ function applyChooseTargets(
 
   const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId)!;
   const definition = getAbilityEffects(sourceCard.defRef, frame.abilityIndex)!;
-  // This first slice only interprets a single top-level `eliminate` effect
-  // — not the general recursive interpreter (conditionals, bindings,
-  // sequencing) the DSL is designed for. Extend when an encoded ability
-  // needs more than that.
+  const cards = applySingleEliminateEffect(state, cardData, definition, sourceCard, action.targetIds);
+
+  return { ...state, cards, resolutionStack: [] };
+}
+
+// This first slice only interprets a single top-level `eliminate` effect
+// with filter-based, exact-count targeting — not the general recursive
+// interpreter (conditionals, bindings, sequencing, random selection) the
+// DSL is designed for. Shared by chooseTargets and useResponse, since both
+// ultimately resolve one ability's effect list the same way.
+function applySingleEliminateEffect(
+  state: GameState,
+  cardData: CardData,
+  definition: AbilityDefinition,
+  sourceCard: CardInstance,
+  targetIds: readonly string[],
+): readonly CardInstance[] {
   const effect = definition.effects[0];
   if (!effect || effect.verb !== "eliminate" || definition.effects.length > 1) {
     throw new Error("Only single-effect eliminate abilities are interpreted so far");
@@ -394,19 +438,85 @@ function applyChooseTargets(
   const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
   const eligibleIds = new Set(eligible.map((c) => c.id));
   const requiredCount = effect.target.count.mode === "exact" ? effect.target.count.value : undefined;
-  if (requiredCount !== undefined && action.targetIds.length !== requiredCount) {
+  if (requiredCount !== undefined && targetIds.length !== requiredCount) {
     throw new Error(`This ability requires exactly ${requiredCount} target(s)`);
   }
-  for (const targetId of action.targetIds) {
+  for (const targetId of targetIds) {
     if (!eligibleIds.has(targetId)) {
       throw new Error(`${targetId} is not a legal target for this ability`);
     }
   }
 
-  const targetSet = new Set(action.targetIds);
-  const cards: readonly CardInstance[] = state.cards.map((c) =>
+  const targetSet = new Set(targetIds);
+  return state.cards.map((c) =>
     targetSet.has(c.id) ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
   );
+}
 
-  return { ...state, cards, resolutionStack: [] };
+function applyAlarmAction(
+  state: GameState,
+  cardData: CardData,
+  frame: AlarmResolutionFrame,
+  actingPlayerId: PlayerId,
+  action: Action,
+): GameState {
+  const expectedPlayerId = frame.order[frame.nextIndex]!;
+  if (actingPlayerId !== expectedPlayerId) {
+    throw new Error(`It is not ${actingPlayerId}'s turn to respond to this alarm`);
+  }
+
+  if (action.type === "passResponse") {
+    return advanceAlarmPass(state, frame);
+  }
+  if (action.type !== "useResponse") {
+    throw new Error(`Expected useResponse or passResponse during an alarm, got: ${action.type}`);
+  }
+
+  const card = state.cards.find((c) => c.id === action.cardId);
+  if (!card) {
+    throw new Error(`Unknown card: ${action.cardId}`);
+  }
+  if (card.id === frame.triggeringCardId) {
+    throw new Error("The character that triggered the alarm cannot itself respond");
+  }
+  if (card.zone !== "inPlay" || card.controller !== actingPlayerId || card.locationId !== frame.locationId) {
+    throw new Error(`${action.cardId} is not a card ${actingPlayerId} controls at this alarm's location`);
+  }
+
+  const rawAbility = getAbilities(cardData, card)[action.abilityIndex];
+  if (!rawAbility || rawAbility.type !== "Response") {
+    throw new Error(`${card.defRef} has no Response ability at index ${action.abilityIndex}`);
+  }
+  const effects = getAbilityEffects(card.defRef, action.abilityIndex);
+  if (!effects) {
+    throw new Error(`${card.defRef}'s Response ability has no encoded effects yet`);
+  }
+
+  // Must reveal to respond — unconditional, same principle as activating.
+  const revealedCards = state.cards.map((c) => (c.id === card.id ? { ...c, faceUp: true } : c));
+  const cards = applySingleEliminateEffect(
+    { ...state, cards: revealedCards },
+    cardData,
+    effects,
+    card,
+    action.targetIds,
+  );
+
+  return advanceAlarmPass({ ...state, cards }, frame);
+}
+
+function advanceAlarmPass(state: GameState, frame: AlarmResolutionFrame): GameState {
+  const nextIndex = frame.nextIndex + 1;
+  if (nextIndex < frame.order.length) {
+    const updatedFrame: AlarmResolutionFrame = { ...frame, nextIndex };
+    return { ...state, resolutionStack: [...state.resolutionStack.slice(0, -1), updatedFrame] };
+  }
+
+  // The pass is complete. "If the triggering character is eliminated by a
+  // response, the rest of the original ability does not resolve" — cancel
+  // the AbilityResolutionFrame beneath too in that case; otherwise leave it
+  // for the next chooseTargets call now that the alarm has resolved.
+  const triggeringCard = state.cards.find((c) => c.id === frame.triggeringCardId);
+  const triggeringCardSurvived = triggeringCard !== undefined && triggeringCard.zone !== "eliminated";
+  return { ...state, resolutionStack: triggeringCardSurvived ? state.resolutionStack.slice(0, -1) : [] };
 }

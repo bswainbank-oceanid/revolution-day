@@ -3,6 +3,7 @@ import { cardData } from "./data/cardData";
 import { applyAction } from "./reducer";
 import type { Action } from "./actions";
 import type { GameState, PlayerId } from "./state/game";
+import type { AlarmResolutionFrame } from "./state/resolution";
 import { setupGame } from "./setup";
 
 function freshGame(playerIds: readonly string[] = ["a", "b", "c"], seed = 1) {
@@ -504,6 +505,102 @@ describe("applyAction: activateAbility / chooseTargets", () => {
 
     expect(() =>
       act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 }),
+    ).toThrow();
+  });
+});
+
+describe("applyAction: alarm resolution", () => {
+  it("reveals the source on activation, runs the full response pass, then resolves via chooseTargets", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    const target = state.cards.find((c) => c.kind === "nonLeader" && c.id !== gunman.id)!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, gunman.id, loc, player, false); // starts face-down
+    state = placeInPlay(state, target.id, loc, other);
+    state = act(state, player, { type: "draw" });
+
+    const activated = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
+    expect(activated.resolutionStack).toHaveLength(2);
+    expect(activated.cards.find((c) => c.id === gunman.id)!.faceUp).toBe(true);
+
+    const frame = activated.resolutionStack[1] as AlarmResolutionFrame;
+    let s = activated;
+    for (const respondingPlayer of frame.order) {
+      s = act(s, respondingPlayer, { type: "passResponse" });
+    }
+    expect(s.resolutionStack).toHaveLength(1);
+
+    const resolved = act(s, player, { type: "chooseTargets", targetIds: [target.id] });
+    expect(resolved.resolutionStack).toHaveLength(0);
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+  });
+
+  it("cancels the underlying ability entirely if a response eliminates the triggering character", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const currentSeat = state.players.find((p) => p.id === player)!.seatIndex;
+    const firstResponder = state.players.find(
+      (p) => p.seatIndex === (currentSeat + 1) % state.players.length,
+    )!.id;
+
+    const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    const bodyguard = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Bodyguard" && c.id !== gunman.id,
+    )!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, gunman.id, loc, player, true);
+    state = placeInPlay(state, bodyguard.id, loc, firstResponder, false); // face-down
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
+
+    let s = act(state, firstResponder, {
+      type: "useResponse",
+      cardId: bodyguard.id,
+      abilityIndex: 0,
+      targetIds: [gunman.id],
+    });
+    expect(s.cards.find((c) => c.id === gunman.id)!.zone).toBe("eliminated");
+    expect(s.cards.find((c) => c.id === bodyguard.id)!.faceUp).toBe(true); // forced to reveal to respond
+
+    const frame = s.resolutionStack[1] as AlarmResolutionFrame;
+    for (let i = frame.nextIndex; i < frame.order.length; i++) {
+      s = act(s, frame.order[i]!, { type: "passResponse" });
+    }
+
+    expect(s.resolutionStack).toHaveLength(0);
+  });
+
+  it("rejects a response from anyone other than whoever's turn it is in the pass", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    state = placeInPlay(state, gunman.id, state.board[0]!.id, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
+
+    const frame = state.resolutionStack[1] as AlarmResolutionFrame;
+    const outOfTurnPlayer = frame.order[frame.order.length - 1]!; // triggering player goes last, not first
+    expect(() => act(state, outOfTurnPlayer, { type: "passResponse" })).toThrow();
+  });
+
+  it("rejects the triggering character responding to its own alarm, even by its own controller", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    state = placeInPlay(state, gunman.id, state.board[0]!.id, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
+
+    const frame = state.resolutionStack[1] as AlarmResolutionFrame;
+    // Fast-forward to the triggering player's own turn in the pass (last).
+    let s = state;
+    for (let i = 0; i < frame.order.length - 1; i++) {
+      s = act(s, frame.order[i]!, { type: "passResponse" });
+    }
+    expect(() =>
+      act(s, player, { type: "useResponse", cardId: gunman.id, abilityIndex: 1, targetIds: [] }),
     ).toThrow();
   });
 });
