@@ -931,3 +931,100 @@ describe("applyAction: protected-targeting reveal window", () => {
     expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
   });
 });
+
+describe("applyAction: nested reveal window during an alarm response", () => {
+  function setupNestedScenario() {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const activator = state.turn.currentPlayerId;
+    const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, gunman.id, loc, activator);
+    state = act(state, activator, { type: "draw" });
+    state = act(state, activator, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
+
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    const responder = alarmFrame.order[0]!;
+    const otherPlayer = state.players.find((p) => p.id !== activator && p.id !== responder)!.id;
+
+    const assassin = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Assassin")!;
+    const target = state.cards.find((c) => c.defRef === "Head of Security")!;
+    const hiddenProtector = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Secret Police" && c.id !== assassin.id,
+    )!;
+    state = placeInPlay(state, assassin.id, loc, responder);
+    state = placeInPlay(state, target.id, loc, otherPlayer);
+    state = placeInPlay(state, hiddenProtector.id, loc, otherPlayer, false);
+
+    return { state, activator, responder, otherPlayer, gunman, assassin, target, hiddenProtector, loc };
+  }
+
+  it("pauses the alarm pass and opens a nested window when the response declares a Protected target", () => {
+    const { state, responder, assassin, target } = setupNestedScenario();
+
+    const responded = act(state, responder, {
+      type: "useResponse",
+      cardId: assassin.id,
+      abilityIndex: 1,
+      targetIds: [target.id],
+    });
+
+    expect(responded.resolutionStack).toHaveLength(4);
+    expect(responded.resolutionStack[1]).toMatchObject({ kind: "alarmResolution", nextIndex: 0 });
+    expect(responded.resolutionStack[2]).toMatchObject({
+      kind: "abilityResolution",
+      actingPlayerId: responder,
+      sourceCardId: assassin.id,
+    });
+    expect(responded.resolutionStack[3]).toMatchObject({ kind: "protectedTargetingWindow" });
+  });
+
+  it("resumes the alarm pass once the nested window resolves with no reveal", () => {
+    const { state, responder, otherPlayer, assassin, target, hiddenProtector } = setupNestedScenario();
+    const responded = act(state, responder, {
+      type: "useResponse",
+      cardId: assassin.id,
+      abilityIndex: 1,
+      targetIds: [target.id],
+    });
+    const window = responded.resolutionStack[3] as ProtectedTargetingWindowFrame;
+    expect(window.order).toEqual([otherPlayer]);
+
+    const resumed = act(responded, otherPlayer, { type: "passReveal" });
+
+    // Back down to just [AbilityResolutionFrame(gunman), AlarmResolutionFrame]
+    // — the response fully resolved and the pass advanced past it.
+    expect(resumed.resolutionStack).toHaveLength(2);
+    expect((resumed.resolutionStack[1] as AlarmResolutionFrame).nextIndex).toBe(1);
+    expect(resumed.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+    expect(resumed.cards.find((c) => c.id === hiddenProtector.id)!.faceUp).toBe(false);
+  });
+
+  it("resumes the alarm pass after a reveal hands control back to the responder for a final re-choice", () => {
+    const { state, responder, otherPlayer, assassin, target, hiddenProtector } = setupNestedScenario();
+    const responded = act(state, responder, {
+      type: "useResponse",
+      cardId: assassin.id,
+      abilityIndex: 1,
+      targetIds: [target.id],
+    });
+
+    const returned = act(responded, otherPlayer, {
+      type: "revealBlended",
+      cardIds: [hiddenProtector.id],
+    });
+
+    // Window popped, pending frame reset for the *responder* to re-choose —
+    // still nested above the paused alarm frame.
+    expect(returned.resolutionStack).toHaveLength(3);
+    const reselectFrame = returned.resolutionStack[2] as AbilityResolutionFrame;
+    expect(reselectFrame.actingPlayerId).toBe(responder);
+    expect(reselectFrame.reselectingAfterReveal).toBe(true);
+
+    const resolved = act(returned, responder, { type: "chooseTargets", targetIds: [hiddenProtector.id] });
+
+    expect(resolved.resolutionStack).toHaveLength(2); // back to [ability, alarm]
+    expect((resolved.resolutionStack[1] as AlarmResolutionFrame).nextIndex).toBe(1);
+    expect(resolved.cards.find((c) => c.id === hiddenProtector.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("inPlay");
+  });
+});
