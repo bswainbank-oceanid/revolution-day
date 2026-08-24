@@ -52,6 +52,9 @@ export type {
   ConditionOperand,
   MoveDestination,
 } from "./effects/dsl";
+export { evaluateWinConditions } from "./effects/winConditions";
+export type { WinPredicate } from "./effects/winConditions";
+export { winConditions } from "./data/winConditions";
 
 import { cardData } from "./data/cardData";
 

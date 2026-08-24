@@ -21,6 +21,9 @@ export interface PresidentState {
   // "eliminated at the Palace" win condition without a history scan, since
   // it's a singular fact rather than a per-card attribution query.
   readonly eliminatedAtLocationId?: string;
+  // Set once, the moment the President is eliminated: whoever controlled
+  // the eliminating card at that moment — see CardInstance.eliminatedByPlayerId.
+  readonly eliminatedByPlayerId?: PlayerId;
 }
 
 export interface TurnState {

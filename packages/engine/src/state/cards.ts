@@ -20,4 +20,10 @@ export interface CardInstance {
   readonly locationId?: string;
   // Blend state; meaningful only while zone === "inPlay".
   readonly faceUp?: boolean;
+  // Set once, the moment this card is eliminated: whoever controlled the
+  // *eliminating* card at that moment (not the acting player, under
+  // remote activation) — backs Master Assassin's "eliminate ... with cards
+  // you control" win condition without a history scan, same "set once"
+  // pattern as PresidentState.eliminatedAtLocationId.
+  readonly eliminatedByPlayerId?: string;
 }

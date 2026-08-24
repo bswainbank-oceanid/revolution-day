@@ -179,11 +179,14 @@ function applyEndTurn(state: GameState): GameState {
     p.id === currentPlayerId ? { ...p, hasTakenFirstTurn: true } : p,
   );
 
-  // Provisional: decrements once per completed turn, once non-null.
-  // "Every player (including the current player) gets three more turns"
-  // could mean per-round or per-individual-turn — nothing can set this
-  // non-null yet (President elimination isn't implemented), so the exact
-  // semantics aren't testable yet either. Revisit alongside that work.
+  // Set to 3 the moment the President is eliminated (eliminateSingleTarget)
+  // and decrements once per completed turn from there. "Every player
+  // (including the current player) gets three more turns" could mean
+  // per-round or per-individual-turn — read here as per-individual-turn
+  // (this counter, not a round counter); a caller checking win conditions
+  // (see effects/winConditions.ts) should do so once this reaches 0, or
+  // once the President survives past the last location — the engine
+  // itself doesn't force the game to end.
   const endgameTurnsRemaining =
     state.turn.endgameTurnsRemaining === null ? null : Math.max(0, state.turn.endgameTurnsRemaining - 1);
 
@@ -1004,7 +1007,15 @@ function applyRandomEliminateEffect(
 
   const targetSet = new Set(drawnIds);
   const cards = state.cards.map((c) =>
-    targetSet.has(c.id) ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+    targetSet.has(c.id)
+      ? {
+          ...c,
+          zone: "eliminated" as const,
+          locationId: undefined,
+          faceUp: undefined,
+          eliminatedByPlayerId: sourceCard.controller ?? undefined,
+        }
+      : c,
   );
   return finishEffectStep({ ...state, cards, rng }, frame);
 }
@@ -1042,7 +1053,16 @@ const PRESIDENT_TARGET_ID = "president";
 // Applies a single, already-finalized elimination target — either a card
 // or the President sentinel. Every currently-encoded ability is
 // count-exact-1, so "single" isn't a limitation in practice yet.
-function eliminateSingleTarget(state: GameState, targetId: string): Pick<GameState, "cards" | "president"> {
+// `eliminatedByPlayerId` is whoever controls the *eliminating* card (not
+// necessarily the acting player, under remote activation) — stamped once,
+// backing Master Assassin's win condition (see CardInstance.eliminatedByPlayerId).
+// Newly eliminating the President also starts the 3-turn endgame countdown
+// here, the one place his status actually transitions to "eliminated".
+function eliminateSingleTarget(
+  state: GameState,
+  targetId: string,
+  eliminatedByPlayerId: PlayerId | null,
+): Pick<GameState, "cards" | "president" | "turn"> {
   if (targetId === PRESIDENT_TARGET_ID) {
     return {
       cards: state.cards,
@@ -1050,13 +1070,24 @@ function eliminateSingleTarget(state: GameState, targetId: string): Pick<GameSta
         status: "eliminated",
         locationId: null,
         eliminatedAtLocationId: state.president.locationId ?? undefined,
+        eliminatedByPlayerId: eliminatedByPlayerId ?? undefined,
       },
+      turn: { ...state.turn, endgameTurnsRemaining: 3 },
     };
   }
   return {
     president: state.president,
+    turn: state.turn,
     cards: state.cards.map((c) =>
-      c.id === targetId ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+      c.id === targetId
+        ? {
+            ...c,
+            zone: "eliminated" as const,
+            locationId: undefined,
+            faceUp: undefined,
+            eliminatedByPlayerId: eliminatedByPlayerId ?? undefined,
+          }
+        : c,
     ),
   };
 }
@@ -1065,8 +1096,9 @@ function eliminateSingleTarget(state: GameState, targetId: string): Pick<GameSta
 // either as originally declared, or reassigned by a protected-targeting
 // window) and advances past the effect step that was awaiting it.
 function finalizeEliminateEffect(state: GameState, frame: AbilityResolutionFrame, targetId: string): GameState {
-  const { cards, president } = eliminateSingleTarget(state, targetId);
-  return finishEffectStep({ ...state, cards, president }, frame);
+  const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId)!;
+  const { cards, president, turn } = eliminateSingleTarget(state, targetId, sourceCard.controller);
+  return finishEffectStep({ ...state, cards, president, turn }, frame);
 }
 
 // Pops the current top resolution frame and, if that leaves a paused
@@ -1307,8 +1339,8 @@ function applyAlarmAction(
     return { ...withReveal, resolutionStack: [...withReveal.resolutionStack, pendingFrame, windowFrame] };
   }
 
-  const { cards, president } = eliminateSingleTarget(withReveal, declared.targetId);
-  return advanceAlarmPass({ ...withReveal, cards, president }, frame);
+  const { cards, president, turn } = eliminateSingleTarget(withReveal, declared.targetId, card.controller);
+  return advanceAlarmPass({ ...withReveal, cards, president, turn }, frame);
 }
 
 function advanceAlarmPass(state: GameState, frame: AlarmResolutionFrame): GameState {

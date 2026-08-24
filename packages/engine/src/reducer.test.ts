@@ -792,6 +792,7 @@ describe("applyAction: President targeting (Wife)", () => {
       status: "eliminated",
       locationId: null,
       eliminatedAtLocationId: loc,
+      eliminatedByPlayerId: player,
     });
   });
 

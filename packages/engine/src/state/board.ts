@@ -11,12 +11,19 @@ export interface LocationInstance {
 export type BoardLayout = readonly LocationInstance[];
 
 export function boardLayoutFromCardData(cardData: CardData): BoardLayout {
-  return cardData.locations_in_order.map((typeName, index) => {
-    const type = cardData.location_types[typeName];
+  // `locations_in_order` holds each position's *name* (some generic and
+  // repeated, like "Street"; some unique, like "HQ"/"Arena"/"Palace"),
+  // which `location_types` maps to a LocationType. Both need to survive
+  // onto the LocationInstance — `type` for the existing card-placement
+  // rules, `name` so a specific named location (HQ, Palace) can be found
+  // by win-condition predicates, which a shared `type` can't distinguish
+  // (HQ and Palace are both type "Secure").
+  return cardData.locations_in_order.map((name, index) => {
+    const type = cardData.location_types[name];
     if (!type) {
-      throw new Error(`Unknown location type in locations_in_order: ${typeName}`);
+      throw new Error(`Unknown location type in locations_in_order: ${name}`);
     }
-    return { id: `loc-${index}`, type };
+    return { id: `loc-${index}`, type, name };
   });
 }
 
