@@ -699,17 +699,17 @@ describe("applyAction: activateAbility / chooseTargets", () => {
     ).toThrow();
   });
 
-  it("rejects an alarm-triggering ability with no encoded effects yet", () => {
+  it("rejects activating an ability index a card doesn't have", () => {
     let state = freshGame();
     const player = state.turn.currentPlayerId;
-    // Rebel Soldier's alarm ability isn't encoded (unlike Death Squad's,
-    // now that Commander General's remote-activation queue needs one).
-    const rebelSoldier = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Rebel Soldier")!;
-    state = placeInPlay(state, rebelSoldier.id, state.board[0]!.id, player);
+    // Prominent Citizen has no abilities at all — every card with a real
+    // ability now has structured content encoded (see abilityEffects.ts).
+    const prominentCitizen = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
+    state = placeInPlay(state, prominentCitizen.id, state.board[0]!.id, player);
     state = act(state, player, { type: "draw" });
 
     expect(() =>
-      act(state, player, { type: "activateAbility", cardId: rebelSoldier.id, abilityIndex: 0 }),
+      act(state, player, { type: "activateAbility", cardId: prominentCitizen.id, abilityIndex: 0 }),
     ).toThrow();
   });
 
@@ -2003,5 +2003,343 @@ describe("applyAction: passives", () => {
     const moved = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
 
     expect(moved.cards.find((c) => c.id === bodyguard.id)!.locationId).toBe(elsewhere);
+  });
+});
+
+describe("applyAction: remaining card content", () => {
+  it("Head of Security's Response eliminates a target (reuses the standard pattern)", () => {
+    // 8 players so Head of Security is guaranteed to be dealt.
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    const hos = state.cards.find((c) => c.kind === "leader" && c.defRef === "Head of Security")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, gunman.id, loc, player, false);
+    state = act(state, player, { type: "draw" });
+    const activated = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
+    const alarmFrame = activated.resolutionStack[1] as AlarmResolutionFrame;
+    const responder = alarmFrame.order[0]!;
+    let s = placeInPlay(activated, hos.id, loc, responder);
+    const target = s.cards.find((c) => c.defRef === "Republican Guard")!;
+    s = placeInPlay(s, target.id, loc, responder);
+
+    const resolved = act(s, responder, { type: "useResponse", cardId: hos.id, abilityIndex: 1, targetIds: [target.id] });
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+  });
+
+  it("Heir Apparent gains 2 actions", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const heir = state.cards.find((c) => c.kind === "leader" && c.defRef === "Heir Apparent")!;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, heir.id, state.board[0]!.id, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: heir.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [] });
+
+    expect(resolved.turn.actionsRemaining).toBe(3); // 2 - 1 (spent activating) + 2 (gained)
+  });
+
+  it("Opposition Leader draws 3 cards", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const oppLeader = state.cards.find((c) => c.kind === "leader" && c.defRef === "Opposition Leader")!;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, oppLeader.id, state.board[0]!.id, player);
+    state = act(state, player, { type: "draw" });
+    const before = state.cards.filter((c) => c.zone === "hand" && c.controller === player).length;
+    state = act(state, player, { type: "activateAbility", cardId: oppLeader.id, abilityIndex: 1 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [] });
+
+    expect(resolved.cards.filter((c) => c.zone === "hand" && c.controller === player).length).toBe(before + 3);
+  });
+
+  it("Opposition Leader places 2 rebels, each at its own chosen location", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const oppLeader = state.cards.find((c) => c.kind === "leader" && c.defRef === "Opposition Leader")!;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, oppLeader.id, state.board[0]!.id, player);
+    const [rebelA, rebelB] = state.cards.filter((c) => c.defRef === "Gunman");
+    state = placeInHand(state, rebelA!.id, player);
+    state = placeInHand(state, rebelB!.id, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: oppLeader.id, abilityIndex: 0 });
+    const locX = state.board[1]!.id; // HQ (Secure) — Gunman is normally Street-only, ignored here
+    const locY = state.board[3]!.id; // Arena (Public)
+
+    const resolved = act(state, player, {
+      type: "chooseTargets",
+      targetIds: [rebelA!.id, rebelB!.id],
+      locationIds: [locX, locY],
+    });
+
+    expect(resolved.cards.find((c) => c.id === rebelA!.id)!.locationId).toBe(locX);
+    expect(resolved.cards.find((c) => c.id === rebelB!.id)!.locationId).toBe(locY);
+  });
+
+  it("Master Assassin returns to hand then plays a card, at its original location", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const assassin = state.cards.find((c) => c.kind === "leader" && c.defRef === "Master Assassin")!;
+    const player = state.turn.currentPlayerId;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, assassin.id, loc, player);
+    const otherCard = state.cards.find((c) => c.defRef === "Gunman")!;
+    state = placeInHand(state, otherCard.id, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: assassin.id, abilityIndex: 0 });
+
+    const afterReturn = act(state, player, { type: "chooseTargets", targetIds: [] });
+    expect(afterReturn.cards.find((c) => c.id === assassin.id)!.zone).toBe("hand");
+
+    const resolved = act(afterReturn, player, { type: "chooseTargets", targetIds: [otherCard.id] });
+    expect(resolved.cards.find((c) => c.id === otherCard.id)!.zone).toBe("inPlay");
+    expect(resolved.cards.find((c) => c.id === otherCard.id)!.locationId).toBe(loc);
+    expect(resolved.resolutionStack).toHaveLength(0);
+  });
+
+  it("Master Assassin eliminates a target then blends itself back down", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const assassin = state.cards.find((c) => c.kind === "leader" && c.defRef === "Master Assassin")!;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, assassin.id, loc, player);
+    const target = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    state = placeInPlay(state, target.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: assassin.id, abilityIndex: 1 });
+
+    const afterEliminate = act(state, player, { type: "chooseTargets", targetIds: [target.id] });
+    expect(afterEliminate.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+
+    const resolved = act(afterEliminate, player, { type: "chooseTargets", targetIds: [] });
+    expect(resolved.cards.find((c) => c.id === assassin.id)!.faceUp).toBe(false);
+    expect(resolved.resolutionStack).toHaveLength(0);
+  });
+
+  it("Master Assassin's alarm ability eliminates exactly 2 targets", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const assassin = state.cards.find((c) => c.kind === "leader" && c.defRef === "Master Assassin")!;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, assassin.id, loc, player);
+    const [targetA, targetB] = state.cards.filter((c) => c.defRef === "Republican Guard");
+    state = placeInPlay(state, targetA!.id, loc, other);
+    state = placeInPlay(state, targetB!.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: assassin.id, abilityIndex: 2 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [targetA!.id, targetB!.id] });
+
+    expect(resolved.cards.find((c) => c.id === targetA!.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === targetB!.id)!.zone).toBe("eliminated");
+  });
+
+  it("Traffic Cop moves the President to an adjacent location of the player's choice", () => {
+    let state = freshGame();
+    state = enterPresident(state);
+    const presidentLoc = state.president.locationId!;
+    const idx = state.board.findIndex((l) => l.id === presidentLoc);
+    const forward = state.board[idx + 1]!.id;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, trafficCop.id, presidentLoc, player);
+    state = act(state, player, { type: "activateAbility", cardId: trafficCop.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [], locationIds: [forward] });
+
+    expect(resolved.president.locationId).toBe(forward);
+  });
+
+  it("rejects a non-adjacent destination for Traffic Cop", () => {
+    let state = freshGame();
+    state = enterPresident(state);
+    const presidentLoc = state.president.locationId!;
+    const idx = state.board.findIndex((l) => l.id === presidentLoc);
+    const twoAway = state.board[idx + 2]!.id;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, trafficCop.id, presidentLoc, player);
+    state = act(state, player, { type: "activateAbility", cardId: trafficCop.id, abilityIndex: 0 });
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: [], locationIds: [twoAway] })).toThrow();
+  });
+
+  it("rejects using Traffic Cop's ability from a different location than the President", () => {
+    let state = freshGame();
+    state = enterPresident(state);
+    const presidentLoc = state.president.locationId!;
+    const idx = state.board.findIndex((l) => l.id === presidentLoc);
+    const elsewhere = state.board[idx + 1]!.id;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, trafficCop.id, elsewhere, player);
+    state = act(state, player, { type: "activateAbility", cardId: trafficCop.id, abilityIndex: 0 });
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: [], locationIds: [presidentLoc] })).toThrow();
+  });
+
+  it("Army Sniper can eliminate a rebel target at its own or an adjacent location", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const sniper = state.cards.find((c) => c.defRef === "Army Sniper")!;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[1]!.id; // HQ — adjacent to loc-0 and loc-2
+    state = placeInPlay(state, sniper.id, loc, player);
+    const adjTarget = state.cards.find((c) => c.defRef === "Gunman")!;
+    state = placeInPlay(state, adjTarget.id, state.board[0]!.id, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: sniper.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [adjTarget.id] });
+
+    expect(resolved.cards.find((c) => c.id === adjTarget.id)!.zone).toBe("eliminated");
+  });
+
+  it("Army Sniper cannot reach a non-adjacent location", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const sniper = state.cards.find((c) => c.defRef === "Army Sniper")!;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[1]!.id;
+    state = placeInPlay(state, sniper.id, loc, player);
+    const farTarget = state.cards.find((c) => c.defRef === "Gunman")!;
+    state = placeInPlay(state, farTarget.id, state.board[3]!.id, other); // not adjacent to loc-1
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: sniper.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: [farTarget.id] })).toThrow();
+  });
+
+  it("Insurgent Sniper can only reach an adjacent location, not its own", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const sniper = state.cards.find((c) => c.defRef === "Insurgent Sniper")!;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[1]!.id;
+    state = placeInPlay(state, sniper.id, loc, player);
+    const selfTarget = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    state = placeInPlay(state, selfTarget.id, loc, other); // at the sniper's OWN location — ineligible
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: sniper.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: [selfTarget.id] })).toThrow();
+  });
+
+  it("Rebel Soldier's alarm ability eliminates one or two regime targets", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const soldier = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const target = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    state = placeInPlay(state, soldier.id, loc, player);
+    state = placeInPlay(state, target.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: soldier.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [target.id] });
+
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+  });
+
+  it("Angry Mob triggers an alarm at its own location, no upfront ability-level alarm frame", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const mob = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    const player = state.turn.currentPlayerId;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, mob.id, loc, player);
+    state = act(state, player, { type: "draw" });
+
+    const activated = act(state, player, { type: "activateAbility", cardId: mob.id, abilityIndex: 0 });
+    expect(activated.resolutionStack).toHaveLength(1); // just the ability frame — no alarm yet
+
+    const resolved = act(activated, player, { type: "chooseTargets", targetIds: [] });
+    expect(resolved.resolutionStack).toHaveLength(1);
+    const alarmFrame = resolved.resolutionStack[0] as AlarmResolutionFrame;
+    expect(alarmFrame.kind).toBe("alarmResolution");
+    expect(alarmFrame.locationId).toBe(loc);
+
+    const done = passWholeAlarm(resolved, alarmFrame);
+    expect(done.resolutionStack).toHaveLength(0);
+  });
+
+  it("Anarchist triggers an alarm at a chosen location", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const anarchist = state.cards.find((c) => c.defRef === "Anarchist")!;
+    const player = state.turn.currentPlayerId;
+    const loc = state.board[0]!.id;
+    const chosen = state.board[3]!.id;
+    state = placeInPlay(state, anarchist.id, loc, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: anarchist.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [], locationIds: [chosen] });
+
+    const alarmFrame = resolved.resolutionStack[0] as AlarmResolutionFrame;
+    expect(alarmFrame.locationId).toBe(chosen);
+  });
+
+  it("Puppet-Master's 'Play 2 cards' respects normal location-type restrictions", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const pm = state.cards.find((c) => c.kind === "leader" && c.defRef === "Puppet-Master")!;
+    const player = state.turn.currentPlayerId;
+    const secureLoc = state.board.find((l) => l.type === "Secure")!.id;
+    state = placeInPlay(state, pm.id, secureLoc, player);
+    const [guard1, guard2] = state.cards.filter((c) => c.defRef === "Republican Guard"); // Secure-only, legal here
+    state = placeInHand(state, guard1!.id, player);
+    state = placeInHand(state, guard2!.id, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: pm.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [guard1!.id, guard2!.id] });
+
+    expect(resolved.cards.find((c) => c.id === guard1!.id)!.zone).toBe("inPlay");
+    expect(resolved.cards.find((c) => c.id === guard2!.id)!.zone).toBe("inPlay");
+  });
+
+  it("rejects a Puppet-Master play whose location type doesn't allow the destination", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const pm = state.cards.find((c) => c.kind === "leader" && c.defRef === "Puppet-Master")!;
+    const player = state.turn.currentPlayerId;
+    const publicLoc = state.board.find((l) => l.type === "Public")!.id;
+    state = placeInPlay(state, pm.id, publicLoc, player);
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!; // Secure-only
+    const soldier = state.cards.find((c) => c.defRef === "Rebel Soldier")!; // Street-only
+    state = placeInHand(state, guard.id, player);
+    state = placeInHand(state, soldier.id, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: pm.id, abilityIndex: 0 });
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: [guard.id, soldier.id] })).toThrow();
+  });
+
+  it("Journalist peeks without publicly revealing the card", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const journalist = state.cards.find((c) => c.defRef === "Journalist")!;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, journalist.id, loc, player);
+    const target = state.cards.find((c) => c.defRef === "Gunman")!;
+    state = placeInPlay(state, target.id, loc, other, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: journalist.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [target.id] });
+
+    expect(resolved.cards.find((c) => c.id === target.id)!.faceUp).toBe(false); // stays hidden — a peek, not a reveal
+    expect(resolved.resolutionStack).toHaveLength(0);
   });
 });

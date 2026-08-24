@@ -730,7 +730,7 @@ function applyActivateAbility(
     locationId: card.locationId,
     targetIds: null,
   };
-  const resolutionStack: ResolutionFrame[] = rawAbility.alarm
+  const resolutionStack: ResolutionFrame[] = effects.alarm
     ? [abilityFrame, buildAlarmFrame(state, card.id, currentPlayerId, card.locationId)]
     : [abilityFrame];
 
@@ -780,7 +780,17 @@ function applyChooseTargets(
     throw new Error(`${sourceCard.defRef}'s ability ${frame.abilityIndex} has no effect at this step`);
   }
 
-  return applyEffect(state, cardData, frame, sourceCard, actingPlayerId, effect, action.targetIds, action.remoteAbilityIndex);
+  return applyEffect(
+    state,
+    cardData,
+    frame,
+    sourceCard,
+    actingPlayerId,
+    effect,
+    action.targetIds,
+    action.remoteAbilityIndex,
+    action.locationIds,
+  );
 }
 
 // Dispatches a single EffectNode by verb. Shared by applyChooseTargets (a
@@ -796,6 +806,7 @@ function applyEffect(
   effect: EffectNode,
   targetIds: readonly string[],
   remoteAbilityIndex?: number,
+  locationIds?: readonly string[],
 ): GameState {
   if (effect.verb === "activateRemote") {
     return applyActivateRemote(state, cardData, frame, sourceCard, effect, actingPlayerId, targetIds, remoteAbilityIndex);
@@ -803,17 +814,40 @@ function applyEffect(
   if (effect.verb === "reveal") {
     return applyRevealEffect(state, frame, cardData, sourceCard, effect, targetIds);
   }
+  if (effect.verb === "peek") {
+    return applyPeekEffect(state, frame, cardData, sourceCard, effect, targetIds);
+  }
   if (effect.verb === "play") {
-    return applyPlayEffect(state, frame, cardData, sourceCard, actingPlayerId, effect, targetIds);
+    return applyPlayEffect(state, frame, cardData, actingPlayerId, effect, targetIds, locationIds);
   }
   if (effect.verb === "gainControl") {
     return applyGainControlEffect(state, frame, actingPlayerId, effect, targetIds);
+  }
+  if (effect.verb === "gainActions") {
+    return applyGainActionsEffect(state, frame, effect, targetIds);
+  }
+  if (effect.verb === "draw") {
+    return applyDrawAbilityEffect(state, frame, actingPlayerId, effect, targetIds);
+  }
+  if (effect.verb === "returnToHand") {
+    return applyReturnToHandEffect(state, frame, sourceCard, effect, targetIds);
+  }
+  if (effect.verb === "blend") {
+    return applyBlendEffect(state, frame, sourceCard, effect, targetIds);
+  }
+  if (effect.verb === "move") {
+    return applyMoveEffect(state, frame, effect, targetIds, locationIds);
+  }
+  if (effect.verb === "triggerAlarm") {
+    return applyTriggerAlarmEffect(state, frame, sourceCard, actingPlayerId, effect, targetIds, locationIds);
   }
   if (effect.verb === "if") {
     return applyIfEffect(state, cardData, frame, sourceCard, actingPlayerId, effect, targetIds);
   }
   if (effect.verb !== "eliminate") {
-    throw new Error(`Effect verb not yet interpreted: ${effect.verb}`);
+    // Every other verb is handled above — this is unreachable given the
+    // current EffectNode union, kept only as a defensive fallback.
+    throw new Error("Unrecognized effect verb");
   }
   if (effect.target.ref === "self") {
     // "Eliminate this card" (Suicide Bomber's final step) — no choice to
@@ -964,6 +998,211 @@ function applyGainControlEffect(
   return finishEffectStep({ ...state, cards }, frame);
 }
 
+// Heir Apparent's "Gain 2 actions" — no target, confirm-only (same
+// convention as reveal-all/self-eliminate: an explicit empty-targetIds
+// chooseTargets call still required, even though there's no real choice).
+function applyGainActionsEffect(
+  state: GameState,
+  frame: AbilityResolutionFrame,
+  effect: Extract<EffectNode, { verb: "gainActions" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (targetIds.length > 0) {
+    throw new Error("This effect has no targets to choose");
+  }
+  const turn = { ...state.turn, actionsRemaining: state.turn.actionsRemaining + effect.amount };
+  return finishEffectStep({ ...state, turn }, frame);
+}
+
+// Opposition Leader's "Draw 3 cards" — an ability *effect*, distinct from
+// the turn-level "draw" Action: no budget/phase interaction at all, just
+// moves up to `amount` cards from the deck into the acting player's hand.
+// Stops early (no error) if the deck runs out partway through — nothing
+// in the rules suggests this should fail outright.
+function applyDrawAbilityEffect(
+  state: GameState,
+  frame: AbilityResolutionFrame,
+  actingPlayerId: PlayerId,
+  effect: Extract<EffectNode, { verb: "draw" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (targetIds.length > 0) {
+    throw new Error("This effect has no targets to choose");
+  }
+  let cards = state.cards;
+  for (let i = 0; i < effect.amount; i++) {
+    const deckIndex = cards.findIndex((c) => c.zone === "deck");
+    if (deckIndex === -1) break;
+    cards = cards.map((c, idx) => (idx === deckIndex ? { ...c, zone: "hand" as const, controller: actingPlayerId } : c));
+  }
+  return finishEffectStep({ ...state, cards }, frame);
+}
+
+// Master Assassin's "Return this card to its controller's hand and play a
+// card" (step 1 of 2) — only `ref: "self"` is interpreted, matching every
+// other self-targeting verb so far (eliminate, blend).
+function applyReturnToHandEffect(
+  state: GameState,
+  frame: AbilityResolutionFrame,
+  sourceCard: CardInstance,
+  effect: Extract<EffectNode, { verb: "returnToHand" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (effect.target.ref !== "self") {
+    throw new Error("Only self-ref targeting is interpreted for returnToHand so far");
+  }
+  if (targetIds.length > 0) {
+    throw new Error("This effect targets its own source card automatically — no targets to choose");
+  }
+  const cards = state.cards.map((c) =>
+    c.id === sourceCard.id ? { ...c, zone: "hand" as const, locationId: undefined, faceUp: undefined } : c,
+  );
+  return finishEffectStep({ ...state, cards }, frame);
+}
+
+// Master Assassin's "Eliminate a target and blend" (step 2 of 2) — blends
+// itself back down after eliminating, not the target (an eliminated card
+// has no faceUp state to speak of). Only `ref: "self"` is interpreted.
+function applyBlendEffect(
+  state: GameState,
+  frame: AbilityResolutionFrame,
+  sourceCard: CardInstance,
+  effect: Extract<EffectNode, { verb: "blend" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (effect.target.ref !== "self") {
+    throw new Error("Only self-ref targeting is interpreted for blend so far");
+  }
+  if (targetIds.length > 0) {
+    throw new Error("This effect targets its own source card automatically — no targets to choose");
+  }
+  const cards = state.cards.map((c) => (c.id === sourceCard.id ? { ...c, faceUp: false } : c));
+  return finishEffectStep({ ...state, cards }, frame);
+}
+
+// Traffic Cop's "Move the President from this location forward or
+// backwards to an adjacent location" — only a president-targeted,
+// forwardOrBackward move is interpreted (the only kind any encoded
+// ability needs). The destination is the player's choice — submitted as
+// the sole entry of `locationIds`, validated as one of the President's
+// actual neighbors (so "backward from the first location" is simply not
+// a legal choice, rather than a special-cased end-game trigger the way
+// forward-past-the-last-location has one). Also runs Bodyguard's
+// follow-the-President passive, same as every other president-move path.
+function applyMoveEffect(
+  state: GameState,
+  frame: AbilityResolutionFrame,
+  effect: Extract<EffectNode, { verb: "move" }>,
+  targetIds: readonly string[],
+  locationIds: readonly string[] | undefined,
+): GameState {
+  if (effect.target.ref !== "filter" || effect.target.kind !== "president") {
+    throw new Error("Only a president-targeted move is interpreted so far");
+  }
+  if (targetIds.length > 0) {
+    throw new Error("This effect has no card targets to choose — see locationIds");
+  }
+  if (effect.destination.mode !== "forwardOrBackward") {
+    throw new Error("Only destination: forwardOrBackward is interpreted so far");
+  }
+  if (state.president.status !== "alive") {
+    throw new Error("The President is not currently on the board");
+  }
+  // "Move the President from this location" (Traffic Cop) — the source
+  // card must actually be co-located with him right now.
+  if (effect.target.location?.mode === "self" && state.president.locationId !== frame.locationId) {
+    throw new Error("The President is not at this card's location");
+  }
+
+  const fromLocationId = state.president.locationId!;
+  const adjacent = adjacentLocationIds(state.board, fromLocationId);
+  const toLocationId = locationIds?.[0];
+  if (!toLocationId || locationIds!.length !== 1 || !adjacent.includes(toLocationId)) {
+    throw new Error("Must choose exactly one adjacent location to move the President to");
+  }
+
+  const president: PresidentState = { status: "alive", locationId: toLocationId };
+  const cards = applyFollowPresidentPassive(state.cards, fromLocationId, president);
+  return finishEffectStep({ ...state, cards, president }, frame);
+}
+
+// Angry Mob's "Trigger an Alarm" (location: self) and Anarchist's
+// "Trigger an Alarm at any location" (location: any, player-chosen via
+// `locationIds`) — deliberately encoded as an effect, not by reusing the
+// ability-level `alarm: true` flag those cards carry in card_data.json:
+// that flag's mechanism (applyActivateAbility) always uses the activating
+// card's *own* location, which can't express Anarchist's "any location"
+// choice at all, and using two different mechanisms for what's otherwise
+// the identical ability text on these two cards would be an odd
+// asymmetry. A real, documented divergence from the raw data's `alarm`
+// flag — flag if this reads wrong.
+//
+// Advances/closes out this effect step *first* (finishEffectStep, exactly
+// as if nothing further needed to happen — true for both encoded cards,
+// "trigger an alarm" is their only effect), then opens the new alarm's
+// response window on top of whatever that leaves behind. The existing
+// alarm-completion logic (advanceAlarmPass, resumeAlarmIfPaused) already
+// knows how to reveal and resume whatever's underneath once the pass
+// finishes, generically — including correctly cancelling a still-pending
+// later effect in some future multi-effect ability if the triggering
+// card is eliminated during the pass, with no special-casing needed here.
+function applyTriggerAlarmEffect(
+  state: GameState,
+  frame: AbilityResolutionFrame,
+  sourceCard: CardInstance,
+  actingPlayerId: PlayerId,
+  effect: Extract<EffectNode, { verb: "triggerAlarm" }>,
+  targetIds: readonly string[],
+  locationIds: readonly string[] | undefined,
+): GameState {
+  if (targetIds.length > 0) {
+    throw new Error("This effect has no card targets to choose — see locationIds");
+  }
+  let locationId: string;
+  if (effect.location.mode === "self") {
+    locationId = frame.locationId;
+  } else if (effect.location.mode === "any") {
+    const chosen = locationIds?.[0];
+    if (!chosen || locationIds!.length !== 1 || !state.board.some((l) => l.id === chosen)) {
+      throw new Error("Must choose exactly one location to trigger the alarm at");
+    }
+    locationId = chosen;
+  } else {
+    throw new Error("Only location: self or any is interpreted for triggerAlarm so far");
+  }
+
+  const afterEffect = finishEffectStep(state, frame);
+  const alarmFrame = buildAlarmFrame(afterEffect, sourceCard.id, actingPlayerId, locationId);
+  return { ...afterEffect, resolutionStack: [...afterEffect.resolutionStack, alarmFrame] };
+}
+
+// Journalist's "Look at a blended target at this location" — a private
+// peek, unlike `reveal`'s public one, so it deliberately does *not* flip
+// `faceUp`. GameState has no per-player privacy channel yet (no
+// filterForPlayer projection is built — see rev_day_engine_design memory's
+// known gaps), so nothing here actually *enforces* that only the acting
+// player learns the identity; this just makes the ability legally
+// activatable and captures the peeked card via `bind`, same as reveal,
+// for a future condition to read. A deliberate, scoped simplification —
+// real privacy enforcement is a separate, larger piece of work.
+function applyPeekEffect(
+  state: GameState,
+  frame: AbilityResolutionFrame,
+  cardData: CardData,
+  sourceCard: CardInstance,
+  effect: Extract<EffectNode, { verb: "peek" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (effect.target.ref !== "filter") {
+    throw new Error("Only filter-based targeting is interpreted so far");
+  }
+  const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
+  validateTargets(effect.target.count, targetIds, eligible.map((c) => c.id));
+  const targetId = targetIds[0]!;
+  const nextFrame = effect.bind ? { ...frame, bindings: { ...frame.bindings, [effect.bind]: targetId } } : frame;
+  return finishEffectStep(state, nextFrame);
+}
+
 // Validates a declared target (either a card or the President sentinel)
 // against the ability's selector, and reports whether Protected-immunity
 // is currently active for it — shared by direct ability resolution
@@ -1099,7 +1338,8 @@ function applyActivateRemote(
   if (rawAbility.type !== "Activate") {
     throw new Error(`${remoteCard.defRef}'s ability ${remoteAbilityIndex} is a Response, not activatable`);
   }
-  if (!getAbilityEffects(remoteCard.defRef, remoteAbilityIndex)) {
+  const remoteEffects = getAbilityEffects(remoteCard.defRef, remoteAbilityIndex);
+  if (!remoteEffects) {
     throw new Error(`${remoteCard.defRef}'s ability ${remoteAbilityIndex} has no encoded effects yet`);
   }
 
@@ -1117,7 +1357,7 @@ function applyActivateRemote(
     locationId: remoteCard.locationId,
     targetIds: null,
   };
-  const newFrames: ResolutionFrame[] = rawAbility.alarm
+  const newFrames: ResolutionFrame[] = remoteEffects.alarm
     ? [newAbilityFrame, buildAlarmFrame(state, remoteCard.id, actingPlayerId, remoteCard.locationId)]
     : [newAbilityFrame];
   const loopFrame: ResolutionFrame[] = isUnbounded ? [{ ...frame, targetIds: null }] : [];
@@ -1173,29 +1413,37 @@ function applyRevealEffect(
   throw new Error("Only 'reveal all' or a single player-chosen reveal is interpreted so far");
 }
 
-// "Play any number of regime cards at this location" (Commander General)
-// — unlike activateRemote's unbounded variant, this needs no per-card
-// follow-up decision, so the whole chosen set is submitted and applied in
-// one chooseTargets call rather than a queue. Selects from the acting
-// player's *hand* (resolveEligibleHandCards), not state.cards' in-play
-// pool. Blend-attribute cards still always enter play face-down
-// automatically, same principle as the playCard action.
+// "Play any number of regime cards at this location" (Commander General,
+// location: self — shares frame.locationId, not sourceCard.locationId!,
+// since a preceding effect in the same sequence could have already moved
+// the source card off its own location entirely, e.g. Master Assassin's
+// "return this card to hand and play a card") or "Place 2 rebels at any
+// locations" (Opposition Leader, location: any — each declared target
+// gets its own destination via the parallel `locationIds` array, one per
+// targetId in the same order). Unlike activateRemote's unbounded variant,
+// this needs no per-card follow-up decision, so the whole chosen set (and
+// destinations) is submitted and applied in one chooseTargets call rather
+// than a queue. Selects from the acting player's *hand*
+// (resolveEligibleHandCards), not state.cards' in-play pool.
+// Blend-attribute cards still always enter play face-down automatically,
+// same principle as the playCard action. Location-type restrictions are
+// enforced per destination unless `ignoreLocationRestrictions` is set —
+// "effects that specify a location for placing characters let you ignore
+// normal location-type restrictions" only actually applies when the
+// effect data says so explicitly (Puppet-Master's unqualified "Play 2
+// cards" does not, so normal restrictions apply there).
 function applyPlayEffect(
   state: GameState,
   frame: AbilityResolutionFrame,
   cardData: CardData,
-  sourceCard: CardInstance,
   actingPlayerId: PlayerId,
   effect: Extract<EffectNode, { verb: "play" }>,
   targetIds: readonly string[],
+  locationIds: readonly string[] | undefined,
 ): GameState {
   if (effect.target.ref !== "filter") {
     throw new Error("Only filter-based targeting is interpreted so far");
   }
-  if (effect.location.mode !== "self") {
-    throw new Error("Only location: self is interpreted so far");
-  }
-  const locationId = sourceCard.locationId!;
 
   const eligible = resolveEligibleHandCards(state, cardData, effect.target, actingPlayerId);
   validateTargets(
@@ -1204,9 +1452,37 @@ function applyPlayEffect(
     eligible.map((c) => c.id),
   );
 
-  const targetSet = new Set(targetIds);
+  let destinations: ReadonlyMap<string, string>;
+  if (effect.location.mode === "self") {
+    const locationId = frame.locationId;
+    destinations = new Map(targetIds.map((id) => [id, locationId]));
+  } else if (effect.location.mode === "any") {
+    if (!locationIds || locationIds.length !== targetIds.length) {
+      throw new Error("Each target needs its own destination location");
+    }
+    for (const locId of locationIds) {
+      if (!state.board.some((l) => l.id === locId)) {
+        throw new Error(`Unknown location: ${locId}`);
+      }
+    }
+    destinations = new Map(targetIds.map((id, i) => [id, locationIds[i]!]));
+  } else {
+    throw new Error("Only location: self or any is interpreted so far");
+  }
+
+  if (!effect.ignoreLocationRestrictions) {
+    for (const id of targetIds) {
+      const card = state.cards.find((c) => c.id === id)!;
+      const locationType = state.board.find((l) => l.id === destinations.get(id)!)!.type;
+      if (!getAllowedLocationTypes(cardData, card).includes(locationType)) {
+        throw new Error(`${card.defRef} cannot be played at this location`);
+      }
+    }
+  }
+
   const cards = state.cards.map((c) => {
-    if (!targetSet.has(c.id)) return c;
+    const locationId = destinations.get(c.id);
+    if (locationId === undefined) return c;
     const faceUp = !hasAttribute(cardData, c, "Blend");
     return { ...c, zone: "inPlay" as const, locationId, faceUp };
   });

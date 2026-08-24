@@ -2,12 +2,13 @@ import type { AbilityDefinition } from "../effects/dsl";
 
 // Maps a card's defRef to its Activate/Response abilities' structured
 // effects, in the same order as card_data.json's `abilities` array for
-// that card. Only a handful of the simplest (single-effect, exact-count
-// `eliminate`) abilities are encoded so far, to prove the interpreter
-// pipeline end to end — activateAbility/useResponse throw a clear "not yet
-// encoded" error for anything else rather than pretending full content
-// coverage exists. The remaining ~24 cards are unstarted content work, not
-// a design gap (see rev_day_engine_design memory).
+// that card. Every card with a real ability now has one encoded — a card
+// absent from this map simply has no ability at all (a passive-only card
+// like Celebrity or Mr. Lucky); activateAbility/useResponse throw a clear
+// "not yet encoded" error rather than pretending coverage exists where it
+// doesn't, for whenever a future card set introduces something new. See
+// rev_day_engine_design memory for the DSL design and any remaining
+// known gaps.
 const eliminateOneAtSelf = (faction?: "Regime" | "Rebel") =>
   ({
     verb: "eliminate" as const,
@@ -48,6 +49,18 @@ const eliminateOneOrTwoAtSelf = (faction?: "Regime" | "Rebel") =>
     },
   });
 
+const eliminateExactlyAtSelf = (count: number, faction?: "Regime" | "Rebel") =>
+  ({
+    verb: "eliminate" as const,
+    target: {
+      ref: "filter" as const,
+      location: { mode: "self" as const },
+      count: { mode: "exact" as const, value: count },
+      selection: "playerChoice" as const,
+      ...(faction ? { faction } : {}),
+    },
+  });
+
 // A card's array here may have gaps (e.g. Puppet-Master's remote-activate
 // is its second ability) — an un-encoded index is simply absent/undefined,
 // not a placeholder value, so getAbilityEffects reports it the same way
@@ -83,7 +96,15 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
       ],
     },
   ],
-  "Head of Security": [{ type: "Activate", effects: [activateRemoteNonLeader("Regime")] }],
+  "Head of Security": [
+    { type: "Activate", effects: [activateRemoteNonLeader("Regime")] },
+    { type: "Response", effects: [eliminateOneAtSelf()] },
+  ],
+  "Heir Apparent": [
+    { type: "Activate", effects: [{ verb: "gainActions", amount: 2 }] },
+    { type: "Activate", alarm: true, effects: [eliminateOneOrTwoAtSelf()] },
+    { type: "Response", effects: [eliminateOneOrTwoAtSelf()] },
+  ],
   "Guerrilla Commander": [
     { type: "Activate", effects: [activateRemoteNonLeader("Rebel")] },
     // "Reveal a blended target. If it is a regime card, eliminate it. If
@@ -130,12 +151,54 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
       ],
     },
   ],
-  // Puppet-Master's remote-activate is its *second* ability — index 0
-  // ("Play 2 cards") isn't encoded, so this array has a gap.
-  "Puppet-Master": [undefined, { type: "Activate", effects: [activateRemoteNonLeader()] }],
+  "Puppet-Master": [
+    // "Play 2 cards" — no faction restriction and, unlike Commander
+    // General/Opposition Leader's explicit "(ignore location
+    // restrictions)", no location override stated either — a judgment
+    // call that normal location-type restrictions apply here (per the
+    // general ruling that only an effect which *specifies* a placement
+    // location gets to ignore them), played at Puppet-Master's own
+    // location like every other unqualified single-location ability.
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "play",
+          location: { mode: "self" },
+          target: { ref: "filter", count: { mode: "exact", value: 2 }, selection: "playerChoice" },
+        },
+      ],
+    },
+    { type: "Activate", effects: [activateRemoteNonLeader()] },
+  ],
   "Death Squad": [
     { type: "Activate", alarm: true, effects: [eliminateOneOrTwoAtSelf()] },
     { type: "Response", effects: [eliminateOneOrTwoAtSelf()] },
+  ],
+  "Master Assassin": [
+    // "Return this card to its controller's hand and play a card" — the
+    // `play` step uses frame.locationId (not sourceCard.locationId, which
+    // is undefined right after returnToHand clears it), resolved by
+    // applyPlayEffect already; see its comment in reducer.ts.
+    {
+      type: "Activate",
+      effects: [
+        { verb: "returnToHand", target: { ref: "self" } },
+        {
+          verb: "play",
+          location: { mode: "self" },
+          target: { ref: "filter", count: { mode: "exact", value: 1 }, selection: "playerChoice" },
+        },
+      ],
+    },
+    // "Eliminate a target and blend" — blends itself back down after
+    // eliminating (not the target — an eliminated card has no faceUp).
+    {
+      type: "Activate",
+      effects: [eliminateOneAtSelf(), { verb: "blend", target: { ref: "self" } }],
+    },
+    { type: "Activate", alarm: true, effects: [eliminateExactlyAtSelf(2)] },
+    { type: "Response", effects: [eliminateOneAtSelf()] },
   ],
   "Commander General": [
     {
@@ -224,12 +287,22 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
     },
     { type: "Response", effects: [eliminateOneAtSelf("Rebel")] },
   ],
-  // Only ability 2 (the conditional-reveal one) is encoded — abilities 0
-  // ("place 2 rebels, each at any location") and 1 ("draw 3 cards") are
-  // separate, unstarted content work, not part of the conditionals feature.
   "Opposition Leader": [
-    undefined,
-    undefined,
+    // "Place 2 rebels at any locations" — each of the 2 declared targets
+    // gets its own destination via `chooseTargets.locationIds` (parallel
+    // to targetIds), not both forced to the same location.
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "play",
+          location: { mode: "any" },
+          ignoreLocationRestrictions: true,
+          target: { ref: "filter", faction: "Rebel", count: { mode: "exact", value: 2 }, selection: "playerChoice" },
+        },
+      ],
+    },
+    { type: "Activate", effects: [{ verb: "draw", amount: 3 }] },
     {
       type: "Activate",
       effects: [
@@ -291,6 +364,93 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
       ],
     },
   ],
+  "Traffic Cop": [
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "move",
+          target: {
+            ref: "filter",
+            kind: "president",
+            location: { mode: "self" },
+            count: { mode: "exact", value: 1 },
+            selection: "playerChoice",
+          },
+          destination: { mode: "forwardOrBackward", amount: 1 },
+        },
+      ],
+    },
+  ],
+  "Army Sniper": [
+    {
+      type: "Activate",
+      alarm: true,
+      effects: [
+        {
+          verb: "eliminate",
+          target: {
+            ref: "filter",
+            location: { mode: "selfOrAdjacent" },
+            faction: "Rebel",
+            count: { mode: "exact", value: 1 },
+            selection: "playerChoice",
+          },
+        },
+      ],
+    },
+    { type: "Response", effects: [eliminateOneAtSelf()] },
+  ],
+  "Rebel Soldier": [{ type: "Activate", alarm: true, effects: [eliminateOneOrTwoAtSelf("Regime")] }],
+  // Deliberately encoded as an effect verb rather than the ability-level
+  // `alarm: true` flag both cards carry in card_data.json — that flag's
+  // mechanism (applyActivateAbility) always fires the alarm at the
+  // activating card's *own* location, which can't express Anarchist's
+  // "any location" choice at all. Using the same triggerAlarm effect for
+  // both keeps their near-identical ability text encoded in parallel
+  // rather than an arbitrary asymmetry (Angry Mob genuinely could have
+  // used the flag, since self-location happens to match; Anarchist
+  // structurally can't). See applyTriggerAlarmEffect in reducer.ts —
+  // AbilityDefinition.alarm (not the raw card_data.json flag) is what
+  // actually drives the pre-effect alarm-frame push, so simply omitting
+  // it here is enough; no card_data.json edit needed.
+  "Angry Mob": [{ type: "Activate", effects: [{ verb: "triggerAlarm", location: { mode: "self" } }] }],
+  Journalist: [
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "peek",
+          target: {
+            ref: "filter",
+            location: { mode: "self" },
+            blendState: "faceDown",
+            count: { mode: "exact", value: 1 },
+            selection: "playerChoice",
+          },
+        },
+      ],
+    },
+  ],
+  "Insurgent Sniper": [
+    {
+      type: "Activate",
+      alarm: true,
+      effects: [
+        {
+          verb: "eliminate",
+          target: {
+            ref: "filter",
+            location: { mode: "adjacent" },
+            faction: "Regime",
+            count: { mode: "exact", value: 1 },
+            selection: "playerChoice",
+          },
+        },
+      ],
+    },
+  ],
+  Anarchist: [{ type: "Activate", effects: [{ verb: "triggerAlarm", location: { mode: "any" } }] }],
 };
 
 export function getAbilityEffects(defRef: string, abilityIndex: number): AbilityDefinition | undefined {

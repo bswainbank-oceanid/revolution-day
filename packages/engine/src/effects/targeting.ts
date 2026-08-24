@@ -1,3 +1,4 @@
+import { adjacentLocationIds } from "../state/board";
 import { getFaction, hasAttribute } from "../state/cardLookup";
 import type { CardInstance } from "../state/cards";
 import type { GameState, PlayerId } from "../state/game";
@@ -48,8 +49,16 @@ export function resolveEligibleTargets(
     }
     // mode: "any" (Opposition Leader's "reveal a blended target at any
     // location") needs no check at all — falling through unfiltered here
-    // already is "any location". "adjacent" / "selfOrAdjacent" / "specific"
-    // aren't needed by any encoded ability yet — extend when one requires it.
+    // already is "any location". "specific" isn't needed by any encoded
+    // ability yet — extend when one requires it.
+    if (selector.location?.mode === "adjacent") {
+      const adjacent = adjacentLocationIds(state.board, sourceCard.locationId!);
+      if (!card.locationId || !adjacent.includes(card.locationId)) return false;
+    }
+    if (selector.location?.mode === "selfOrAdjacent") {
+      const allowed = new Set([sourceCard.locationId, ...adjacentLocationIds(state.board, sourceCard.locationId!)]);
+      if (!card.locationId || !allowed.has(card.locationId)) return false;
+    }
 
     if (selector.blendState === "faceDown" && card.faceUp !== false) return false;
     if (selector.blendState === "faceUp" && card.faceUp !== true) return false;

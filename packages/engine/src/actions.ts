@@ -32,6 +32,14 @@ export type ResolutionAction =
       readonly type: "chooseTargets";
       readonly targetIds: readonly string[];
       readonly remoteAbilityIndex?: number;
+      // Explicit location choice(s) some effects need alongside (or
+      // instead of) card targets: a `play` effect with `location: "any"`
+      // (Opposition Leader's "place 2 rebels at any locations") pairs one
+      // per targetId (parallel array, same order); a `move` effect with a
+      // player-chosen destination (Traffic Cop's forward-or-backward) or a
+      // `triggerAlarm` effect with `location: "any"` (Anarchist) each take
+      // exactly one, with no card targets at all.
+      readonly locationIds?: readonly string[];
     }
   // AlarmResolutionFrame: use a Response ability, or decline.
   | {
