@@ -10,12 +10,14 @@ import {
   resolveEligibleTargets,
 } from "./effects/targeting";
 import { adjacentLocationIds } from "./state/board";
+import type { BoardLayout } from "./state/board";
 import { getAbilities, getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
 import type { CardInstance } from "./state/cards";
-import type { GameState, PlayerId } from "./state/game";
+import type { GameState, PlayerId, PresidentState } from "./state/game";
 import type {
   AbilityResolutionFrame,
   AlarmResolutionFrame,
+  MotorcadeInterceptionWindowFrame,
   ProtectedTargetingWindowFrame,
   ResolutionFrame,
 } from "./state/resolution";
@@ -25,22 +27,20 @@ import type { CardData } from "./types";
 // randomness (the RNG lives in and is advanced through GameState itself).
 // cardData is passed explicitly (not imported as a singleton) so a future
 // variant's card set works unmodified, same as setupGame. "draw", "endTurn",
-// "moveCard", "playCard", "playMotorcade", "activateAbility"/"chooseTargets"
-// (including alarm-triggering abilities now), and "useResponse"/
-// "passResponse" for the alarm-response window are implemented; everything
-// else is an explicit "not yet implemented".
+// "moveCard", "playCard", "playMotorcade" (including the Motorcade
+// interception window), "activateAbility"/"chooseTargets" (alarm-triggering
+// abilities, remote-activation including Commander General's "any number"
+// queue, `eliminate`/`reveal`/`play` effects), and "useResponse"/
+// "passResponse" (including a nested protected-targeting reveal window
+// during an alarm's response pass) are all implemented; everything else is
+// an explicit "not yet implemented".
 //
-// playMotorcade is deliberately incomplete in two ways, both noted inline:
-// it doesn't yet check for a Throng of Admirers/Angry Mob interception
-// (needs the Motorcade interception window, a different frame kind with
-// no dispatch logic yet), and it doesn't implement the forced "must play
-// immediately" trigger on an empty deck (same gap already noted in
-// applyDraw). activateAbility/chooseTargets/useResponse handle
-// single-effect, single-target (`count.mode === "exact"`) `eliminate`
-// abilities and single-card `activateRemote` (count 1 only — Commander
-// General's "any number" variant isn't implemented) that have been
-// encoded in abilityEffects.ts — no random targeting, no general
-// multi-effect/conditional interpreter yet. See rev_day_engine_design
+// Remaining known gaps, all noted inline where relevant: playMotorcade
+// doesn't implement the forced "must play immediately" trigger on an empty
+// deck (same gap noted in applyDraw). chooseTargets only interprets a
+// single top-level effect per ability — no general multi-effect/
+// conditional interpreter (`if`/bindings) yet — and no random target
+// selection (Suicide Bomber's pool/fallback). See rev_day_engine_design
 // memory for the full design this is incrementally building toward.
 export function applyAction(
   state: GameState,
@@ -112,8 +112,14 @@ function applyResolutionAction(
       return applyAlarmAction(state, cardData, frame, actingPlayerId, action);
     case "protectedTargetingWindow":
       return applyProtectedTargetingWindowAction(state, frame, actingPlayerId, action);
+    case "motorcadeInterceptionWindow":
+      return applyMotorcadeInterceptionWindowAction(state, frame, actingPlayerId, action);
     default:
-      throw new Error(`Resolution frame not yet implemented: ${frame.kind}`);
+      // All four ResolutionFrame kinds are handled above — this is
+      // unreachable given the current type, kept only as a defensive
+      // fallback if a new frame kind is ever added without updating this
+      // switch.
+      throw new Error("Unrecognized resolution frame kind");
   }
 }
 
@@ -292,15 +298,33 @@ function applyPlayMotorcade(
     throw new Error(`Card ${action.cardId} is not a Motorcade in ${currentPlayerId}'s hand`);
   }
 
-  // Does not yet check for a Throng of Admirers/Angry Mob interception —
-  // that needs resolution-stack frame dispatch (MotorcadeInterceptionWindowFrame),
-  // not built yet. See rev_day_engine_design memory for the full design.
   let cards = state.cards.map((c, i) =>
     i === cardIndex ? { ...c, zone: "discard" as const, controller: null } : c,
   );
   let president = state.president;
 
-  if (president.status === "eliminated") {
+  if (president.status === "alive") {
+    // Throng of Admirers / Angry Mob's shared passive: before the forward
+    // move applies, anyone controlling one of those cards at the
+    // President's *pre-move* location may eliminate it to cancel the
+    // move. If nobody can (no eligible card there at all), the move just
+    // applies immediately — no window needed. The Motorcade card is
+    // already discarded above either way; only the *movement* is ever in
+    // question.
+    const presidentLocationId = president.locationId!; // status "alive" always has a real locationId
+    const interceptors = findMotorcadeInterceptors(cards, presidentLocationId);
+    if (interceptors.length > 0) {
+      const windowFrame: MotorcadeInterceptionWindowFrame = {
+        kind: "motorcadeInterceptionWindow",
+        actingPlayerId: currentPlayerId,
+        presidentLocationId,
+        order: buildMotorcadeInterceptionOrder(state, currentPlayerId, interceptors),
+        nextIndex: 0,
+      };
+      return { ...state, cards, resolutionStack: [windowFrame], turn: spendAction(state) };
+    }
+    president = computeForwardMove(state.board, president);
+  } else if (president.status === "eliminated") {
     // "After the President has been eliminated, move a card you control to
     // any location" — ignores location-type restrictions, per the general
     // ruling that effects specifying a location for placement do so.
@@ -328,23 +352,104 @@ function applyPlayMotorcade(
       throw new Error("Board has no Street location for the President to enter at");
     }
     president = { status: "alive", locationId: firstStreet.id };
-  } else if (president.status === "alive") {
-    const currentIndex = state.board.findIndex((l) => l.id === president.locationId);
-    const nextIndex = currentIndex + 1;
-    if (nextIndex >= state.board.length) {
-      // Advancing past the last location: the President survives and the
-      // game ends immediately. Nothing yet enforces "no further actions
-      // once the game has ended" — that's deferred to the win-condition
-      // evaluator, not built yet.
-      president = { status: "survived", locationId: null };
-    } else {
-      president = { status: "alive", locationId: state.board[nextIndex]!.id };
-    }
   }
   // status === "survived": Motorcade text has nothing left to do; the card
   // still gets discarded and the action still gets spent above.
 
   return { ...state, cards, president, turn: spendAction(state) };
+}
+
+// Advances the President one location, or — if he's already at the last
+// one — he survives and the game ends immediately (nothing yet enforces
+// "no further actions once the game has ended"; deferred to the
+// win-condition evaluator, not built yet).
+function computeForwardMove(board: BoardLayout, president: PresidentState): PresidentState {
+  const currentIndex = board.findIndex((l) => l.id === president.locationId);
+  const nextIndex = currentIndex + 1;
+  if (nextIndex >= board.length) {
+    return { status: "survived", locationId: null };
+  }
+  return { status: "alive", locationId: board[nextIndex]!.id };
+}
+
+// Throng of Admirers and Angry Mob are the only two cards with this
+// passive — matched by name rather than a structured passive DSL, since
+// passives (unlike abilities and win conditions) don't have one yet; see
+// rev_day_engine_design memory.
+const MOTORCADE_INTERCEPTOR_DEFREFS = new Set(["Throng of Admirers", "Angry Mob"]);
+
+function findMotorcadeInterceptors(cards: readonly CardInstance[], presidentLocationId: string): CardInstance[] {
+  return cards.filter(
+    (c) =>
+      c.zone === "inPlay" && c.locationId === presidentLocationId && MOTORCADE_INTERCEPTOR_DEFREFS.has(c.defRef),
+  );
+}
+
+// Table order starting after whoever played the Motorcade, wrapping fully
+// around (including back to that player, last — self-interception is
+// explicitly allowed), filtered to only players who actually control an
+// eligible interceptor card.
+function buildMotorcadeInterceptionOrder(
+  state: GameState,
+  actingPlayerId: PlayerId,
+  interceptors: readonly CardInstance[],
+): PlayerId[] {
+  const seats = state.players.slice().sort((a, b) => a.seatIndex - b.seatIndex);
+  const actorSeat = seats.find((p) => p.id === actingPlayerId)!.seatIndex;
+  const n = seats.length;
+  const rotated = Array.from(
+    { length: n },
+    (_, i) => seats.find((p) => p.seatIndex === (actorSeat + i + 1) % n)!.id,
+  );
+  const eligibleControllers = new Set(interceptors.map((c) => c.controller));
+  return rotated.filter((playerId) => eligibleControllers.has(playerId));
+}
+
+// First "yes" wins and stops the pass immediately, unlike the fixed-length
+// protected-targeting pass — this mirrors card_data.json's
+// motorcade_interception_rules directly.
+function applyMotorcadeInterceptionWindowAction(
+  state: GameState,
+  frame: MotorcadeInterceptionWindowFrame,
+  actingPlayerId: PlayerId,
+  action: Action,
+): GameState {
+  const expectedPlayerId = frame.order[frame.nextIndex]!;
+  if (actingPlayerId !== expectedPlayerId) {
+    throw new Error(`It is not ${actingPlayerId}'s turn in this Motorcade interception window`);
+  }
+
+  if (action.type === "interceptMotorcade") {
+    const card = state.cards.find((c) => c.id === action.cardId);
+    if (
+      !card ||
+      card.zone !== "inPlay" ||
+      card.controller !== actingPlayerId ||
+      card.locationId !== frame.presidentLocationId ||
+      !MOTORCADE_INTERCEPTOR_DEFREFS.has(card.defRef)
+    ) {
+      throw new Error(`${action.cardId} cannot intercept this Motorcade`);
+    }
+    const cards = state.cards.map((c) =>
+      c.id === card.id ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+    );
+    // The move is cancelled — the President's status/location are simply
+    // left unchanged.
+    return { ...state, cards, resolutionStack: state.resolutionStack.slice(0, -1) };
+  }
+  if (action.type !== "passIntercept") {
+    throw new Error(`Expected interceptMotorcade or passIntercept, got: ${action.type}`);
+  }
+
+  const nextIndex = frame.nextIndex + 1;
+  if (nextIndex < frame.order.length) {
+    const updatedFrame: MotorcadeInterceptionWindowFrame = { ...frame, nextIndex };
+    return { ...state, resolutionStack: [...state.resolutionStack.slice(0, -1), updatedFrame] };
+  }
+
+  // Everyone passed — the move applies as normal.
+  const president = computeForwardMove(state.board, state.president);
+  return { ...state, president, resolutionStack: state.resolutionStack.slice(0, -1) };
 }
 
 function applyActivateAbility(

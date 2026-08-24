@@ -6,6 +6,7 @@ import type { GameState, PlayerId } from "./state/game";
 import type {
   AbilityResolutionFrame,
   AlarmResolutionFrame,
+  MotorcadeInterceptionWindowFrame,
   ProtectedTargetingWindowFrame,
 } from "./state/resolution";
 import { setupGame } from "./setup";
@@ -399,6 +400,126 @@ describe("applyAction: playMotorcade", () => {
     state = act(state, player, { type: "draw" });
 
     expect(() => act(state, player, { type: "playMotorcade", cardId: notMotorcade.id })).toThrow();
+  });
+});
+
+// Cycles everyone through their first turn, then has the current player
+// play a Motorcade to bring the President onto the board.
+function enterPresident(state: GameState): GameState {
+  for (let i = 0; i < state.players.length; i++) state = playFullTurn(state);
+  const player = state.turn.currentPlayerId;
+  const motorcade = state.cards.find((c) => c.kind === "motorcade" && c.zone === "deck")!;
+  state = placeInHand(state, motorcade.id, player);
+  state = act(state, player, { type: "draw" });
+  return act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+}
+
+describe("applyAction: Motorcade interception window", () => {
+  it("applies the move immediately when nobody can intercept", () => {
+    let state = freshGame();
+    state = enterPresident(state);
+    const presidentLoc = state.president.locationId!;
+    const player = state.turn.currentPlayerId;
+    const motorcade = state.cards.find((c) => c.kind === "motorcade" && c.zone === "deck")!;
+    // enterPresident already spent the mandatory draw and one action;
+    // this uses the remaining one directly.
+    state = placeInHand(state, motorcade.id, player);
+
+    const next = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+
+    expect(next.resolutionStack).toHaveLength(0);
+    expect(next.president.locationId).not.toBe(presidentLoc);
+  });
+
+  it("opens a window when an eligible interceptor is present, and cancels the move if used", () => {
+    let state = freshGame();
+    state = enterPresident(state);
+    const presidentLoc = state.president.locationId!;
+    const player = state.turn.currentPlayerId;
+    const interceptor = state.cards.find((c) => c.defRef === "Throng of Admirers")!;
+    state = placeInPlay(state, interceptor.id, presidentLoc, player);
+    const motorcade = state.cards.find((c) => c.kind === "motorcade" && c.zone === "deck")!;
+    state = placeInHand(state, motorcade.id, player);
+
+    const activated = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+    expect(activated.resolutionStack).toHaveLength(1);
+    expect(activated.president.locationId).toBe(presidentLoc); // not yet moved
+    // Spent regardless of what happens next — only the movement is in question.
+    expect(activated.cards.find((c) => c.id === motorcade.id)!.zone).toBe("discard");
+
+    const window = activated.resolutionStack[0] as MotorcadeInterceptionWindowFrame;
+    expect(window.order).toEqual([player]); // self-interception, the only eligible one
+
+    const cancelled = act(activated, player, { type: "interceptMotorcade", cardId: interceptor.id });
+    expect(cancelled.resolutionStack).toHaveLength(0);
+    expect(cancelled.president.locationId).toBe(presidentLoc); // move cancelled
+    expect(cancelled.cards.find((c) => c.id === interceptor.id)!.zone).toBe("eliminated");
+  });
+
+  it("applies the move as normal if the eligible interceptor passes", () => {
+    let state = freshGame();
+    state = enterPresident(state);
+    const presidentLoc = state.president.locationId!;
+    const player = state.turn.currentPlayerId;
+    const interceptor = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    state = placeInPlay(state, interceptor.id, presidentLoc, player);
+    const motorcade = state.cards.find((c) => c.kind === "motorcade" && c.zone === "deck")!;
+    state = placeInHand(state, motorcade.id, player);
+    const activated = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+
+    const resolved = act(activated, player, { type: "passIntercept" });
+
+    expect(resolved.resolutionStack).toHaveLength(0);
+    expect(resolved.president.locationId).not.toBe(presidentLoc);
+    expect(resolved.cards.find((c) => c.id === interceptor.id)!.zone).toBe("inPlay");
+  });
+
+  it("stops at the first 'yes' and never asks anyone else", () => {
+    let state = freshGame(["a", "b", "c"]);
+    state = enterPresident(state);
+    const presidentLoc = state.president.locationId!;
+    const player = state.turn.currentPlayerId;
+    const others = state.players.filter((p) => p.id !== player).map((p) => p.id);
+    const [mob1, mob2] = state.cards.filter((c) => c.defRef === "Angry Mob");
+    state = placeInPlay(state, mob1!.id, presidentLoc, others[0]!);
+    state = placeInPlay(state, mob2!.id, presidentLoc, others[1]!);
+    const motorcade = state.cards.find((c) => c.kind === "motorcade" && c.zone === "deck")!;
+    state = placeInHand(state, motorcade.id, player);
+
+    const activated = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+    const window = activated.resolutionStack[0] as MotorcadeInterceptionWindowFrame;
+    expect(window.order).toHaveLength(2);
+
+    const firstResponder = window.order[0]!;
+    const firstMob = firstResponder === others[0] ? mob1! : mob2!;
+    const secondMob = firstMob.id === mob1!.id ? mob2! : mob1!;
+
+    const resolved = act(activated, firstResponder, {
+      type: "interceptMotorcade",
+      cardId: firstMob.id,
+    });
+
+    expect(resolved.resolutionStack).toHaveLength(0); // second responder never asked
+    expect(resolved.cards.find((c) => c.id === firstMob.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === secondMob.id)!.zone).toBe("inPlay");
+  });
+
+  it("prevents the President from surviving if intercepted while advancing past the last location", () => {
+    let state = freshGame();
+    for (let i = 0; i < state.players.length; i++) state = playFullTurn(state);
+    const player = state.turn.currentPlayerId;
+    const lastLoc = state.board.at(-1)!.id;
+    state = { ...state, president: { status: "alive", locationId: lastLoc } };
+    const interceptor = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    state = placeInPlay(state, interceptor.id, lastLoc, player);
+    const motorcade = state.cards.find((c) => c.kind === "motorcade" && c.zone === "deck")!;
+    state = placeInHand(state, motorcade.id, player);
+    state = act(state, player, { type: "draw" });
+    const activated = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+
+    const cancelled = act(activated, player, { type: "interceptMotorcade", cardId: interceptor.id });
+
+    expect(cancelled.president).toEqual({ status: "alive", locationId: lastLoc });
   });
 });
 
