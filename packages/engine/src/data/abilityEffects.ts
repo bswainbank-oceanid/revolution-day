@@ -84,7 +84,52 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
     },
   ],
   "Head of Security": [{ type: "Activate", effects: [activateRemoteNonLeader("Regime")] }],
-  "Guerrilla Commander": [{ type: "Activate", effects: [activateRemoteNonLeader("Rebel")] }],
+  "Guerrilla Commander": [
+    { type: "Activate", effects: [activateRemoteNonLeader("Rebel")] },
+    // "Reveal a blended target. If it is a regime card, eliminate it. If
+    // it is a non-leader rebel card, gain control of it." — an "else if"
+    // (a rebel *leader*, e.g. Puppet-Master, matches neither branch and
+    // nothing happens), expressed as a nested `if` inside the outer
+    // else — see applyIfEffect's recursive dispatch in reducer.ts.
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "reveal",
+          bind: "target",
+          target: {
+            ref: "filter",
+            location: { mode: "self" },
+            blendState: "faceDown",
+            count: { mode: "exact", value: 1 },
+            selection: "playerChoice",
+          },
+        },
+        {
+          verb: "if",
+          condition: {
+            op: "equals",
+            left: { source: "binding", binding: "target", field: "faction" },
+            value: "Regime",
+          },
+          then: [{ verb: "eliminate", target: { ref: "binding", binding: "target" } }],
+          else: [
+            {
+              verb: "if",
+              condition: {
+                op: "and",
+                conditions: [
+                  { op: "equals", left: { source: "binding", binding: "target", field: "kind" }, value: "nonLeader" },
+                  { op: "equals", left: { source: "binding", binding: "target", field: "faction" }, value: "Rebel" },
+                ],
+              },
+              then: [{ verb: "gainControl", target: { ref: "binding", binding: "target" } }],
+            },
+          ],
+        },
+      ],
+    },
+  ],
   // Puppet-Master's remote-activate is its *second* ability — index 0
   // ("Play 2 cards") isn't encoded, so this array has a gap.
   "Puppet-Master": [undefined, { type: "Activate", effects: [activateRemoteNonLeader()] }],
@@ -148,6 +193,71 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
   // character at the location (so the random draw below can't be skewed by
   // hidden Protected status), randomly eliminate 4 (protected cards only if
   // there's no other choice), then eliminate the Bomber itself.
+  "Secret Police": [
+    // "Reveal a blended target. If it is a rebel, eliminate it. If it is
+    // regime, eliminate this card instead."
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "reveal",
+          bind: "target",
+          target: {
+            ref: "filter",
+            location: { mode: "self" },
+            blendState: "faceDown",
+            count: { mode: "exact", value: 1 },
+            selection: "playerChoice",
+          },
+        },
+        {
+          verb: "if",
+          condition: {
+            op: "equals",
+            left: { source: "binding", binding: "target", field: "faction" },
+            value: "Rebel",
+          },
+          then: [{ verb: "eliminate", target: { ref: "binding", binding: "target" } }],
+          else: [{ verb: "eliminate", target: { ref: "self" } }],
+        },
+      ],
+    },
+    { type: "Response", effects: [eliminateOneAtSelf("Rebel")] },
+  ],
+  // Only ability 2 (the conditional-reveal one) is encoded — abilities 0
+  // ("place 2 rebels, each at any location") and 1 ("draw 3 cards") are
+  // separate, unstarted content work, not part of the conditionals feature.
+  "Opposition Leader": [
+    undefined,
+    undefined,
+    {
+      type: "Activate",
+      effects: [
+        {
+          verb: "reveal",
+          bind: "target",
+          target: {
+            ref: "filter",
+            location: { mode: "any" },
+            blendState: "faceDown",
+            count: { mode: "exact", value: 1 },
+            selection: "playerChoice",
+          },
+        },
+        {
+          verb: "if",
+          condition: {
+            op: "and",
+            conditions: [
+              { op: "equals", left: { source: "binding", binding: "target", field: "kind" }, value: "nonLeader" },
+              { op: "equals", left: { source: "binding", binding: "target", field: "faction" }, value: "Rebel" },
+            ],
+          },
+          then: [{ verb: "gainControl", target: { ref: "binding", binding: "target" } }],
+        },
+      ],
+    },
+  ],
   "Suicide Bomber": [
     {
       type: "Activate",

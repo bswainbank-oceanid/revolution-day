@@ -1539,3 +1539,138 @@ describe("applyAction: random target selection (Suicide Bomber)", () => {
     expect(state.resolutionStack).toHaveLength(0);
   });
 });
+
+describe("applyAction: conditionals (if/bindings)", () => {
+  it("Secret Police: revealed rebel target is eliminated", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const police = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Secret Police")!;
+    const rebelTarget = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, police.id, loc, player);
+    state = placeInPlay(state, rebelTarget.id, loc, other, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: police.id, abilityIndex: 0 });
+
+    // Step 1: reveal — the player chooses which blended card to reveal.
+    state = act(state, player, { type: "chooseTargets", targetIds: [rebelTarget.id] });
+    expect(state.cards.find((c) => c.id === rebelTarget.id)!.faceUp).toBe(true);
+    expect(state.resolutionStack).toHaveLength(1); // the if-branch is still pending
+
+    // Step 2: the branch (rebel -> eliminate it) resolves automatically.
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+    expect(state.cards.find((c) => c.id === rebelTarget.id)!.zone).toBe("eliminated");
+    expect(state.cards.find((c) => c.id === police.id)!.zone).toBe("inPlay");
+    expect(state.resolutionStack).toHaveLength(0);
+  });
+
+  it("Secret Police: revealed regime target eliminates the Police instead", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const police = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Secret Police")!;
+    const regimeTarget = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, police.id, loc, player);
+    state = placeInPlay(state, regimeTarget.id, loc, other, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: police.id, abilityIndex: 0 });
+
+    state = act(state, player, { type: "chooseTargets", targetIds: [regimeTarget.id] });
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+
+    expect(state.cards.find((c) => c.id === police.id)!.zone).toBe("eliminated");
+    expect(state.cards.find((c) => c.id === regimeTarget.id)!.zone).toBe("inPlay");
+    expect(state.resolutionStack).toHaveLength(0);
+  });
+
+  it("Guerrilla Commander: revealed regime target is eliminated", () => {
+    // 8 players so Guerrilla Commander is guaranteed to be dealt (leaders
+    // are dealt one per player from a pool of 8, not always all present).
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const gc = state.cards.find((c) => c.kind === "leader" && c.defRef === "Guerrilla Commander")!;
+    const regimeTarget = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, gc.id, loc, player);
+    state = placeInPlay(state, regimeTarget.id, loc, other, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: gc.id, abilityIndex: 1 });
+
+    state = act(state, player, { type: "chooseTargets", targetIds: [regimeTarget.id] });
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+
+    expect(state.cards.find((c) => c.id === regimeTarget.id)!.zone).toBe("eliminated");
+    expect(state.resolutionStack).toHaveLength(0);
+  });
+
+  it("Guerrilla Commander: revealed non-leader rebel target is taken under control", () => {
+    // 8 players so Guerrilla Commander is guaranteed to be dealt (leaders
+    // are dealt one per player from a pool of 8, not always all present).
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const gc = state.cards.find((c) => c.kind === "leader" && c.defRef === "Guerrilla Commander")!;
+    const rebelTarget = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, gc.id, loc, player);
+    state = placeInPlay(state, rebelTarget.id, loc, other, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: gc.id, abilityIndex: 1 });
+
+    state = act(state, player, { type: "chooseTargets", targetIds: [rebelTarget.id] });
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+
+    const resolvedTarget = state.cards.find((c) => c.id === rebelTarget.id)!;
+    expect(resolvedTarget.zone).toBe("inPlay");
+    expect(resolvedTarget.controller).toBe(player);
+    expect(state.resolutionStack).toHaveLength(0);
+  });
+
+  it("Guerrilla Commander: a revealed rebel leader matches neither branch — nothing happens", () => {
+    // 8 players so Guerrilla Commander is guaranteed to be dealt (leaders
+    // are dealt one per player from a pool of 8, not always all present).
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const gc = state.cards.find((c) => c.kind === "leader" && c.defRef === "Guerrilla Commander")!;
+    const rebelLeaderTarget = state.cards.find((c) => c.kind === "leader" && c.defRef === "Puppet-Master")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, gc.id, loc, player);
+    state = placeInPlay(state, rebelLeaderTarget.id, loc, other, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: gc.id, abilityIndex: 1 });
+
+    state = act(state, player, { type: "chooseTargets", targetIds: [rebelLeaderTarget.id] });
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+
+    const resolvedTarget = state.cards.find((c) => c.id === rebelLeaderTarget.id)!;
+    expect(resolvedTarget.zone).toBe("inPlay");
+    expect(resolvedTarget.controller).toBe(other); // no gainControl — didn't qualify
+    expect(state.resolutionStack).toHaveLength(0);
+  });
+
+  it("Opposition Leader: reveals at any location, not just its own", () => {
+    // 8 players so Opposition Leader is guaranteed to be dealt.
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const oppLeader = state.cards.find((c) => c.kind === "leader" && c.defRef === "Opposition Leader")!;
+    const rebelTarget = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    const ownLoc = state.board[0]!.id;
+    const otherLoc = state.board[1]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, oppLeader.id, ownLoc, player);
+    state = placeInPlay(state, rebelTarget.id, otherLoc, other, false); // a different location entirely
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: oppLeader.id, abilityIndex: 2 });
+
+    state = act(state, player, { type: "chooseTargets", targetIds: [rebelTarget.id] });
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+
+    const resolvedTarget = state.cards.find((c) => c.id === rebelTarget.id)!;
+    expect(resolvedTarget.controller).toBe(player);
+    expect(state.resolutionStack).toHaveLength(0);
+  });
+});

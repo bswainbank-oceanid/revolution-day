@@ -26,6 +26,12 @@ export interface AbilityResolutionFrame {
   readonly effectIndex?: number;
   // null until targets have been chosen for the *current* effect.
   readonly targetIds: readonly string[] | null;
+  // Named cards captured by an earlier `reveal`/`peek` step's `bind` field
+  // (binding name -> card id), read back by a later `if` condition or a
+  // `ref: "binding"` target in the same ability — Secret Police's "Reveal a
+  // blended target. If it is a rebel, eliminate it." pattern. Accumulates
+  // as the sequence advances; never cleared mid-ability.
+  readonly bindings?: Readonly<Record<string, string>>;
   // True once a protected-targeting reveal window has completed with at
   // least one reveal, and control has returned here for the acting player
   // to freely re-choose (Protected and still-blended characters included)

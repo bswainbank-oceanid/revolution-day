@@ -46,8 +46,10 @@ export function resolveEligibleTargets(
     if (selector.location?.mode === "self" && card.locationId !== sourceCard.locationId) {
       return false;
     }
-    // "adjacent" / "selfOrAdjacent" / "any" / "specific" aren't needed by
-    // any encoded ability yet — extend when one requires it.
+    // mode: "any" (Opposition Leader's "reveal a blended target at any
+    // location") needs no check at all — falling through unfiltered here
+    // already is "any location". "adjacent" / "selfOrAdjacent" / "specific"
+    // aren't needed by any encoded ability yet — extend when one requires it.
 
     if (selector.blendState === "faceDown" && card.faceUp !== false) return false;
     if (selector.blendState === "faceUp" && card.faceUp !== true) return false;

@@ -1,6 +1,6 @@
 import type { Action } from "./actions";
 import { getAbilityEffects } from "./data/abilityEffects";
-import type { EffectNode, TargetCount } from "./effects/dsl";
+import type { Condition, ConditionOperand, EffectNode, TargetCount } from "./effects/dsl";
 import {
   hasRevealOpportunity,
   isLegalEliminationTarget,
@@ -12,7 +12,7 @@ import {
 } from "./effects/targeting";
 import { adjacentLocationIds } from "./state/board";
 import type { BoardLayout } from "./state/board";
-import { getAbilities, getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
+import { getAbilities, getAllowedLocationTypes, getFaction, hasAttribute } from "./state/cardLookup";
 import type { CardInstance } from "./state/cards";
 import type { GameState, PlayerId, PresidentState } from "./state/game";
 import { shuffle } from "./state/rng";
@@ -33,18 +33,18 @@ import type { CardData } from "./types";
 // "moveCard", "playCard", "playMotorcade" (including the Motorcade
 // interception window), "activateAbility"/"chooseTargets" (alarm-triggering
 // abilities, remote-activation including Commander General's "any number"
-// queue, `eliminate`/`reveal`/`play` effects), and "useResponse"/
+// queue, multi-effect sequencing, `eliminate`/`reveal`/`play`/`gainControl`
+// effects, and `if`/binding conditionals), and "useResponse"/
 // "passResponse" (including a nested protected-targeting reveal window
 // during an alarm's response pass) are all implemented; everything else is
 // an explicit "not yet implemented".
 //
 // Remaining known gaps, all noted inline where relevant: playMotorcade
 // doesn't implement the forced "must play immediately" trigger on an empty
-// deck (same gap noted in applyDraw). chooseTargets only interprets a
-// single top-level effect per ability — no general multi-effect/
-// conditional interpreter (`if`/bindings) yet — and no random target
-// selection (Suicide Bomber's pool/fallback). See rev_day_engine_design
-// memory for the full design this is incrementally building toward.
+// deck (same gap noted in applyDraw). `if`/`else` branches are limited to a
+// single effect each (see applyIfEffect) — no arbitrary sub-sequence. See
+// rev_day_engine_design memory for the full design this is incrementally
+// building toward.
 export function applyAction(
   state: GameState,
   actingPlayerId: PlayerId,
@@ -553,23 +553,37 @@ function applyChooseTargets(
     throw new Error(`${sourceCard.defRef}'s ability ${frame.abilityIndex} has no effect at this step`);
   }
 
+  return applyEffect(state, cardData, frame, sourceCard, actingPlayerId, effect, action.targetIds, action.remoteAbilityIndex);
+}
+
+// Dispatches a single EffectNode by verb. Shared by applyChooseTargets (a
+// top-level effect awaiting the player's action) and applyIfEffect (an
+// if/else branch's single effect, resolved inline as part of the same
+// player action that evaluated the condition — see applyIfEffect).
+function applyEffect(
+  state: GameState,
+  cardData: CardData,
+  frame: AbilityResolutionFrame,
+  sourceCard: CardInstance,
+  actingPlayerId: PlayerId,
+  effect: EffectNode,
+  targetIds: readonly string[],
+  remoteAbilityIndex?: number,
+): GameState {
   if (effect.verb === "activateRemote") {
-    return applyActivateRemote(
-      state,
-      cardData,
-      frame,
-      sourceCard,
-      effect,
-      actingPlayerId,
-      action.targetIds,
-      action.remoteAbilityIndex,
-    );
+    return applyActivateRemote(state, cardData, frame, sourceCard, effect, actingPlayerId, targetIds, remoteAbilityIndex);
   }
   if (effect.verb === "reveal") {
-    return applyRevealEffect(state, frame, cardData, sourceCard, effect, action.targetIds);
+    return applyRevealEffect(state, frame, cardData, sourceCard, effect, targetIds);
   }
   if (effect.verb === "play") {
-    return applyPlayEffect(state, frame, cardData, sourceCard, actingPlayerId, effect, action.targetIds);
+    return applyPlayEffect(state, frame, cardData, sourceCard, actingPlayerId, effect, targetIds);
+  }
+  if (effect.verb === "gainControl") {
+    return applyGainControlEffect(state, frame, actingPlayerId, effect, targetIds);
+  }
+  if (effect.verb === "if") {
+    return applyIfEffect(state, cardData, frame, sourceCard, actingPlayerId, effect, targetIds);
   }
   if (effect.verb !== "eliminate") {
     throw new Error(`Effect verb not yet interpreted: ${effect.verb}`);
@@ -578,17 +592,35 @@ function applyChooseTargets(
     // "Eliminate this card" (Suicide Bomber's final step) — no choice to
     // submit, and Protected-immunity/reveal windows don't apply to
     // self-destruction, so this bypasses declareEliminateTarget entirely.
-    if (action.targetIds.length > 0) {
+    if (targetIds.length > 0) {
       throw new Error("This effect targets its own source card automatically — no targets to choose");
     }
     return finalizeEliminateEffect(state, frame, sourceCard.id);
   }
+  if (effect.target.ref === "binding") {
+    // "Eliminate it" (Secret Police/Guerrilla Commander, the target named
+    // by an earlier reveal's `bind`) — the card's identity was already
+    // conclusively fixed and publicly revealed by that step, so like the
+    // self case above this deliberately bypasses Protected-immunity/the
+    // reveal window entirely: there's no live "declare a target" moment
+    // here for another player's hidden card to interject on, and the
+    // ability text names a specific already-known card ("it"), not an
+    // open pool the window's reselection concept could apply to.
+    if (targetIds.length > 0) {
+      throw new Error("This target was already determined by an earlier reveal — no targets to choose");
+    }
+    const boundId = frame.bindings?.[effect.target.binding];
+    if (!boundId) {
+      throw new Error(`No binding named "${effect.target.binding}" is available yet`);
+    }
+    return finalizeEliminateEffect(state, frame, boundId);
+  }
   if (effect.target.ref !== "filter") {
-    throw new Error("Only filter-based and self targeting is interpreted so far");
+    throw new Error("Only filter-based, self, and binding targeting is interpreted so far");
   }
 
   if (effect.target.selection === "random") {
-    return applyRandomEliminateEffect(state, frame, cardData, sourceCard, effect, action.targetIds);
+    return applyRandomEliminateEffect(state, frame, cardData, sourceCard, effect, targetIds);
   }
 
   // A target chosen after a reveal window already ran once this
@@ -600,7 +632,7 @@ function applyChooseTargets(
     effect,
     sourceCard,
     actingPlayerId,
-    action.targetIds,
+    targetIds,
     frame.reselectingAfterReveal ?? false,
   );
 
@@ -619,6 +651,90 @@ function applyChooseTargets(
   }
 
   return finalizeEliminateEffect(state, frame, declared.targetId);
+}
+
+// Evaluates an `if` node's condition against this ability's accumulated
+// bindings and applies whichever branch matches (`then`/`else`), inline,
+// as part of the same player action — no separate chooseTargets round trip
+// for the branch, since every currently-encoded branch effect targets via
+// `ref: "self"`/`"binding"` (already fully determined, nothing left for
+// the player to choose). Scoped deliberately narrow: a branch may contain
+// at most one effect (itself optionally another `if`, for "else if"
+// chains — see Guerrilla Commander in abilityEffects.ts) rather than an
+// arbitrary sub-sequence, since that's all any encoded ability needs.
+function applyIfEffect(
+  state: GameState,
+  cardData: CardData,
+  frame: AbilityResolutionFrame,
+  sourceCard: CardInstance,
+  actingPlayerId: PlayerId,
+  effect: Extract<EffectNode, { verb: "if" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (targetIds.length > 0) {
+    throw new Error("This step branches automatically — no targets to choose");
+  }
+  const branch = evaluateCondition(state, cardData, frame, effect.condition) ? effect.then : (effect.else ?? []);
+  if (branch.length === 0) {
+    return finishEffectStep(state, frame);
+  }
+  if (branch.length > 1) {
+    throw new Error("Only a single effect per if/else branch is interpreted so far");
+  }
+  return applyEffect(state, cardData, frame, sourceCard, actingPlayerId, branch[0]!, []);
+}
+
+function evaluateCondition(
+  state: GameState,
+  cardData: CardData,
+  frame: AbilityResolutionFrame,
+  condition: Condition,
+): boolean {
+  if (condition.op === "and") {
+    return condition.conditions.every((c) => evaluateCondition(state, cardData, frame, c));
+  }
+  if (condition.op === "or") {
+    return condition.conditions.some((c) => evaluateCondition(state, cardData, frame, c));
+  }
+  return resolveConditionOperand(state, cardData, frame, condition.left) === condition.value;
+}
+
+function resolveConditionOperand(
+  state: GameState,
+  cardData: CardData,
+  frame: AbilityResolutionFrame,
+  operand: ConditionOperand,
+): string {
+  if (operand.source === "presidentStatus") {
+    return state.president.status;
+  }
+  const cardId = frame.bindings?.[operand.binding];
+  if (!cardId) {
+    throw new Error(`No binding named "${operand.binding}" is available yet`);
+  }
+  const card = state.cards.find((c) => c.id === cardId)!;
+  return operand.field === "faction" ? (getFaction(cardData, card) ?? "") : card.kind;
+}
+
+function applyGainControlEffect(
+  state: GameState,
+  frame: AbilityResolutionFrame,
+  actingPlayerId: PlayerId,
+  effect: Extract<EffectNode, { verb: "gainControl" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (effect.target.ref !== "binding") {
+    throw new Error("Only binding-ref targeting is interpreted for gainControl so far");
+  }
+  if (targetIds.length > 0) {
+    throw new Error("This target was already determined by an earlier reveal — no targets to choose");
+  }
+  const boundId = frame.bindings?.[effect.target.binding];
+  if (!boundId) {
+    throw new Error(`No binding named "${effect.target.binding}" is available yet`);
+  }
+  const cards = state.cards.map((c) => (c.id === boundId ? { ...c, controller: actingPlayerId } : c));
+  return finishEffectStep({ ...state, cards }, frame);
 }
 
 // Validates a declared target (either a card or the President sentinel)
@@ -785,17 +901,32 @@ function applyRevealEffect(
   if (effect.target.ref !== "filter") {
     throw new Error("Only filter-based targeting is interpreted so far");
   }
-  if (effect.target.count.mode !== "all") {
-    throw new Error("Only 'reveal all' is interpreted so far");
-  }
-  if (targetIds.length > 0) {
-    throw new Error("This ability reveals everyone matching automatically — no targets to choose");
+
+  if (effect.target.count.mode === "all") {
+    if (targetIds.length > 0) {
+      throw new Error("This ability reveals everyone matching automatically — no targets to choose");
+    }
+    const toReveal = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
+    const revealSet = new Set(toReveal.map((c) => c.id));
+    const cards = state.cards.map((c) => (revealSet.has(c.id) ? { ...c, faceUp: true } : c));
+    return finishEffectStep({ ...state, cards }, frame);
   }
 
-  const toReveal = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
-  const revealSet = new Set(toReveal.map((c) => c.id));
-  const cards = state.cards.map((c) => (revealSet.has(c.id) ? { ...c, faceUp: true } : c));
-  return finishEffectStep({ ...state, cards }, frame);
+  if (effect.target.count.mode === "exact" && effect.target.count.value === 1) {
+    // A player-chosen single target to reveal (Secret Police/Guerrilla
+    // Commander/Opposition Leader's "reveal a blended target"), as opposed
+    // to the forced "reveal all matching" case above. `bind` names it for
+    // a later `if` condition or `ref: "binding"` target in the same
+    // ability's sequence.
+    const eligible = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
+    validateTargets(effect.target.count, targetIds, eligible.map((c) => c.id));
+    const targetId = targetIds[0]!;
+    const cards = state.cards.map((c) => (c.id === targetId ? { ...c, faceUp: true } : c));
+    const nextFrame = effect.bind ? { ...frame, bindings: { ...frame.bindings, [effect.bind]: targetId } } : frame;
+    return finishEffectStep({ ...state, cards }, nextFrame);
+  }
+
+  throw new Error("Only 'reveal all' or a single player-chosen reveal is interpreted so far");
 }
 
 // "Play any number of regime cards at this location" (Commander General)
