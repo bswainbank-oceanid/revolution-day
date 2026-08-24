@@ -6,6 +6,7 @@ import {
   isLegalEliminationTarget,
   isLegalPresidentTarget,
   isProtectedActive,
+  partitionByProtection,
   resolveEligibleHandCards,
   resolveEligibleTargets,
 } from "./effects/targeting";
@@ -14,6 +15,8 @@ import type { BoardLayout } from "./state/board";
 import { getAbilities, getAllowedLocationTypes, hasAttribute } from "./state/cardLookup";
 import type { CardInstance } from "./state/cards";
 import type { GameState, PlayerId, PresidentState } from "./state/game";
+import { shuffle } from "./state/rng";
+import type { RngState } from "./state/rng";
 import type {
   AbilityResolutionFrame,
   AlarmResolutionFrame,
@@ -545,9 +548,9 @@ function applyChooseTargets(
 
   const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId)!;
   const definition = getAbilityEffects(sourceCard.defRef, frame.abilityIndex)!;
-  const effect = definition.effects[0];
-  if (!effect || definition.effects.length > 1) {
-    throw new Error("Only single-effect abilities are interpreted so far");
+  const effect = definition.effects[frame.effectIndex ?? 0];
+  if (!effect) {
+    throw new Error(`${sourceCard.defRef}'s ability ${frame.abilityIndex} has no effect at this step`);
   }
 
   if (effect.verb === "activateRemote") {
@@ -563,16 +566,29 @@ function applyChooseTargets(
     );
   }
   if (effect.verb === "reveal") {
-    return applyRevealEffect(state, cardData, sourceCard, effect, action.targetIds);
+    return applyRevealEffect(state, frame, cardData, sourceCard, effect, action.targetIds);
   }
   if (effect.verb === "play") {
-    return applyPlayEffect(state, cardData, sourceCard, actingPlayerId, effect, action.targetIds);
+    return applyPlayEffect(state, frame, cardData, sourceCard, actingPlayerId, effect, action.targetIds);
   }
   if (effect.verb !== "eliminate") {
     throw new Error(`Effect verb not yet interpreted: ${effect.verb}`);
   }
+  if (effect.target.ref === "self") {
+    // "Eliminate this card" (Suicide Bomber's final step) — no choice to
+    // submit, and Protected-immunity/reveal windows don't apply to
+    // self-destruction, so this bypasses declareEliminateTarget entirely.
+    if (action.targetIds.length > 0) {
+      throw new Error("This effect targets its own source card automatically — no targets to choose");
+    }
+    return finalizeEliminateEffect(state, frame, sourceCard.id);
+  }
   if (effect.target.ref !== "filter") {
-    throw new Error("Only filter-based targeting is interpreted so far");
+    throw new Error("Only filter-based and self targeting is interpreted so far");
+  }
+
+  if (effect.target.selection === "random") {
+    return applyRandomEliminateEffect(state, frame, cardData, sourceCard, effect, action.targetIds);
   }
 
   // A target chosen after a reveal window already ran once this
@@ -602,7 +618,7 @@ function applyChooseTargets(
     };
   }
 
-  return finalizeEliminateEffect(state, declared.targetId);
+  return finalizeEliminateEffect(state, frame, declared.targetId);
 }
 
 // Validates a declared target (either a card or the President sentinel)
@@ -696,7 +712,7 @@ function applyActivateRemote(
     if (!isUnbounded) {
       throw new Error("Remote activation requires exactly one target card");
     }
-    return popCurrentFrame(state); // "no more" — done choosing.
+    return finishEffectStep(state, frame); // "no more" — done choosing.
   }
   if (targetIds.length !== 1) {
     throw new Error("Choose one card to remotely activate at a time");
@@ -760,6 +776,7 @@ function applyActivateRemote(
 // partial reveal isn't needed by any encoded ability yet.
 function applyRevealEffect(
   state: GameState,
+  frame: AbilityResolutionFrame,
   cardData: CardData,
   sourceCard: CardInstance,
   effect: Extract<EffectNode, { verb: "reveal" }>,
@@ -778,7 +795,7 @@ function applyRevealEffect(
   const toReveal = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
   const revealSet = new Set(toReveal.map((c) => c.id));
   const cards = state.cards.map((c) => (revealSet.has(c.id) ? { ...c, faceUp: true } : c));
-  return popCurrentFrame({ ...state, cards });
+  return finishEffectStep({ ...state, cards }, frame);
 }
 
 // "Play any number of regime cards at this location" (Commander General)
@@ -790,6 +807,7 @@ function applyRevealEffect(
 // automatically, same principle as the playCard action.
 function applyPlayEffect(
   state: GameState,
+  frame: AbilityResolutionFrame,
   cardData: CardData,
   sourceCard: CardInstance,
   actingPlayerId: PlayerId,
@@ -817,7 +835,71 @@ function applyPlayEffect(
     const faceUp = !hasAttribute(cardData, c, "Blend");
     return { ...c, zone: "inPlay" as const, locationId, faceUp };
   });
-  return popCurrentFrame({ ...state, cards });
+  return finishEffectStep({ ...state, cards }, frame);
+}
+
+// Suicide Bomber's "eliminate 4 random targets... protected cards are
+// eliminated only if there are no other targets": no player choice, so
+// targetIds must be empty (same confirm-only convention as
+// applyRevealEffect). Draws via the seeded RNG in GameState, advancing it,
+// so the outcome stays deterministic and replayable per seed — never
+// Math.random(). Only `count.mode === "exact"` with a `randomPool` set is
+// interpreted; a future card using plain uniform random with no
+// pool/fallback tiering would need a small extension here.
+function applyRandomEliminateEffect(
+  state: GameState,
+  frame: AbilityResolutionFrame,
+  cardData: CardData,
+  sourceCard: CardInstance,
+  effect: Extract<EffectNode, { verb: "eliminate" }>,
+  targetIds: readonly string[],
+): GameState {
+  if (effect.target.ref !== "filter" || effect.target.selection !== "random") {
+    throw new Error("Expected a random-selection eliminate effect");
+  }
+  if (targetIds.length > 0) {
+    throw new Error("Random targets are chosen automatically — nothing to submit");
+  }
+  if (effect.target.count.mode !== "exact") {
+    throw new Error("Only exact-count random selection is interpreted so far");
+  }
+  if (!effect.target.randomPool) {
+    throw new Error("Random selection requires a randomPool");
+  }
+
+  const candidates = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
+  const { primary, fallback } = partitionByProtection(cardData, candidates);
+  const { targetIds: drawnIds, rng } = drawRandomTargets(state.rng, primary, fallback, effect.target.count.value);
+
+  const targetSet = new Set(drawnIds);
+  const cards = state.cards.map((c) =>
+    targetSet.has(c.id) ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+  );
+  return finishEffectStep({ ...state, cards, rng }, frame);
+}
+
+// Exhausts `primary` fully before touching `fallback` at all — "protected
+// cards are eliminated only if there are no other targets" — but *which*
+// primary cards get hit is still random when there are more of them than
+// needed. Reuses the same seeded shuffle setupGame uses for dealing, so
+// this is just as deterministic/replayable per seed.
+function drawRandomTargets(
+  rng: RngState,
+  primary: readonly CardInstance[],
+  fallback: readonly CardInstance[],
+  count: number,
+): { targetIds: string[]; rng: RngState } {
+  if (primary.length >= count) {
+    const shuffled = shuffle(rng, primary);
+    return { targetIds: shuffled.items.slice(0, count).map((c) => c.id), rng: shuffled.rng };
+  }
+  const remaining = count - primary.length;
+  const shuffledFallback = shuffle(rng, fallback);
+  const targetIds = [
+    ...primary.map((c) => c.id),
+    ...shuffledFallback.items.slice(0, remaining).map((c) => c.id),
+  ];
+  return { targetIds, rng: shuffledFallback.rng };
 }
 
 // The President isn't a CardInstance, so he can't appear in `state.cards`
@@ -850,19 +932,37 @@ function eliminateSingleTarget(state: GameState, targetId: string): Pick<GameSta
 
 // Applies a fully-resolved eliminate effect (target already finalized —
 // either as originally declared, or reassigned by a protected-targeting
-// window) and pops the AbilityResolutionFrame that was awaiting it.
-function finalizeEliminateEffect(state: GameState, targetId: string): GameState {
+// window) and advances past the effect step that was awaiting it.
+function finalizeEliminateEffect(state: GameState, frame: AbilityResolutionFrame, targetId: string): GameState {
   const { cards, president } = eliminateSingleTarget(state, targetId);
-  return popCurrentFrame({ ...state, cards, president });
+  return finishEffectStep({ ...state, cards, president }, frame);
 }
 
 // Pops the current top resolution frame and, if that leaves a paused
 // AlarmResolutionFrame as the new top, resumes it — see the comment below.
-// Shared by every effect-finalization path (eliminate, reveal, play, the
-// "no more" end of an activateRemote queue, ...), since any of them could
-// in principle be reached via a nested Response resolution.
+// Shared by every path that ends an ability's resolution entirely (the last
+// effect in `finishEffectStep`, or targeting/remote-activation cancellation),
+// since any of them could in principle be reached via a nested Response
+// resolution.
 function popCurrentFrame(state: GameState): GameState {
   return resumeAlarmIfPaused({ ...state, resolutionStack: state.resolutionStack.slice(0, -1) });
+}
+
+// If there's a next effect in this ability's sequence (Suicide Bomber:
+// forced reveal, then random eliminate, then eliminate self), advance to it
+// — reusing the same frame, effectIndex+1, targetIds reset to null — rather
+// than popping. A plain ordered walk, no conditionals/bindings. Otherwise
+// the whole ability is done: pop for real (and resume a paused alarm, if
+// this was reached via a nested Response resolution).
+function finishEffectStep(state: GameState, frame: AbilityResolutionFrame): GameState {
+  const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId)!;
+  const definition = getAbilityEffects(sourceCard.defRef, frame.abilityIndex)!;
+  const nextIndex = (frame.effectIndex ?? 0) + 1;
+  if (nextIndex < definition.effects.length) {
+    const nextFrame: AbilityResolutionFrame = { ...frame, effectIndex: nextIndex, targetIds: null };
+    return { ...state, resolutionStack: [...state.resolutionStack.slice(0, -1), nextFrame] };
+  }
+  return popCurrentFrame(state);
 }
 
 // If popping a frame leaves a paused AlarmResolutionFrame as the new top of
@@ -967,7 +1067,7 @@ function applyProtectedTargetingWindowAction(
   const abilityFrame = withCards.resolutionStack[withCards.resolutionStack.length - 2] as AbilityResolutionFrame;
   if (!anyRevealed) {
     const withoutWindow = { ...withCards, resolutionStack: [...withCards.resolutionStack.slice(0, -2), abilityFrame] };
-    return finalizeEliminateEffect(withoutWindow, frame.declaredTargetId);
+    return finalizeEliminateEffect(withoutWindow, abilityFrame, frame.declaredTargetId);
   }
 
   const reselectFrame: AbilityResolutionFrame = {

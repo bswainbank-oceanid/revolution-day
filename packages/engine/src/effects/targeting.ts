@@ -16,9 +16,13 @@ import type { TargetSelector } from "./dsl";
 // see resolveEligibleHandCards below for selecting from a hand instead.
 //
 // Deliberately incomplete for now, a documented gap rather than an
-// oversight (see rev_day_engine_design memory): does NOT support
-// `selection: "random"` (needs Suicide Bomber-style pool/fallback logic).
-// `kind: "president"` is deliberately excluded here too — the President
+// oversight (see rev_day_engine_design memory): the base filters here
+// don't distinguish random vs. player-chosen selection — for `selection:
+// "random"` (Suicide Bomber), the candidates this returns still need
+// partitioning by partitionByProtection below before drawing, since that
+// pool/fallback split is a per-ability override of the standard Protected
+// check, not a reuse of it. `kind: "president"` is deliberately excluded
+// here too — the President
 // isn't a CardInstance, so ability targeting him is handled as a separate
 // path in applySingleEliminateEffect using isLegalPresidentTarget below,
 // not through this function.
@@ -47,6 +51,12 @@ export function resolveEligibleTargets(
 
     if (selector.blendState === "faceDown" && card.faceUp !== false) return false;
     if (selector.blendState === "faceUp" && card.faceUp !== true) return false;
+
+    // Raw attribute check, not isProtectedActive's "active" gate — Suicide
+    // Bomber's forced reveal specifically targets face-down Protected+Blend
+    // characters (that's the whole point: they're hidden, so their
+    // Protected status isn't active yet), not just currently-active ones.
+    if (selector.hasAttribute && !hasAttribute(cardData, card, selector.hasAttribute)) return false;
 
     return true;
   });
@@ -177,6 +187,25 @@ export function isLegalEliminationTarget(
 // yet"), not a form of being shielded by guards, so nothing should bypass
 // it. This reading isn't spelled out explicitly in the rules text; flag if
 // wrong.
+// Suicide Bomber's bespoke random-target pool split: "Protected cards are
+// eliminated only if there are no other targets" — location-wide across
+// both factions, not the standard per-faction protector check (which
+// isLegalEliminationTarget/findProtectorCards implement instead) — a
+// deliberate per-ability override, per rev_day_engine_design memory.
+// Protected+Blend cards still face-down count as ordinary (primary-pool)
+// candidates, same "no protection while blended" rule as everywhere else.
+export function partitionByProtection(
+  cardData: CardData,
+  candidates: readonly CardInstance[],
+): { readonly primary: CardInstance[]; readonly fallback: CardInstance[] } {
+  const primary: CardInstance[] = [];
+  const fallback: CardInstance[] = [];
+  for (const card of candidates) {
+    (isProtectedActive(cardData, card) ? fallback : primary).push(card);
+  }
+  return { primary, fallback };
+}
+
 export function isLegalPresidentTarget(
   state: GameState,
   cardData: CardData,

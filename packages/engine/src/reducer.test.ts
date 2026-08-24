@@ -1368,3 +1368,174 @@ describe("applyAction: Commander General", () => {
     expect(closed.resolutionStack).toHaveLength(0);
   });
 });
+
+// Suicide Bomber's alarm ability requires everyone in the response order
+// to explicitly pass (unlike the reveal window, the alarm pass doesn't
+// skip anyone) before chooseTargets can resolve the random draw.
+function passWholeAlarm(state: GameState, alarmFrame: AlarmResolutionFrame) {
+  for (const responder of alarmFrame.order) {
+    state = act(state, responder, { type: "passResponse" });
+  }
+  return state;
+}
+
+// Walks all 3 steps of Suicide Bomber's sequenced ability (forced reveal,
+// random eliminate, eliminate self) with empty targetIds, once the alarm
+// has fully passed — for tests that only care about the end state.
+function resolveSuicideBomberAbility(state: GameState, player: PlayerId): GameState {
+  state = act(state, player, { type: "chooseTargets", targetIds: [] }); // forced reveal
+  state = act(state, player, { type: "chooseTargets", targetIds: [] }); // random eliminate
+  state = act(state, player, { type: "chooseTargets", targetIds: [] }); // eliminate self
+  return state;
+}
+
+describe("applyAction: random target selection (Suicide Bomber)", () => {
+  it("is deterministic — the same seed draws the same targets", () => {
+    let stateA = freshGame(["a", "b", "c"], 42);
+    const bomberA = stateA.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Suicide Bomber")!;
+    const loc = stateA.board[0]!.id;
+    const targetsA = stateA.cards
+      .filter((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")
+      .concat(stateA.cards.filter((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen"));
+    const player = stateA.turn.currentPlayerId;
+    const other = stateA.players.find((p) => p.id !== player)!.id;
+    stateA = placeInPlay(stateA, bomberA.id, loc, player);
+    for (const t of targetsA) stateA = placeInPlay(stateA, t.id, loc, other);
+    stateA = act(stateA, player, { type: "draw" });
+    stateA = act(stateA, player, { type: "activateAbility", cardId: bomberA.id, abilityIndex: 0 });
+    let alarmFrame = stateA.resolutionStack[1] as AlarmResolutionFrame;
+    stateA = passWholeAlarm(stateA, alarmFrame);
+    const resolvedA = resolveSuicideBomberAbility(stateA, player);
+    const eliminatedA = resolvedA.cards.filter((c) => c.zone === "eliminated").map((c) => c.id).sort();
+
+    // Rebuild the identical scenario from scratch with the same seed.
+    let stateB = freshGame(["a", "b", "c"], 42);
+    const bomberB = stateB.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Suicide Bomber")!;
+    const targetsB = stateB.cards
+      .filter((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")
+      .concat(stateB.cards.filter((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen"));
+    stateB = placeInPlay(stateB, bomberB.id, loc, player);
+    for (const t of targetsB) stateB = placeInPlay(stateB, t.id, loc, other);
+    stateB = act(stateB, player, { type: "draw" });
+    stateB = act(stateB, player, { type: "activateAbility", cardId: bomberB.id, abilityIndex: 0 });
+    alarmFrame = stateB.resolutionStack[1] as AlarmResolutionFrame;
+    stateB = passWholeAlarm(stateB, alarmFrame);
+    const resolvedB = resolveSuicideBomberAbility(stateB, player);
+    const eliminatedB = resolvedB.cards.filter((c) => c.zone === "eliminated").map((c) => c.id).sort();
+
+    expect(eliminatedA).toEqual(eliminatedB);
+  });
+
+  it("never touches the Protected fallback pool when the primary pool already has enough", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const bomber = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Suicide Bomber")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const unprotected = state.cards
+      .filter((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")
+      .concat(state.cards.filter((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen"));
+    expect(unprotected).toHaveLength(4); // exactly enough — no need to dip into fallback
+    const protectedLeader = state.cards.find((c) => c.kind === "leader" && c.defRef === "Head of Security");
+    state = placeInPlay(state, bomber.id, loc, player);
+    for (const t of unprotected) state = placeInPlay(state, t.id, loc, other);
+    if (protectedLeader) state = placeInPlay(state, protectedLeader.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    const resolved = resolveSuicideBomberAbility(state, player);
+
+    const eliminatedIds = new Set(resolved.cards.filter((c) => c.zone === "eliminated").map((c) => c.id));
+    expect(eliminatedIds).toEqual(new Set([...unprotected.map((c) => c.id), bomber.id]));
+    if (protectedLeader) expect(eliminatedIds.has(protectedLeader.id)).toBe(false);
+  });
+
+  it("falls back to Protected candidates once the primary pool runs out", () => {
+    // 8 players so both leaders needed here are guaranteed to be dealt.
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const bomber = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Suicide Bomber")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const primary = [
+      state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!,
+      state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!,
+    ];
+    const fallback = [
+      state.cards.find((c) => c.defRef === "Head of Security")!,
+      state.cards.find((c) => c.defRef === "Commander General")!,
+    ];
+    state = placeInPlay(state, bomber.id, loc, player);
+    for (const t of [...primary, ...fallback]) state = placeInPlay(state, t.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    const resolved = resolveSuicideBomberAbility(state, player);
+
+    // Only 4 candidates exist total (2 primary + 2 fallback) and 4 are
+    // needed — everyone gets eliminated, Protected included, plus the
+    // Bomber itself in the final step.
+    const eliminatedIds = new Set(resolved.cards.filter((c) => c.zone === "eliminated").map((c) => c.id));
+    for (const t of [...primary, ...fallback]) expect(eliminatedIds.has(t.id)).toBe(true);
+    expect(eliminatedIds.has(bomber.id)).toBe(true);
+  });
+
+  it("rejects submitting explicit targets for the random-draw step — they're drawn automatically", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const bomber = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Suicide Bomber")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const someCard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    state = placeInPlay(state, bomber.id, loc, player);
+    state = placeInPlay(state, someCard.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // forced reveal step
+
+    expect(() =>
+      act(state, player, { type: "chooseTargets", targetIds: [someCard.id] }),
+    ).toThrow();
+  });
+
+  it("walks the full sequence: forced reveal, then random eliminate, then eliminate itself", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const bomber = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Suicide Bomber")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const unprotected = state.cards
+      .filter((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")
+      .concat(state.cards.filter((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen"));
+    const hiddenWife = state.cards.find((c) => c.defRef === "Wife");
+    state = placeInPlay(state, bomber.id, loc, player);
+    for (const t of unprotected) state = placeInPlay(state, t.id, loc, other);
+    if (hiddenWife) state = placeInPlay(state, hiddenWife.id, loc, other, false); // face-down
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    // Step 1: forced reveal — the hidden Protected+Blend character gets
+    // flipped face-up automatically, no player choice.
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+    if (hiddenWife) expect(state.cards.find((c) => c.id === hiddenWife.id)!.faceUp).toBe(true);
+    expect(state.resolutionStack).toHaveLength(1); // still mid-ability
+
+    // Step 2: random eliminate — 4 targets drawn automatically.
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+    expect(state.cards.filter((c) => c.zone === "eliminated")).toHaveLength(4);
+    expect(state.resolutionStack).toHaveLength(1); // self-elimination step still pending
+
+    // Step 3: eliminate itself — only now does the ability actually end.
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+    expect(state.cards.find((c) => c.id === bomber.id)!.zone).toBe("eliminated");
+    expect(state.resolutionStack).toHaveLength(0);
+  });
+});

@@ -34,6 +34,7 @@ export { getAbilityEffects, abilityEffects } from "./data/abilityEffects";
 export {
   resolveEligibleTargets,
   resolveEligibleHandCards,
+  partitionByProtection,
   isLegalEliminationTarget,
   isLegalPresidentTarget,
 } from "./effects/targeting";

@@ -16,7 +16,15 @@ export interface AbilityResolutionFrame {
   readonly actingPlayerId: PlayerId;
   readonly abilityIndex: number;
   readonly locationId: string;
-  // null until targets have been chosen.
+  // Which of the ability's effects (AbilityDefinition.effects) is
+  // currently pending — undefined means 0. Most abilities have exactly
+  // one effect, so this stays unset; a sequence (Suicide Bomber: forced
+  // reveal, then random eliminate, then eliminate self) advances it one
+  // step at a time as each effect finishes, reusing this same frame
+  // rather than a separate "sequence" concept. No conditionals/bindings —
+  // just an ordered walk; see rev_day_engine_design memory.
+  readonly effectIndex?: number;
+  // null until targets have been chosen for the *current* effect.
   readonly targetIds: readonly string[] | null;
   // True once a protected-targeting reveal window has completed with at
   // least one reveal, and control has returned here for the acting player

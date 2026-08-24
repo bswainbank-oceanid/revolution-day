@@ -3,7 +3,7 @@ import { cardData } from "../data/cardData";
 import { setupGame } from "../setup";
 import type { CardInstance } from "../state/cards";
 import type { GameState } from "../state/game";
-import { isLegalEliminationTarget, isLegalPresidentTarget } from "./targeting";
+import { isLegalEliminationTarget, isLegalPresidentTarget, partitionByProtection } from "./targeting";
 
 function baseState(): GameState {
   return setupGame({ playerIds: ["a", "b"], seed: 1, cardData });
@@ -178,5 +178,37 @@ describe("isLegalPresidentTarget", () => {
     let state = setupGame({ playerIds: ["a", "b", "c"], seed: 1, cardData });
     state = withPresident(state, { status: "alive", locationId: "loc-0" }); // position 1
     expect(isLegalPresidentTarget(state, cardData, "a", false)).toBe(true);
+  });
+});
+
+describe("partitionByProtection", () => {
+  it("puts non-Protected cards in the primary pool", () => {
+    const guard = card({ id: "g", defRef: "Republican Guard", kind: "nonLeader" });
+    const { primary, fallback } = partitionByProtection(cardData, [guard]);
+    expect(primary.map((c) => c.id)).toEqual(["g"]);
+    expect(fallback).toEqual([]);
+  });
+
+  it("puts active Protected cards in the fallback pool", () => {
+    const hos = card({ id: "h", defRef: "Head of Security", kind: "leader" });
+    const { primary, fallback } = partitionByProtection(cardData, [hos]);
+    expect(primary).toEqual([]);
+    expect(fallback.map((c) => c.id)).toEqual(["h"]);
+  });
+
+  it("treats a face-down Protected+Blend card as primary — no protection while blended", () => {
+    const wife = card({ id: "w", defRef: "Wife", kind: "leader", faceUp: false });
+    const { primary, fallback } = partitionByProtection(cardData, [wife]);
+    expect(primary.map((c) => c.id)).toEqual(["w"]);
+    expect(fallback).toEqual([]);
+  });
+
+  it("splits a mixed set correctly", () => {
+    const guard = card({ id: "g", defRef: "Republican Guard", kind: "nonLeader" });
+    const hos = card({ id: "h", defRef: "Head of Security", kind: "leader" });
+    const revealedWife = card({ id: "w", defRef: "Wife", kind: "leader", faceUp: true });
+    const { primary, fallback } = partitionByProtection(cardData, [guard, hos, revealedWife]);
+    expect(primary.map((c) => c.id)).toEqual(["g"]);
+    expect(fallback.map((c) => c.id).sort()).toEqual(["h", "w"]);
   });
 });

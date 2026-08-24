@@ -143,6 +143,44 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
       ],
     },
   ],
+  // Full 3-step sequence, walked in order by AbilityResolutionFrame.effectIndex
+  // (see rev_day_engine_design memory): force-reveal every blended+Protected
+  // character at the location (so the random draw below can't be skewed by
+  // hidden Protected status), randomly eliminate 4 (protected cards only if
+  // there's no other choice), then eliminate the Bomber itself.
+  "Suicide Bomber": [
+    {
+      type: "Activate",
+      alarm: true,
+      effects: [
+        {
+          verb: "reveal",
+          target: {
+            ref: "filter",
+            location: { mode: "self" },
+            blendState: "faceDown",
+            hasAttribute: "Protected",
+            count: { mode: "all" },
+            selection: "playerChoice",
+          },
+        },
+        {
+          verb: "eliminate",
+          target: {
+            ref: "filter",
+            location: { mode: "self" },
+            count: { mode: "exact", value: 4 },
+            selection: "random",
+            randomPool: { pool: "unprotected", fallbackPool: "protected" },
+          },
+        },
+        {
+          verb: "eliminate",
+          target: { ref: "self" },
+        },
+      ],
+    },
+  ],
 };
 
 export function getAbilityEffects(defRef: string, abilityIndex: number): AbilityDefinition | undefined {
