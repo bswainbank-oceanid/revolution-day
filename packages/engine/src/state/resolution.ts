@@ -1,3 +1,4 @@
+import type { Faction } from "../types";
 import type { PlayerId } from "./game";
 
 // The four interrupt patterns from the engine design (see
@@ -82,19 +83,49 @@ export interface MotorcadeInterceptionWindowFrame {
   readonly nextIndex: number;
 }
 
+// Opens once a queued PendingPassiveTrigger (see below) is actually
+// activated — Celebrity ("all players can immediately play any number of
+// cards at this location") or Martyr ("its controller can immediately play
+// any number of rebel cards..."). `order` is either every player (Celebrity,
+// table order starting after whoever controlled the eliminating card) or
+// just the eliminated card's controller alone (Martyr) — see
+// data/passives.ts. `locationId`/`faction` are captured from the trigger,
+// since the eliminated source card itself no longer has a locationId by the
+// time this opens.
+export interface ReactivePassiveWindowFrame {
+  readonly kind: "reactivePassiveWindow";
+  readonly sourceCardId: string;
+  readonly locationId: string;
+  readonly faction?: Faction;
+  readonly order: readonly PlayerId[];
+  readonly nextIndex: number;
+}
+
 export type ResolutionFrame =
   | AbilityResolutionFrame
   | AlarmResolutionFrame
   | ProtectedTargetingWindowFrame
-  | MotorcadeInterceptionWindowFrame;
+  | MotorcadeInterceptionWindowFrame
+  | ReactivePassiveWindowFrame;
 
 // The post-action FIFO passive queue (Celebrity, Martyr) is deliberately
 // *not* a stack frame — it queues during resolution but only drains after
 // the entire top-level action (including any alarm sub-resolution)
 // completes, the opposite timing from alarms. Lives alongside the stack in
-// GameState, not on it.
+// GameState, not on it. Each entry is activated (turned into a
+// ReactivePassiveWindowFrame) one at a time, only once the stack is fully
+// empty again — see drainPendingPassives in reducer.ts.
 export interface PendingPassiveTrigger {
   readonly event: "eliminated";
   readonly cardId: string;
+  // Captured at elimination time, since the card's own locationId is
+  // cleared once it's actually gone.
+  readonly locationId: string;
   readonly scope: "controller" | "allPlayers";
+  readonly faction?: Faction;
+  // Whoever controlled the *eliminating* card — anchors table order for
+  // an "allPlayers" window the same way other windows start after the
+  // acting player.
+  readonly triggeredByPlayerId: PlayerId;
+  readonly controllerPlayerId: PlayerId;
 }

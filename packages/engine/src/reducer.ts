@@ -1,6 +1,7 @@
 import type { Action } from "./actions";
 import { getAbilityEffects } from "./data/abilityEffects";
-import type { Condition, ConditionOperand, EffectNode, TargetCount } from "./effects/dsl";
+import { getPassive } from "./data/passives";
+import type { Condition, ConditionOperand, EffectNode, TargetCount, TargetSelector } from "./effects/dsl";
 import {
   hasRevealOpportunity,
   isLegalEliminationTarget,
@@ -21,7 +22,9 @@ import type {
   AbilityResolutionFrame,
   AlarmResolutionFrame,
   MotorcadeInterceptionWindowFrame,
+  PendingPassiveTrigger,
   ProtectedTargetingWindowFrame,
+  ReactivePassiveWindowFrame,
   ResolutionFrame,
 } from "./state/resolution";
 import type { CardData } from "./types";
@@ -51,6 +54,20 @@ export function applyAction(
   action: Action,
   cardData: CardData,
 ): GameState {
+  // drainPendingPassives wraps every path: a card being eliminated queues
+  // a PendingPassiveTrigger (Celebrity/Martyr) rather than opening a
+  // window immediately, and that queue only starts draining once the
+  // *entire* top-level action (including any alarm/window sub-resolution)
+  // has fully completed and the stack is genuinely empty again.
+  return drainPendingPassives(applyActionInner(state, actingPlayerId, action, cardData));
+}
+
+function applyActionInner(
+  state: GameState,
+  actingPlayerId: PlayerId,
+  action: Action,
+  cardData: CardData,
+): GameState {
   if (state.resolutionStack.length > 0) {
     return applyResolutionAction(state, actingPlayerId, action, cardData);
   }
@@ -75,6 +92,44 @@ export function applyAction(
     default:
       throw new Error(`Action not yet implemented: ${action.type}`);
   }
+}
+
+// Once the entire top-level action (including any alarm/window
+// sub-resolution) has fully completed and the stack is genuinely empty
+// again, activates the next queued PendingPassiveTrigger (if any) into a
+// real ReactivePassiveWindowFrame — one at a time; a later applyAction
+// call re-checks once that window itself finishes, cascading through the
+// rest of the queue across however many further actions it takes.
+function drainPendingPassives(state: GameState): GameState {
+  if (state.resolutionStack.length > 0 || state.pendingPassiveQueue.length === 0) {
+    return state;
+  }
+  const [trigger, ...rest] = state.pendingPassiveQueue;
+  const order =
+    trigger!.scope === "controller"
+      ? [trigger!.controllerPlayerId]
+      : buildReactivePassiveOrder(state, trigger!.triggeredByPlayerId);
+  const windowFrame: ReactivePassiveWindowFrame = {
+    kind: "reactivePassiveWindow",
+    sourceCardId: trigger!.cardId,
+    locationId: trigger!.locationId,
+    faction: trigger!.faction,
+    order,
+    nextIndex: 0,
+  };
+  return { ...state, pendingPassiveQueue: rest, resolutionStack: [windowFrame] };
+}
+
+// "All players" order (Celebrity): table order starting after whoever
+// controlled the eliminating card, wrapping fully around including them
+// last — same shape as the alarm-response pass, everyone gets a turn,
+// nobody skipped. "Controller only" (Martyr) doesn't need this at all —
+// see drainPendingPassives.
+function buildReactivePassiveOrder(state: GameState, triggeredByPlayerId: PlayerId): PlayerId[] {
+  const seats = state.players.slice().sort((a, b) => a.seatIndex - b.seatIndex);
+  const anchorSeat = seats.find((p) => p.id === triggeredByPlayerId)!.seatIndex;
+  const n = seats.length;
+  return Array.from({ length: n }, (_, i) => seats.find((p) => p.seatIndex === (anchorSeat + i + 1) % n)!.id);
 }
 
 // Dispatches to whatever the top resolution-stack frame expects next.
@@ -117,8 +172,10 @@ function applyResolutionAction(
       return applyProtectedTargetingWindowAction(state, frame, actingPlayerId, action);
     case "motorcadeInterceptionWindow":
       return applyMotorcadeInterceptionWindowAction(state, frame, actingPlayerId, action);
+    case "reactivePassiveWindow":
+      return applyReactivePassiveWindowAction(state, cardData, frame, actingPlayerId, action);
     default:
-      // All four ResolutionFrame kinds are handled above — this is
+      // All five ResolutionFrame kinds are handled above — this is
       // unreachable given the current type, kept only as a defensive
       // fallback if a new frame kind is ever added without updating this
       // switch.
@@ -329,7 +386,9 @@ function applyPlayMotorcade(
       };
       return { ...state, cards, resolutionStack: [windowFrame], turn: spendAction(state) };
     }
-    president = computeForwardMove(state.board, president);
+    const newPresident = computeForwardMove(state.board, president);
+    cards = applyFollowPresidentPassive(cards, presidentLocationId, newPresident);
+    president = newPresident;
   } else if (president.status === "eliminated") {
     // "After the President has been eliminated, move a card you control to
     // any location" — ignores location-type restrictions, per the general
@@ -378,16 +437,34 @@ function computeForwardMove(board: BoardLayout, president: PresidentState): Pres
   return { status: "alive", locationId: board[nextIndex]!.id };
 }
 
-// Throng of Admirers and Angry Mob are the only two cards with this
-// passive — matched by name rather than a structured passive DSL, since
-// passives (unlike abilities and win conditions) don't have one yet; see
-// rev_day_engine_design memory.
-const MOTORCADE_INTERCEPTOR_DEFREFS = new Set(["Throng of Admirers", "Angry Mob"]);
+// Bodyguard's unconditional, immediate passive: "if the President moves
+// from this location, move this card to the same location" — every
+// Bodyguard-passive card at the President's *old* location follows him to
+// wherever he actually ends up. Skipped if he instead survives off the
+// board (no "same location" to follow to) — not spelled out explicitly in
+// the rules text, the most sensible reading; flag if wrong. Any future
+// president-move implementation (Traffic Cop's ability isn't encoded yet)
+// needs this same hook.
+function applyFollowPresidentPassive(
+  cards: readonly CardInstance[],
+  fromLocationId: string,
+  newPresident: PresidentState,
+): CardInstance[] {
+  if (newPresident.status !== "alive" || !newPresident.locationId) return [...cards];
+  const toLocationId = newPresident.locationId;
+  return cards.map((c) =>
+    c.zone === "inPlay" && c.locationId === fromLocationId && getPassive(c.defRef)?.kind === "followPresident"
+      ? { ...c, locationId: toLocationId }
+      : c,
+  );
+}
 
 function findMotorcadeInterceptors(cards: readonly CardInstance[], presidentLocationId: string): CardInstance[] {
   return cards.filter(
     (c) =>
-      c.zone === "inPlay" && c.locationId === presidentLocationId && MOTORCADE_INTERCEPTOR_DEFREFS.has(c.defRef),
+      c.zone === "inPlay" &&
+      c.locationId === presidentLocationId &&
+      getPassive(c.defRef)?.kind === "motorcadeInterception",
   );
 }
 
@@ -432,16 +509,19 @@ function applyMotorcadeInterceptionWindowAction(
       card.zone !== "inPlay" ||
       card.controller !== actingPlayerId ||
       card.locationId !== frame.presidentLocationId ||
-      !MOTORCADE_INTERCEPTOR_DEFREFS.has(card.defRef)
+      getPassive(card.defRef)?.kind !== "motorcadeInterception"
     ) {
       throw new Error(`${action.cardId} cannot intercept this Motorcade`);
     }
-    const cards = state.cards.map((c) =>
-      c.id === card.id ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
-    );
+    // Self-sacrifice — the controller eliminates their own card, so
+    // they're the attributed eliminator too (matters if a future card
+    // combines this shape with a reactive passive).
+    const { card: updated, trigger } = eliminateCard(card, actingPlayerId);
+    const cards = state.cards.map((c) => (c.id === card.id ? updated : c));
+    const pendingPassiveQueue = trigger ? [...state.pendingPassiveQueue, trigger] : state.pendingPassiveQueue;
     // The move is cancelled — the President's status/location are simply
     // left unchanged.
-    return { ...state, cards, resolutionStack: state.resolutionStack.slice(0, -1) };
+    return { ...state, cards, pendingPassiveQueue, resolutionStack: state.resolutionStack.slice(0, -1) };
   }
   if (action.type !== "passIntercept") {
     throw new Error(`Expected interceptMotorcade or passIntercept, got: ${action.type}`);
@@ -455,7 +535,57 @@ function applyMotorcadeInterceptionWindowAction(
 
   // Everyone passed — the move applies as normal.
   const president = computeForwardMove(state.board, state.president);
-  return { ...state, president, resolutionStack: state.resolutionStack.slice(0, -1) };
+  const cards = applyFollowPresidentPassive(state.cards, frame.presidentLocationId, president);
+  return { ...state, president, cards, resolutionStack: state.resolutionStack.slice(0, -1) };
+}
+
+// Celebrity/Martyr's reactive queue, once activated (see
+// drainPendingPassives): each player in `order` may play any number of
+// matching cards from their hand at the captured location (ignoring
+// location-type restrictions, same principle as Commander General's
+// "play" effect — reuses the same eligibility/validation helpers), or
+// decline. Unlike the Motorcade interception window, there's no "first
+// yes wins" here — every player in order gets their own independent turn
+// to play (or not), since the ability text has no such exclusivity.
+function applyReactivePassiveWindowAction(
+  state: GameState,
+  cardData: CardData,
+  frame: ReactivePassiveWindowFrame,
+  actingPlayerId: PlayerId,
+  action: Action,
+): GameState {
+  const expectedPlayerId = frame.order[frame.nextIndex]!;
+  if (actingPlayerId !== expectedPlayerId) {
+    throw new Error(`It is not ${actingPlayerId}'s turn in this reactive-passive window`);
+  }
+
+  let cards = state.cards;
+  if (action.type === "playReactive") {
+    const selector: Extract<TargetSelector, { ref: "filter" }> = {
+      ref: "filter",
+      ...(frame.faction ? { faction: frame.faction } : {}),
+      count: { mode: "unbounded" },
+      selection: "playerChoice",
+    };
+    const eligible = resolveEligibleHandCards(state, cardData, selector, actingPlayerId);
+    validateTargets(selector.count, action.cardIds, eligible.map((c) => c.id));
+
+    const targetSet = new Set(action.cardIds);
+    cards = state.cards.map((c) => {
+      if (!targetSet.has(c.id)) return c;
+      const faceUp = !hasAttribute(cardData, c, "Blend");
+      return { ...c, zone: "inPlay" as const, locationId: frame.locationId, faceUp };
+    });
+  } else if (action.type !== "passReactive") {
+    throw new Error(`Expected playReactive or passReactive, got: ${action.type}`);
+  }
+
+  const nextIndex = frame.nextIndex + 1;
+  if (nextIndex < frame.order.length) {
+    const updatedFrame: ReactivePassiveWindowFrame = { ...frame, nextIndex };
+    return { ...state, cards, resolutionStack: [...state.resolutionStack.slice(0, -1), updatedFrame] };
+  }
+  return { ...state, cards, resolutionStack: state.resolutionStack.slice(0, -1) };
 }
 
 function applyActivateAbility(
@@ -1006,18 +1136,15 @@ function applyRandomEliminateEffect(
   const { targetIds: drawnIds, rng } = drawRandomTargets(state.rng, primary, fallback, effect.target.count.value);
 
   const targetSet = new Set(drawnIds);
-  const cards = state.cards.map((c) =>
-    targetSet.has(c.id)
-      ? {
-          ...c,
-          zone: "eliminated" as const,
-          locationId: undefined,
-          faceUp: undefined,
-          eliminatedByPlayerId: sourceCard.controller ?? undefined,
-        }
-      : c,
-  );
-  return finishEffectStep({ ...state, cards, rng }, frame);
+  const triggers: PendingPassiveTrigger[] = [];
+  const cards = state.cards.map((c) => {
+    if (!targetSet.has(c.id)) return c;
+    const { card: updated, trigger } = eliminateCard(c, sourceCard.controller);
+    if (trigger) triggers.push(trigger);
+    return updated;
+  });
+  const pendingPassiveQueue = triggers.length > 0 ? [...state.pendingPassiveQueue, ...triggers] : state.pendingPassiveQueue;
+  return finishEffectStep({ ...state, cards, rng, pendingPassiveQueue }, frame);
 }
 
 // Exhausts `primary` fully before touching `fallback` at all — "protected
@@ -1050,6 +1177,53 @@ function drawRandomTargets(
 // parallel target-selection type.
 const PRESIDENT_TARGET_ID = "president";
 
+// Applies elimination to a single in-play card, honoring passive
+// interception — the one place this actually happens, shared by every
+// elimination path (a direct/random/self/binding eliminate effect, or a
+// player-chosen Motorcade interception) so a passive can't be missed by
+// forgetting to check it at some particular call site.
+// - A replacement passive (Mr. Lucky) swaps the event for "return to
+//   hand" entirely — the card never actually reaches the eliminated zone,
+//   so no attribution/trigger applies either.
+// - Otherwise the card is eliminated normally, attributed to
+//   `eliminatedByPlayerId` (backing Master Assassin's win condition), and
+//   a reactive passive (Celebrity/Martyr) additionally queues a
+//   PendingPassiveTrigger — drained only once the whole top-level action
+//   fully completes, see drainPendingPassives.
+function eliminateCard(
+  card: CardInstance,
+  eliminatedByPlayerId: PlayerId | null,
+): { card: CardInstance; trigger?: PendingPassiveTrigger } {
+  const passive = getPassive(card.defRef);
+  if (passive?.kind === "replacementOnElimination") {
+    return { card: { ...card, zone: "hand" as const, locationId: undefined, faceUp: undefined } };
+  }
+
+  const attributedTo = eliminatedByPlayerId ?? card.controller!;
+  const eliminated: CardInstance = {
+    ...card,
+    zone: "eliminated" as const,
+    locationId: undefined,
+    faceUp: undefined,
+    eliminatedByPlayerId: attributedTo,
+  };
+  if (passive?.kind !== "reactiveOnElimination") {
+    return { card: eliminated };
+  }
+  return {
+    card: eliminated,
+    trigger: {
+      event: "eliminated",
+      cardId: card.id,
+      locationId: card.locationId!,
+      scope: passive.scope,
+      faction: passive.playFaction,
+      triggeredByPlayerId: attributedTo,
+      controllerPlayerId: card.controller!,
+    },
+  };
+}
+
 // Applies a single, already-finalized elimination target — either a card
 // or the President sentinel. Every currently-encoded ability is
 // count-exact-1, so "single" isn't a limitation in practice yet.
@@ -1062,7 +1236,7 @@ function eliminateSingleTarget(
   state: GameState,
   targetId: string,
   eliminatedByPlayerId: PlayerId | null,
-): Pick<GameState, "cards" | "president" | "turn"> {
+): Pick<GameState, "cards" | "president" | "turn" | "pendingPassiveQueue"> {
   if (targetId === PRESIDENT_TARGET_ID) {
     return {
       cards: state.cards,
@@ -1073,22 +1247,16 @@ function eliminateSingleTarget(
         eliminatedByPlayerId: eliminatedByPlayerId ?? undefined,
       },
       turn: { ...state.turn, endgameTurnsRemaining: 3 },
+      pendingPassiveQueue: state.pendingPassiveQueue,
     };
   }
+  const target = state.cards.find((c) => c.id === targetId)!;
+  const { card: updated, trigger } = eliminateCard(target, eliminatedByPlayerId);
   return {
     president: state.president,
     turn: state.turn,
-    cards: state.cards.map((c) =>
-      c.id === targetId
-        ? {
-            ...c,
-            zone: "eliminated" as const,
-            locationId: undefined,
-            faceUp: undefined,
-            eliminatedByPlayerId: eliminatedByPlayerId ?? undefined,
-          }
-        : c,
-    ),
+    cards: state.cards.map((c) => (c.id === targetId ? updated : c)),
+    pendingPassiveQueue: trigger ? [...state.pendingPassiveQueue, trigger] : state.pendingPassiveQueue,
   };
 }
 
@@ -1097,8 +1265,8 @@ function eliminateSingleTarget(
 // window) and advances past the effect step that was awaiting it.
 function finalizeEliminateEffect(state: GameState, frame: AbilityResolutionFrame, targetId: string): GameState {
   const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId)!;
-  const { cards, president, turn } = eliminateSingleTarget(state, targetId, sourceCard.controller);
-  return finishEffectStep({ ...state, cards, president, turn }, frame);
+  const { cards, president, turn, pendingPassiveQueue } = eliminateSingleTarget(state, targetId, sourceCard.controller);
+  return finishEffectStep({ ...state, cards, president, turn, pendingPassiveQueue }, frame);
 }
 
 // Pops the current top resolution frame and, if that leaves a paused
@@ -1339,8 +1507,12 @@ function applyAlarmAction(
     return { ...withReveal, resolutionStack: [...withReveal.resolutionStack, pendingFrame, windowFrame] };
   }
 
-  const { cards, president, turn } = eliminateSingleTarget(withReveal, declared.targetId, card.controller);
-  return advanceAlarmPass({ ...withReveal, cards, president, turn }, frame);
+  const { cards, president, turn, pendingPassiveQueue } = eliminateSingleTarget(
+    withReveal,
+    declared.targetId,
+    card.controller,
+  );
+  return advanceAlarmPass({ ...withReveal, cards, president, turn, pendingPassiveQueue }, frame);
 }
 
 function advanceAlarmPass(state: GameState, frame: AlarmResolutionFrame): GameState {

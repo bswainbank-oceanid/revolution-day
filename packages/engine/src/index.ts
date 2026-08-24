@@ -55,6 +55,8 @@ export type {
 export { evaluateWinConditions } from "./effects/winConditions";
 export type { WinPredicate } from "./effects/winConditions";
 export { winConditions } from "./data/winConditions";
+export type { PassiveDefinition } from "./effects/passives";
+export { getPassive, passives } from "./data/passives";
 
 import { cardData } from "./data/cardData";
 

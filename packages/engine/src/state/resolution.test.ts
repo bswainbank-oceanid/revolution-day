@@ -4,6 +4,7 @@ import type {
   AlarmResolutionFrame,
   MotorcadeInterceptionWindowFrame,
   ProtectedTargetingWindowFrame,
+  ReactivePassiveWindowFrame,
   ResolutionFrame,
 } from "./resolution";
 
@@ -20,6 +21,8 @@ function describeFrame(frame: ResolutionFrame): string {
       return `reveal window for ${frame.declaredTargetId}`;
     case "motorcadeInterceptionWindow":
       return `intercept window at ${frame.presidentLocationId}`;
+    case "reactivePassiveWindow":
+      return `reactive window at ${frame.locationId}`;
   }
 }
 
@@ -70,5 +73,17 @@ describe("resolution frames", () => {
       nextIndex: 0,
     };
     expect(describeFrame(frame)).toBe("intercept window at loc-0");
+  });
+
+  it("ReactivePassiveWindowFrame carries the captured location/faction, not the source card's own", () => {
+    const frame: ReactivePassiveWindowFrame = {
+      kind: "reactivePassiveWindow",
+      sourceCardId: "card-1",
+      locationId: "loc-0",
+      faction: "Rebel",
+      order: ["p1"],
+      nextIndex: 0,
+    };
+    expect(describeFrame(frame)).toBe("reactive window at loc-0");
   });
 });

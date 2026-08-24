@@ -8,6 +8,7 @@ import type {
   AlarmResolutionFrame,
   MotorcadeInterceptionWindowFrame,
   ProtectedTargetingWindowFrame,
+  ReactivePassiveWindowFrame,
 } from "./state/resolution";
 import { setupGame } from "./setup";
 
@@ -642,7 +643,10 @@ describe("applyAction: alarm resolution", () => {
     const player = state.turn.currentPlayerId;
     const other = state.players.find((p) => p.id !== player)!.id;
     const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
-    const target = state.cards.find((c) => c.kind === "nonLeader" && c.id !== gunman.id)!;
+    // Republican Guard specifically — no passive, so this stays focused on
+    // alarm resolution rather than also exercising the reactive-passive
+    // queue (see the dedicated passives describe block for that).
+    const target = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
     const loc = state.board[0]!.id;
     state = placeInPlay(state, gunman.id, loc, player, false); // starts face-down
     state = placeInPlay(state, target.id, loc, other);
@@ -1673,5 +1677,187 @@ describe("applyAction: conditionals (if/bindings)", () => {
     const resolvedTarget = state.cards.find((c) => c.id === rebelTarget.id)!;
     expect(resolvedTarget.controller).toBe(player);
     expect(state.resolutionStack).toHaveLength(0);
+  });
+});
+
+describe("applyAction: passives", () => {
+  it("Mr. Lucky's replacement passive returns him to hand instead of eliminating him", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const mrLucky = state.cards.find((c) => c.defRef === "Mr. Lucky")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, mrLucky.id, loc, other, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [mrLucky.id] });
+
+    const resolvedLucky = resolved.cards.find((c) => c.id === mrLucky.id)!;
+    expect(resolvedLucky.zone).toBe("hand");
+    expect(resolvedLucky.controller).toBe(other);
+    expect(resolved.resolutionStack).toHaveLength(0); // a replacement, not a real elimination — no reactive trigger
+  });
+
+  it("Celebrity's reactive passive opens an all-players window once the eliminating action fully resolves", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const celebrity = state.cards.find((c) => c.defRef === "Celebrity")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, celebrity.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [celebrity.id] });
+
+    expect(resolved.cards.find((c) => c.id === celebrity.id)!.zone).toBe("eliminated");
+    expect(resolved.resolutionStack).toHaveLength(1);
+    const frame = resolved.resolutionStack[0] as ReactivePassiveWindowFrame;
+    expect(frame.kind).toBe("reactivePassiveWindow");
+    expect(frame.locationId).toBe(loc);
+    expect(frame.faction).toBeUndefined(); // no faction restriction, unlike Martyr
+    expect(frame.order).toHaveLength(3); // every player, not just the controller
+    expect(frame.order.at(-1)).toBe(player); // the eliminating player's turn comes last, same alarm-pass convention
+
+    let s = resolved;
+    for (const p of frame.order) s = act(s, p, { type: "passReactive" });
+    expect(s.resolutionStack).toHaveLength(0);
+  });
+
+  it("lets a player actually play a card during Celebrity's window, ignoring location restrictions", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const celebrity = state.cards.find((c) => c.defRef === "Celebrity")!;
+    // Republican Guard is Secure-only — playing it at a Street location
+    // during the window only works if location restrictions are ignored.
+    const secondGuard = state.cards.filter((c) => c.defRef === "Republican Guard")[1]!;
+    const streetLoc = state.board.find((l) => l.type === "Street")!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, guard.id, streetLoc, player);
+    state = placeInPlay(state, celebrity.id, streetLoc, other);
+    state = placeInHand(state, secondGuard.id, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [celebrity.id] });
+
+    const frame = state.resolutionStack[0] as ReactivePassiveWindowFrame;
+    for (const p of frame.order) {
+      if (p === other) {
+        state = act(state, p, { type: "playReactive", cardIds: [secondGuard.id] });
+      } else {
+        state = act(state, p, { type: "passReactive" });
+      }
+    }
+
+    const played = state.cards.find((c) => c.id === secondGuard.id)!;
+    expect(played.zone).toBe("inPlay");
+    expect(played.locationId).toBe(streetLoc); // normally illegal for a Secure-only card
+    expect(state.resolutionStack).toHaveLength(0);
+  });
+
+  it("Martyr's reactive passive is scoped to its controller only, and only rebel cards", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const martyr = state.cards.find((c) => c.defRef === "Martyr")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, martyr.id, loc, other, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [martyr.id] });
+
+    const frame = state.resolutionStack[0] as ReactivePassiveWindowFrame;
+    expect(frame.order).toEqual([other]); // Martyr's own controller only
+    expect(frame.faction).toBe("Rebel");
+
+    const regimeCard = state.cards.filter((c) => c.defRef === "Republican Guard")[1]!;
+    state = placeInHand(state, regimeCard.id, other);
+    expect(() => act(state, other, { type: "playReactive", cardIds: [regimeCard.id] })).toThrow();
+
+    const rebelCard = state.cards.find((c) => c.defRef === "Assassin")!;
+    state = placeInHand(state, rebelCard.id, other);
+    state = act(state, other, { type: "playReactive", cardIds: [rebelCard.id] });
+
+    expect(state.cards.find((c) => c.id === rebelCard.id)!.zone).toBe("inPlay");
+    expect(state.resolutionStack).toHaveLength(0); // only 1 player in order — now done
+  });
+
+  it("drains multiple queued reactive triggers one window at a time", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const bomber = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Suicide Bomber")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const celebrity = state.cards.find((c) => c.defRef === "Celebrity")!;
+    const martyr = state.cards.find((c) => c.defRef === "Martyr")!;
+    const filler = state.cards.filter((c) => c.defRef === "Republican Guard"); // 2 copies
+    state = placeInPlay(state, bomber.id, loc, player);
+    state = placeInPlay(state, celebrity.id, loc, other);
+    state = placeInPlay(state, martyr.id, loc, other);
+    for (const f of filler) state = placeInPlay(state, f.id, loc, other);
+    // Exactly 4 candidates (Celebrity, Martyr, 2x Republican Guard) for a
+    // count-4 random draw — every one of them gets eliminated regardless
+    // of shuffle order, so both reactive triggers fire deterministically.
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // forced reveal
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // random eliminate
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // eliminate self
+
+    expect(state.resolutionStack).toHaveLength(1);
+    let frame = state.resolutionStack[0] as ReactivePassiveWindowFrame;
+    const firstSource = frame.sourceCardId;
+    for (const p of frame.order) state = act(state, p, { type: "passReactive" });
+
+    // First window closed — the second queued trigger's window opens next.
+    expect(state.resolutionStack).toHaveLength(1);
+    frame = state.resolutionStack[0] as ReactivePassiveWindowFrame;
+    expect(frame.sourceCardId).not.toBe(firstSource);
+    expect([celebrity.id, martyr.id]).toContain(frame.sourceCardId);
+    for (const p of frame.order) state = act(state, p, { type: "passReactive" });
+
+    expect(state.resolutionStack).toHaveLength(0);
+  });
+
+  it("Bodyguard follows the President when he moves to a new location", () => {
+    let state = freshGame();
+    state = enterPresident(state);
+    const presidentLoc = state.president.locationId!;
+    const bodyguard = state.cards.find((c) => c.defRef === "Bodyguard")!;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, bodyguard.id, presidentLoc, player);
+    const motorcade = state.cards.find((c) => c.kind === "motorcade" && c.zone === "deck")!;
+    state = placeInHand(state, motorcade.id, player);
+
+    const moved = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+
+    expect(moved.president.locationId).not.toBe(presidentLoc);
+    expect(moved.cards.find((c) => c.id === bodyguard.id)!.locationId).toBe(moved.president.locationId);
+  });
+
+  it("does not move a Bodyguard that wasn't at the President's location", () => {
+    let state = freshGame();
+    state = enterPresident(state);
+    const presidentLoc = state.president.locationId!;
+    const elsewhere = state.board.find((l) => l.id !== presidentLoc)!.id;
+    const bodyguard = state.cards.find((c) => c.defRef === "Bodyguard")!;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, bodyguard.id, elsewhere, player);
+    const motorcade = state.cards.find((c) => c.kind === "motorcade" && c.zone === "deck")!;
+    state = placeInHand(state, motorcade.id, player);
+
+    const moved = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+
+    expect(moved.cards.find((c) => c.id === bodyguard.id)!.locationId).toBe(elsewhere);
   });
 });

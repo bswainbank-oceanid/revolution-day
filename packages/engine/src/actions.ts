@@ -49,6 +49,10 @@ export type ResolutionAction =
   // MotorcadeInterceptionWindowFrame: eliminate the eligible card to
   // cancel the move, or decline.
   | { readonly type: "interceptMotorcade"; readonly cardId: string }
-  | { readonly type: "passIntercept" };
+  | { readonly type: "passIntercept" }
+  // ReactivePassiveWindowFrame: play any number of eligible hand cards at
+  // the captured location, or decline.
+  | { readonly type: "playReactive"; readonly cardIds: readonly string[] }
+  | { readonly type: "passReactive" };
 
 export type Action = TurnAction | ResolutionAction;
