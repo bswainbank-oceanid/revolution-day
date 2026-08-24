@@ -64,7 +64,10 @@ export interface AlarmResolutionFrame {
 export interface ProtectedTargetingWindowFrame {
   readonly kind: "protectedTargetingWindow";
   readonly declaringPlayerId: PlayerId;
-  readonly declaredTargetId: string;
+  // Usually one target, but a multi-target eliminate (Death Squad's "one
+  // or two targets") declares its whole batch together — the window
+  // covers the shared location, not any single target within it.
+  readonly declaredTargetIds: readonly string[];
   readonly locationId: string;
   readonly order: readonly PlayerId[];
   readonly nextIndex: number;

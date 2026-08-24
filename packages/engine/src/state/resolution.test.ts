@@ -18,7 +18,7 @@ function describeFrame(frame: ResolutionFrame): string {
     case "alarmResolution":
       return `alarm at ${frame.locationId}`;
     case "protectedTargetingWindow":
-      return `reveal window for ${frame.declaredTargetId}`;
+      return `reveal window for ${frame.declaredTargetIds.join(",")}`;
     case "motorcadeInterceptionWindow":
       return `intercept window at ${frame.presidentLocationId}`;
     case "reactivePassiveWindow":
@@ -55,7 +55,7 @@ describe("resolution frames", () => {
     const frame: ProtectedTargetingWindowFrame = {
       kind: "protectedTargetingWindow",
       declaringPlayerId: "p1",
-      declaredTargetId: "card-president",
+      declaredTargetIds: ["card-president"],
       locationId: "loc-0",
       order: ["p2", "p3"],
       nextIndex: 0,

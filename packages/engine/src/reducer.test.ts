@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { cardData } from "./data/cardData";
 import { applyAction } from "./reducer";
 import type { Action } from "./actions";
+import type { CardInstance } from "./state/cards";
 import type { GameState, PlayerId } from "./state/game";
 import type {
   AbilityResolutionFrame,
@@ -79,10 +80,43 @@ describe("applyAction: draw", () => {
     expect(() => act(state, other, { type: "draw" })).toThrow();
   });
 
-  it("throws on an empty deck rather than silently no-op-ing", () => {
+  it("the mandatory draw is a no-op on an empty deck when nobody holds a Motorcade", () => {
     const state = freshGame();
     const emptyDeck = { ...state, cards: state.cards.filter((c) => c.zone !== "deck") };
-    expect(() => act(emptyDeck, state.turn.currentPlayerId, { type: "draw" })).toThrow();
+    const before = emptyDeck.cards.filter((c) => c.zone === "hand" && c.controller === state.turn.currentPlayerId).length;
+
+    const resolved = act(emptyDeck, state.turn.currentPlayerId, { type: "draw" });
+
+    expect(resolved.turn.phase).toBe("action");
+    expect(
+      resolved.cards.filter((c) => c.zone === "hand" && c.controller === state.turn.currentPlayerId).length,
+    ).toBe(before);
+  });
+
+  it("throws on a budgeted (non-mandatory) draw once the deck is empty", () => {
+    let state = freshGame();
+    state = { ...state, cards: state.cards.filter((c) => c.zone !== "deck") };
+    const player = state.turn.currentPlayerId;
+    state = act(state, player, { type: "draw" }); // mandatory draw — no-ops, reaches the action phase
+
+    expect(() => act(state, player, { type: "draw" })).toThrow();
+  });
+
+  it("forces an immediately-held Motorcade to be played on an empty deck, not counting as an action", () => {
+    let state = freshGame();
+    for (let i = 0; i < state.players.length; i++) state = playFullTurn(state);
+    const player = state.turn.currentPlayerId;
+    const motorcade = state.cards.find((c) => c.kind === "motorcade" && c.zone === "deck")!;
+    state = placeInHand(state, motorcade.id, player);
+    state = { ...state, cards: state.cards.filter((c) => c.zone !== "deck") };
+    const actionsBefore = state.turn.actionsRemaining;
+
+    const resolved = act(state, player, { type: "draw" });
+
+    expect(resolved.turn.phase).toBe("action");
+    expect(resolved.turn.actionsRemaining).toBe(actionsBefore); // did not spend an action
+    expect(resolved.cards.find((c) => c.id === motorcade.id)!.zone).toBe("discard");
+    expect(resolved.president.status).toBe("alive"); // entered the board — the forced play happened
   });
 });
 
@@ -375,6 +409,10 @@ describe("applyAction: playMotorcade", () => {
     state = { ...state, president: { status: "eliminated", locationId: null } };
 
     const [origin, farLocation] = [state.board[0]!, state.board.at(-1)!];
+    // Already in play — otherwise the new "leader stuck in hand" rule
+    // blocks every other action once the President is eliminated.
+    const ownLeader = state.cards.find((c) => c.kind === "leader" && c.controller === player)!;
+    state = placeInPlay(state, ownLeader.id, origin.id, player);
     const ownCard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
     state = placeInPlay(state, ownCard.id, origin.id, player);
     const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
@@ -413,6 +451,58 @@ function enterPresident(state: GameState): GameState {
   state = placeInHand(state, motorcade.id, player);
   state = act(state, player, { type: "draw" });
   return act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+}
+
+describe("applyAction: forced leader play", () => {
+  it("blocks any other action while the current player's leader sits in hand after the President's elimination", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    state = { ...state, president: { status: "eliminated", locationId: null } };
+    state = act(state, player, { type: "draw" }); // the mandatory draw itself is exempt
+
+    expect(() => act(state, player, { type: "endTurn" })).toThrow();
+    const someCard = state.cards.find((c) => c.kind === "nonLeader" && c.zone === "hand" && c.controller === player);
+    if (someCard) {
+      expect(() => act(state, player, { type: "playCard", cardId: someCard.id, locationId: state.board[0]!.id })).toThrow();
+    }
+  });
+
+  it("allows playing the stuck leader itself, and lifts the restriction once it's played", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    state = { ...state, president: { status: "eliminated", locationId: null } };
+    state = act(state, player, { type: "draw" });
+    const leader = state.cards.find((c) => c.kind === "leader" && c.controller === player)!;
+    const loc = state.board.find((l) => l.type === getAllowedLocationTypesFor(leader))!.id;
+
+    const played = act(state, player, { type: "playCard", cardId: leader.id, locationId: loc });
+    expect(played.cards.find((c) => c.id === leader.id)!.zone).toBe("inPlay");
+
+    // No longer stuck — a normal action now goes through.
+    expect(() => act(played, player, { type: "endTurn" })).not.toThrow();
+  });
+
+  it("does not block a different player's own turn", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const player = state.turn.currentPlayerId;
+    state = { ...state, president: { status: "eliminated", locationId: null } };
+    // player's own leader is played already; this restriction only ever
+    // looks at the *current* player's own leader, on their own turn.
+    const leader = state.cards.find((c) => c.kind === "leader" && c.controller === player)!;
+    const loc = state.board.find((l) => l.type === getAllowedLocationTypesFor(leader))!.id;
+    state = placeInPlay(state, leader.id, loc, player);
+    state = act(state, player, { type: "draw" });
+
+    expect(() => act(state, player, { type: "endTurn" })).not.toThrow();
+  });
+});
+
+// Test-only helper: finds an allowed location type for a card, so
+// placeInPlay/playCard scenarios always use a legal one.
+function getAllowedLocationTypesFor(card: CardInstance): "Public" | "Street" | "Secure" {
+  const defs = card.kind === "leader" ? cardData.leaders : cardData.non_leader_cards;
+  const def = defs.find((d) => d.name === card.defRef)!;
+  return def.locations[0]!;
 }
 
 describe("applyAction: Motorcade interception window", () => {
@@ -1383,6 +1473,60 @@ function passWholeAlarm(state: GameState, alarmFrame: AlarmResolutionFrame) {
   }
   return state;
 }
+
+describe("applyAction: multi-target eliminate", () => {
+  it("eliminates every submitted target, not just the first (Death Squad, up to two)", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const deathSquad = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Death Squad")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const [targetA, targetB] = state.cards.filter((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard");
+    state = placeInPlay(state, deathSquad.id, loc, player);
+    state = placeInPlay(state, targetA!.id, loc, other);
+    state = placeInPlay(state, targetB!.id, loc, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: deathSquad.id, abilityIndex: 0 });
+    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [targetA!.id, targetB!.id] });
+
+    expect(resolved.cards.find((c) => c.id === targetA!.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === targetB!.id)!.zone).toBe("eliminated");
+    expect(resolved.resolutionStack).toHaveLength(0);
+  });
+
+  it("also eliminates every submitted target for a multi-target Response ability", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
+    const deathSquad = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Death Squad")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, gunman.id, loc, player, false);
+    state = act(state, player, { type: "draw" });
+    const activated = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
+
+    // Death Squad responds first in the alarm order, controlled by
+    // whoever that turns out to be, so this doesn't assume table order.
+    const alarmFrame = activated.resolutionStack[1] as AlarmResolutionFrame;
+    const responder = alarmFrame.order[0]!;
+    let s = placeInPlay(activated, deathSquad.id, loc, responder);
+    const [targetA, targetB] = s.cards.filter((c) => c.defRef === "Republican Guard");
+    s = placeInPlay(s, targetA!.id, loc, responder);
+    s = placeInPlay(s, targetB!.id, loc, responder);
+
+    const resolved = act(s, responder, {
+      type: "useResponse",
+      cardId: deathSquad.id,
+      abilityIndex: 1,
+      targetIds: [targetA!.id, targetB!.id],
+    });
+
+    expect(resolved.cards.find((c) => c.id === targetA!.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === targetB!.id)!.zone).toBe("eliminated");
+  });
+});
 
 // Walks all 3 steps of Suicide Bomber's sequenced ability (forced reveal,
 // random eliminate, eliminate self) with empty targetIds, once the alarm

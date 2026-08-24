@@ -15,7 +15,7 @@ import { adjacentLocationIds } from "./state/board";
 import type { BoardLayout } from "./state/board";
 import { getAbilities, getAllowedLocationTypes, getFaction, hasAttribute } from "./state/cardLookup";
 import type { CardInstance } from "./state/cards";
-import type { GameState, PlayerId, PresidentState } from "./state/game";
+import type { GameState, PlayerId, PresidentState, TurnState } from "./state/game";
 import { shuffle } from "./state/rng";
 import type { RngState } from "./state/rng";
 import type {
@@ -32,22 +32,29 @@ import type { CardData } from "./types";
 // The reducer: (state, action) -> newState. Pure — no I/O, no hidden
 // randomness (the RNG lives in and is advanced through GameState itself).
 // cardData is passed explicitly (not imported as a singleton) so a future
-// variant's card set works unmodified, same as setupGame. "draw", "endTurn",
-// "moveCard", "playCard", "playMotorcade" (including the Motorcade
-// interception window), "activateAbility"/"chooseTargets" (alarm-triggering
-// abilities, remote-activation including Commander General's "any number"
-// queue, multi-effect sequencing, `eliminate`/`reveal`/`play`/`gainControl`
-// effects, and `if`/binding conditionals), and "useResponse"/
-// "passResponse" (including a nested protected-targeting reveal window
-// during an alarm's response pass) are all implemented; everything else is
-// an explicit "not yet implemented".
+// variant's card set works unmodified, same as setupGame. "draw" (including
+// the forced-immediate-Motorcade-play substitution on an empty deck),
+// "endTurn", "moveCard", "playCard", "playMotorcade" (including the
+// Motorcade interception window), "activateAbility"/"chooseTargets"
+// (alarm-triggering abilities, remote-activation including Commander
+// General's "any number" queue, multi-effect sequencing, multi-target
+// `eliminate`, `reveal`/`play`/`gainControl` effects, and `if`/binding
+// conditionals), and "useResponse"/"passResponse" (including a nested
+// protected-targeting reveal window during an alarm's response pass) are
+// all implemented; everything else is an explicit "not yet implemented".
+// A player whose leader is stuck in hand once the President is eliminated
+// is blocked from any other action until they play it (requireLeaderPlayedIfStuck)
+// — a legality restriction, not something the engine does for them, unlike
+// the Motorcade case above.
 //
-// Remaining known gaps, all noted inline where relevant: playMotorcade
-// doesn't implement the forced "must play immediately" trigger on an empty
-// deck (same gap noted in applyDraw). `if`/`else` branches are limited to a
-// single effect each (see applyIfEffect) — no arbitrary sub-sequence. See
-// rev_day_engine_design memory for the full design this is incrementally
-// building toward.
+// Remaining known gaps, all noted inline where relevant: `if`/`else`
+// branches are limited to a single effect each (see applyIfEffect) — no
+// arbitrary sub-sequence. Multi-target `eliminate` effects check
+// Protected-immunity per-candidate against the current board, not the full
+// simultaneously-declared batch (see declareEliminateTargets) — a narrower
+// case than the original design intended, not needed by any encoded
+// ability yet. See rev_day_engine_design memory for the full design this
+// is incrementally building toward.
 export function applyAction(
   state: GameState,
   actingPlayerId: PlayerId,
@@ -74,6 +81,10 @@ function applyActionInner(
 
   if (actingPlayerId !== state.turn.currentPlayerId) {
     throw new Error(`It is not ${actingPlayerId}'s turn (current player is ${state.turn.currentPlayerId})`);
+  }
+
+  if (action.type !== "draw") {
+    requireLeaderPlayedIfStuck(state, action);
   }
 
   switch (action.type) {
@@ -194,6 +205,27 @@ function requireBudgetedAction(state: GameState): void {
   }
 }
 
+// "A leader stuck in hand must be played as your first action once the
+// President is eliminated" — a restriction on which actions are legal,
+// not something the engine does for the player (contrast the forced
+// Motorcade play above, which *is* automatic — the user drew this
+// distinction explicitly). Blocks every action-phase action except the
+// one specific playCard that plays the leader itself, until it's played;
+// the mandatory draw is exempt, matching "first ACTION" and the same
+// draw-doesn't-count-as-an-action framing used elsewhere.
+function requireLeaderPlayedIfStuck(state: GameState, action: Action): void {
+  if (state.president.status !== "eliminated") return;
+  const currentPlayerId = state.turn.currentPlayerId;
+  const stuckLeader = state.cards.find(
+    (c) => c.kind === "leader" && c.zone === "hand" && c.controller === currentPlayerId,
+  );
+  if (!stuckLeader) return;
+  if (action.type === "playCard" && action.cardId === stuckLeader.id) return;
+  throw new Error(
+    `${currentPlayerId} must play their leader (${stuckLeader.defRef}) before taking any other action`,
+  );
+}
+
 function spendAction(state: GameState): GameState["turn"] {
   return { ...state.turn, actionsRemaining: state.turn.actionsRemaining - 1 };
 }
@@ -201,7 +233,10 @@ function spendAction(state: GameState): GameState["turn"] {
 function applyDraw(state: GameState): GameState {
   const deckIndex = state.cards.findIndex((c) => c.zone === "deck");
   if (deckIndex === -1) {
-    throw new Error("Cannot draw: deck is empty (forced Motorcade-play handling not yet implemented)");
+    if (state.turn.phase !== "draw") {
+      throw new Error("Cannot draw: deck is empty");
+    }
+    return applyForcedMotorcadeOrEmptyDraw(state);
   }
 
   const currentPlayerId = state.turn.currentPlayerId;
@@ -221,6 +256,37 @@ function applyDraw(state: GameState): GameState {
   // budgeted actions.
   requireBudgetedAction(state);
   return { ...state, cards, turn: spendAction(state) };
+}
+
+// "If the deck is empty, the President has not been eliminated, and a
+// player holds a Motorcade card, it must be played immediately (does not
+// count as an action)" — substitutes for the mandatory draw itself, with
+// no player decision involved (which Motorcade, if the player somehow
+// holds more than one, is picked arbitrarily — first in hand order).
+// Otherwise (no Motorcade held, or the President's already eliminated —
+// that "must be played" clause has its own explicit precondition) the
+// mandatory draw is simply a no-op: nothing to draw, straight to the
+// action phase.
+function applyForcedMotorcadeOrEmptyDraw(state: GameState): GameState {
+  const currentPlayerId = state.turn.currentPlayerId;
+  const motorcade =
+    state.president.status !== "eliminated"
+      ? state.cards.find((c) => c.kind === "motorcade" && c.zone === "hand" && c.controller === currentPlayerId)
+      : undefined;
+
+  const turn: TurnState = { ...state.turn, phase: "action" };
+  if (!motorcade) {
+    return { ...state, turn };
+  }
+
+  const { cards, president, resolutionStack } = resolveMotorcadePlay(
+    state,
+    currentPlayerId,
+    motorcade.id,
+    undefined,
+    undefined,
+  );
+  return { ...state, cards, president, resolutionStack, turn };
 }
 
 function applyEndTurn(state: GameState): GameState {
@@ -352,13 +418,41 @@ function applyPlayMotorcade(
     throw new Error("Motorcade cannot be played on a player's first turn");
   }
 
-  const cardIndex = state.cards.findIndex((c) => c.id === action.cardId);
+  const { cards, president, resolutionStack } = resolveMotorcadePlay(
+    state,
+    currentPlayerId,
+    action.cardId,
+    action.moveOwnCardId,
+    action.moveToLocationId,
+  );
+  return { ...state, cards, president, resolutionStack, turn: spendAction(state) };
+}
+
+// The actual "play a Motorcade" mechanic — discard it, then move the
+// President (opening an interception window first if anyone's eligible),
+// move a controlled card instead (post-elimination), or enter him onto
+// the board for the first time. Shared by the voluntary playMotorcade
+// action and the forced-immediate-play path (applyDraw, when the deck is
+// empty) — everything except the turn-budget/first-turn gating, which
+// only the voluntary path needs: forced play "does not count as an
+// action" (same as the mandatory draw it substitutes for) and isn't
+// gated by hasTakenFirstTurn either — "must be played immediately" has no
+// stated exception, a deliberate reading since a *forced* effect
+// overriding a restriction on *voluntary* play is the more sensible one.
+function resolveMotorcadePlay(
+  state: GameState,
+  currentPlayerId: PlayerId,
+  cardId: string,
+  moveOwnCardId: string | undefined,
+  moveToLocationId: string | undefined,
+): Pick<GameState, "cards" | "president" | "resolutionStack"> {
+  const cardIndex = state.cards.findIndex((c) => c.id === cardId);
   if (cardIndex === -1) {
-    throw new Error(`Unknown card: ${action.cardId}`);
+    throw new Error(`Unknown card: ${cardId}`);
   }
   const card = state.cards[cardIndex]!;
   if (card.kind !== "motorcade" || card.zone !== "hand" || card.controller !== currentPlayerId) {
-    throw new Error(`Card ${action.cardId} is not a Motorcade in ${currentPlayerId}'s hand`);
+    throw new Error(`Card ${cardId} is not a Motorcade in ${currentPlayerId}'s hand`);
   }
 
   let cards = state.cards.map((c, i) =>
@@ -384,7 +478,7 @@ function applyPlayMotorcade(
         order: buildMotorcadeInterceptionOrder(state, currentPlayerId, interceptors),
         nextIndex: 0,
       };
-      return { ...state, cards, resolutionStack: [windowFrame], turn: spendAction(state) };
+      return { cards, president, resolutionStack: [windowFrame] };
     }
     const newPresident = computeForwardMove(state.board, president);
     cards = applyFollowPresidentPassive(cards, presidentLocationId, newPresident);
@@ -393,21 +487,21 @@ function applyPlayMotorcade(
     // "After the President has been eliminated, move a card you control to
     // any location" — ignores location-type restrictions, per the general
     // ruling that effects specifying a location for placement do so.
-    if (!action.moveOwnCardId || !action.moveToLocationId) {
+    if (!moveOwnCardId || !moveToLocationId) {
       throw new Error("Must specify a card and destination to move after the President's elimination");
     }
-    const moveIndex = cards.findIndex((c) => c.id === action.moveOwnCardId);
+    const moveIndex = cards.findIndex((c) => c.id === moveOwnCardId);
     if (moveIndex === -1) {
-      throw new Error(`Unknown card: ${action.moveOwnCardId}`);
+      throw new Error(`Unknown card: ${moveOwnCardId}`);
     }
     const moving = cards[moveIndex]!;
     if (moving.zone !== "inPlay" || moving.controller !== currentPlayerId) {
-      throw new Error(`Card ${action.moveOwnCardId} is not controlled by ${currentPlayerId}`);
+      throw new Error(`Card ${moveOwnCardId} is not controlled by ${currentPlayerId}`);
     }
-    if (!state.board.some((l) => l.id === action.moveToLocationId)) {
-      throw new Error(`Unknown location: ${action.moveToLocationId}`);
+    if (!state.board.some((l) => l.id === moveToLocationId)) {
+      throw new Error(`Unknown location: ${moveToLocationId}`);
     }
-    cards = cards.map((c, i) => (i === moveIndex ? { ...c, locationId: action.moveToLocationId } : c));
+    cards = cards.map((c, i) => (i === moveIndex ? { ...c, locationId: moveToLocationId } : c));
   } else if (president.status === "notEntered") {
     // The first Motorcade played in the game — enters at the first Street
     // location, found by type rather than assuming index 0 (board is
@@ -419,9 +513,9 @@ function applyPlayMotorcade(
     president = { status: "alive", locationId: firstStreet.id };
   }
   // status === "survived": Motorcade text has nothing left to do; the card
-  // still gets discarded and the action still gets spent above.
+  // still gets discarded either way.
 
-  return { ...state, cards, president, turn: spendAction(state) };
+  return { cards, president, resolutionStack: state.resolutionStack };
 }
 
 // Advances the President one location, or — if he's already at the last
@@ -728,7 +822,7 @@ function applyEffect(
     if (targetIds.length > 0) {
       throw new Error("This effect targets its own source card automatically — no targets to choose");
     }
-    return finalizeEliminateEffect(state, frame, sourceCard.id);
+    return finalizeEliminateEffect(state, frame, [sourceCard.id]);
   }
   if (effect.target.ref === "binding") {
     // "Eliminate it" (Secret Police/Guerrilla Commander, the target named
@@ -746,7 +840,7 @@ function applyEffect(
     if (!boundId) {
       throw new Error(`No binding named "${effect.target.binding}" is available yet`);
     }
-    return finalizeEliminateEffect(state, frame, boundId);
+    return finalizeEliminateEffect(state, frame, [boundId]);
   }
   if (effect.target.ref !== "filter") {
     throw new Error("Only filter-based, self, and binding targeting is interpreted so far");
@@ -759,7 +853,7 @@ function applyEffect(
   // A target chosen after a reveal window already ran once this
   // resolution bypasses Protected-immunity entirely (no window, ever) —
   // that re-choice is final by design, not a fresh declaration.
-  const declared = declareEliminateTarget(
+  const declared = declareEliminateTargets(
     state,
     cardData,
     effect,
@@ -770,12 +864,12 @@ function applyEffect(
   );
 
   if (declared.protectedActive && hasRevealOpportunity(state, declared.locationId, actingPlayerId)) {
-    const updatedFrame: AbilityResolutionFrame = { ...frame, targetIds: [declared.targetId] };
+    const updatedFrame: AbilityResolutionFrame = { ...frame, targetIds: declared.targetIds };
     const windowFrame = buildProtectedTargetingWindowFrame(
       state,
       declared.locationId,
       actingPlayerId,
-      declared.targetId,
+      declared.targetIds,
     );
     return {
       ...state,
@@ -783,7 +877,7 @@ function applyEffect(
     };
   }
 
-  return finalizeEliminateEffect(state, frame, declared.targetId);
+  return finalizeEliminateEffect(state, frame, declared.targetIds);
 }
 
 // Evaluates an `if` node's condition against this ability's accumulated
@@ -879,7 +973,25 @@ function applyGainControlEffect(
 // re-choice (reselectingAfterReveal) and the DSL's own ignoreProtected —
 // either way, the guard-protection check (not the two-player rule, for
 // president targets) is skipped entirely.
-function declareEliminateTarget(
+// Handles multi-target declarations (Death Squad's "eliminate one or two
+// targets") as well as the single-target case — every declared target
+// shares one locationId (every currently-encoded multi-target ability is
+// location:self) and the window, if one opens, covers the whole batch
+// rather than any single member of it.
+//
+// Protected-immunity is evaluated per-candidate against the *current*,
+// already-eligible-filtered board — not "batch-aware" (a
+// simultaneously-declared, non-Protected target that happens to be the
+// only thing shielding a Protected one in the same batch doesn't get
+// excluded from that other target's own check). This is a deliberate,
+// documented simplification of the fuller design-phase rule ("multi-target
+// abilities check Protected-immunity against the full simultaneously-
+// declared set") — `isLegalEliminationTarget`'s eligibility filter below
+// already requires each candidate to be individually legal on its own, so
+// a target that's *only* protected by another target in the same batch
+// isn't reachable as a submittable combination at all yet. Not needed by
+// any currently-encoded ability; flag if a future card requires it.
+function declareEliminateTargets(
   state: GameState,
   cardData: CardData,
   effect: Extract<EffectNode, { verb: "eliminate" }>,
@@ -887,7 +999,7 @@ function declareEliminateTarget(
   actingPlayerId: PlayerId,
   targetIds: readonly string[],
   bypassProtectionOverride: boolean,
-): { targetId: string; locationId: string; protectedActive: boolean } {
+): { targetIds: string[]; locationId: string; protectedActive: boolean } {
   if (effect.target.ref !== "filter") {
     throw new Error("Only filter-based targeting is interpreted so far");
   }
@@ -897,7 +1009,7 @@ function declareEliminateTarget(
     const legal = isLegalPresidentTarget(state, cardData, actingPlayerId, bypassProtection);
     validateTargets(effect.target.count, targetIds, legal ? [PRESIDENT_TARGET_ID] : []);
     return {
-      targetId: PRESIDENT_TARGET_ID,
+      targetIds: [...targetIds],
       locationId: state.president.locationId!,
       // The President has no Blend attribute, so his Protected status is
       // always active while alive.
@@ -913,12 +1025,11 @@ function declareEliminateTarget(
     targetIds,
     eligible.map((c) => c.id),
   );
-  const targetId = targetIds[0]!;
-  const declaredCard = state.cards.find((c) => c.id === targetId)!;
+  const declaredCards = targetIds.map((id) => state.cards.find((c) => c.id === id)!);
   return {
-    targetId,
-    locationId: declaredCard.locationId!,
-    protectedActive: !bypassProtection && isProtectedActive(cardData, declaredCard),
+    targetIds: [...targetIds],
+    locationId: declaredCards[0]!.locationId!,
+    protectedActive: !bypassProtection && declaredCards.some((c) => isProtectedActive(cardData, c)),
   };
 }
 
@@ -1263,10 +1374,14 @@ function eliminateSingleTarget(
 // Applies a fully-resolved eliminate effect (target already finalized —
 // either as originally declared, or reassigned by a protected-targeting
 // window) and advances past the effect step that was awaiting it.
-function finalizeEliminateEffect(state: GameState, frame: AbilityResolutionFrame, targetId: string): GameState {
+function finalizeEliminateEffect(state: GameState, frame: AbilityResolutionFrame, targetIds: readonly string[]): GameState {
   const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId)!;
-  const { cards, president, turn, pendingPassiveQueue } = eliminateSingleTarget(state, targetId, sourceCard.controller);
-  return finishEffectStep({ ...state, cards, president, turn, pendingPassiveQueue }, frame);
+  let next = state;
+  for (const targetId of targetIds) {
+    const { cards, president, turn, pendingPassiveQueue } = eliminateSingleTarget(next, targetId, sourceCard.controller);
+    next = { ...next, cards, president, turn, pendingPassiveQueue };
+  }
+  return finishEffectStep(next, frame);
 }
 
 // Pops the current top resolution frame and, if that leaves a paused
@@ -1321,7 +1436,7 @@ function buildProtectedTargetingWindowFrame(
   state: GameState,
   locationId: string,
   declaringPlayerId: PlayerId,
-  declaredTargetId: string,
+  declaredTargetIds: readonly string[],
 ): ProtectedTargetingWindowFrame {
   const seats = state.players.slice().sort((a, b) => a.seatIndex - b.seatIndex);
   const declarerSeat = seats.find((p) => p.id === declaringPlayerId)!.seatIndex;
@@ -1339,7 +1454,7 @@ function buildProtectedTargetingWindowFrame(
   return {
     kind: "protectedTargetingWindow",
     declaringPlayerId,
-    declaredTargetId,
+    declaredTargetIds,
     locationId,
     order,
     nextIndex: 0,
@@ -1398,7 +1513,7 @@ function applyProtectedTargetingWindowAction(
   const abilityFrame = withCards.resolutionStack[withCards.resolutionStack.length - 2] as AbilityResolutionFrame;
   if (!anyRevealed) {
     const withoutWindow = { ...withCards, resolutionStack: [...withCards.resolutionStack.slice(0, -2), abilityFrame] };
-    return finalizeEliminateEffect(withoutWindow, abilityFrame, frame.declaredTargetId);
+    return finalizeEliminateEffect(withoutWindow, abilityFrame, frame.declaredTargetIds);
   }
 
   const reselectFrame: AbilityResolutionFrame = {
@@ -1475,7 +1590,7 @@ function applyAlarmAction(
   const revealedCards = state.cards.map((c) => (c.id === card.id ? { ...c, faceUp: true } : c));
   const withReveal = { ...state, cards: revealedCards };
 
-  const declared = declareEliminateTarget(
+  const declared = declareEliminateTargets(
     withReveal,
     cardData,
     effect,
@@ -1496,23 +1611,27 @@ function applyAlarmAction(
       actingPlayerId,
       abilityIndex: action.abilityIndex,
       locationId: declared.locationId,
-      targetIds: [declared.targetId],
+      targetIds: declared.targetIds,
     };
     const windowFrame = buildProtectedTargetingWindowFrame(
       withReveal,
       declared.locationId,
       actingPlayerId,
-      declared.targetId,
+      declared.targetIds,
     );
     return { ...withReveal, resolutionStack: [...withReveal.resolutionStack, pendingFrame, windowFrame] };
   }
 
-  const { cards, president, turn, pendingPassiveQueue } = eliminateSingleTarget(
-    withReveal,
-    declared.targetId,
-    card.controller,
-  );
-  return advanceAlarmPass({ ...withReveal, cards, president, turn, pendingPassiveQueue }, frame);
+  let resolvedState: GameState = withReveal;
+  for (const targetId of declared.targetIds) {
+    const { cards, president, turn, pendingPassiveQueue } = eliminateSingleTarget(
+      resolvedState,
+      targetId,
+      card.controller,
+    );
+    resolvedState = { ...resolvedState, cards, president, turn, pendingPassiveQueue };
+  }
+  return advanceAlarmPass(resolvedState, frame);
 }
 
 function advanceAlarmPass(state: GameState, frame: AlarmResolutionFrame): GameState {
