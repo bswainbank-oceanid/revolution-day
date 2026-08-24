@@ -9,14 +9,27 @@ mkdirSync(dirname(DB_PATH), { recursive: true });
 
 const client = createClient({ url: `file:${DB_PATH}` });
 
-// Dev-only bootstrap so `npm run dev` works without running drizzle-kit
-// migrations first. Once the schema stabilizes, switch to
+// Dev-only bootstrap so `npm run dev` (and tests) work without running
+// drizzle-kit migrations first. Once the schema stabilizes, switch to
 // `db:generate` + `db:migrate` and drop this.
 await client.execute(`
   CREATE TABLE IF NOT EXISTS games (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL DEFAULT (current_timestamp),
+    player_ids TEXT NOT NULL,
+    seed INTEGER NOT NULL,
     state TEXT NOT NULL
+  )
+`);
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS game_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER NOT NULL REFERENCES games(id),
+    seq INTEGER NOT NULL,
+    acting_player_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    resulting_state TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (current_timestamp)
   )
 `);
 
