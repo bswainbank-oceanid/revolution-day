@@ -89,6 +89,7 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
           target: {
             ref: "filter",
             kind: "president",
+            location: { mode: "self" },
             count: { mode: "exact", value: 1 },
             selection: "playerChoice",
           },

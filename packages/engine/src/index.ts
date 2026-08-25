@@ -22,13 +22,14 @@ export type {
   AlarmResolutionFrame,
   ProtectedTargetingWindowFrame,
   MotorcadeInterceptionWindowFrame,
+  ReactivePassiveWindowFrame,
   ResolutionFrame,
   PendingPassiveTrigger,
 } from "./state/resolution";
 export type { Action, TurnAction, ResolutionAction } from "./actions";
 export { setupGame } from "./setup";
 export type { SetupOptions } from "./setup";
-export { applyAction } from "./reducer";
+export { applyAction, PRESIDENT_TARGET_ID } from "./reducer";
 export { hasAttribute, getAllowedLocationTypes, getAbilities, getFaction } from "./state/cardLookup";
 export { getAbilityEffects, abilityEffects } from "./data/abilityEffects";
 export {
@@ -57,6 +58,8 @@ export type { WinPredicate } from "./effects/winConditions";
 export { winConditions } from "./data/winConditions";
 export type { PassiveDefinition } from "./effects/passives";
 export { getPassive, passives } from "./data/passives";
+export { filterForPlayer } from "./effects/filterForPlayer";
+export type { FilteredCardInstance, FilteredGameState } from "./effects/filterForPlayer";
 
 import { cardData } from "./data/cardData";
 

@@ -1,3 +1,4 @@
+import { takeBotTurn } from "@rev-day/bots";
 import { applyAction, cardData, evaluateWinConditions, setupGame, winConditions } from "@rev-day/engine";
 import type { Action, GameState, PlayerId } from "@rev-day/engine";
 import { eq } from "drizzle-orm";
@@ -98,6 +99,48 @@ export function buildApp(options?: { logger?: boolean }) {
       return reply.code(404).send({ error: `Game ${id} not found` });
     }
     return db.query.gameActions.findMany({ where: eq(gameActions.gameId, id), orderBy: gameActions.seq });
+  });
+
+  // Drives one bot's turn to completion (@rev-day/bots' takeBotTurn) —
+  // this is what makes the harness actually playable today: a human
+  // drives their own turns via POST .../actions, and calls this to make
+  // a bot take its turn. Logs each individual action the bot took, same
+  // shape and table as a human's actions, so a full game's trajectory
+  // (bot moves included) stays queryable via GET .../actions either way.
+  app.post("/games/:id/bot-turn", async (request, reply) => {
+    const id = Number((request.params as { id: string }).id);
+    const row = await db.query.games.findFirst({ where: eq(games.id, id) });
+    if (!row) {
+      return reply.code(404).send({ error: `Game ${id} not found` });
+    }
+
+    const body = request.body as { playerId?: PlayerId } | undefined;
+    if (!body?.playerId) {
+      return reply.code(400).send({ error: "playerId is required" });
+    }
+
+    const { state: nextState, actions } = takeBotTurn(row.state, body.playerId, cardData);
+
+    await db.update(games).set({ state: nextState }).where(eq(games.id, id));
+
+    const priorActions = await db.query.gameActions.findMany({ where: eq(gameActions.gameId, id) });
+    let seq = priorActions.length;
+    const logged = [];
+    for (const step of actions) {
+      const [loggedRow] = await db
+        .insert(gameActions)
+        .values({
+          gameId: id,
+          seq: seq++,
+          actingPlayerId: step.actingPlayerId,
+          action: step.action,
+          resultingState: step.resultingState,
+        })
+        .returning();
+      logged.push(loggedRow);
+    }
+
+    return { id, state: nextState, actionsTaken: logged.length, logged };
   });
 
   // A pure query, not something the engine triggers on its own — the

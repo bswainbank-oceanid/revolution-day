@@ -890,6 +890,20 @@ describe("applyAction: President targeting (Wife)", () => {
     });
   });
 
+  it("rejects targeting the President when Wife isn't at his location", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const wife = state.cards.find((c) => c.defRef === "Wife")!;
+    const wifeLoc = state.board[0]!.id;
+    const presidentLoc = state.board[1]!.id;
+    state = placeInPlay(state, wife.id, wifeLoc, player);
+    state = { ...state, president: { status: "alive", locationId: presidentLoc } };
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: wife.id, abilityIndex: 0 });
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: ["president"] })).toThrow();
+  });
+
   it("rejects targeting the President before he's entered the board", () => {
     let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
     const player = state.turn.currentPlayerId;

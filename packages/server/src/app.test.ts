@@ -127,24 +127,65 @@ describe("POST /games/:id/actions", () => {
 
 describe("GET /games/:id/winners", () => {
   it("evaluates win conditions against the game's current stored state", async () => {
-    // 8 players so every leader is dealt — Head of Security's "President
-    // not eliminated" is trivially satisfied with nobody having taken any
-    // action yet, deterministically regardless of seed, so its player is
-    // always among the (possibly multi-player) winner set.
+    // Every leader's win conditions are AND'd (see rev_day_engine_design
+    // memory) and every leader's list includes at least one condition
+    // that's false at a totally fresh, untouched state (most need
+    // "survives", which requires actually being in play — leaders start
+    // in hand) — so a brand-new game deterministically has zero winners,
+    // regardless of which leaders were dealt to whom. Still a real check
+    // that this endpoint actually calls evaluateWinConditions and wires
+    // the result through correctly, not a placeholder.
     const created = await app.inject({
       method: "POST",
       url: "/games",
       payload: { playerIds: ["a", "b", "c", "d", "e", "f", "g", "h"], seed: 5 },
     });
-    const { id, state } = created.json();
-    const hosPlayerId = state.cards.find(
-      (c: { kind: string; defRef: string; controller: string }) =>
-        c.kind === "leader" && c.defRef === "Head of Security",
-    ).controller;
+    const { id } = created.json();
 
     const res = await app.inject({ method: "GET", url: `/games/${id}/winners` });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().winners).toContain(hosPlayerId);
+    expect(res.json().winners).toEqual([]);
+  });
+});
+
+describe("POST /games/:id/bot-turn", () => {
+  it("plays a bot's turn, persists the result, and logs each action taken", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/games",
+      payload: { playerIds: ["a", "b", "c"], seed: 6 },
+    });
+    const { id, state } = created.json();
+    const player = state.turn.currentPlayerId;
+
+    const res = await app.inject({ method: "POST", url: `/games/${id}/bot-turn`, payload: { playerId: player } });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.actionsTaken).toBeGreaterThan(0);
+    expect(body.logged).toHaveLength(body.actionsTaken);
+    expect(body.logged[0].actingPlayerId).toBe(player);
+    expect(body.logged[0].action).toEqual({ type: "draw" });
+
+    const fetched = await app.inject({ method: "GET", url: `/games/${id}` });
+    expect(fetched.json().state).toEqual(body.state); // persisted, not just returned
+
+    const actions = await app.inject({ method: "GET", url: `/games/${id}/actions` });
+    expect(actions.json()).toHaveLength(body.actionsTaken);
+  });
+
+  it("returns 400 without a playerId", async () => {
+    const created = await app.inject({ method: "POST", url: "/games", payload: { playerIds: ["a", "b", "c"], seed: 7 } });
+    const { id } = created.json();
+
+    const res = await app.inject({ method: "POST", url: `/games/${id}/bot-turn`, payload: {} });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns 404 for an unknown game", async () => {
+    const res = await app.inject({ method: "POST", url: "/games/999999/bot-turn", payload: { playerId: "a" } });
+    expect(res.statusCode).toBe(404);
   });
 });

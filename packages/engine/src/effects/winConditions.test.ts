@@ -41,19 +41,30 @@ function nthOfDefRef(state: GameState, defRef: string, n: number): CardInstance 
   return state.cards.filter((c) => c.defRef === defRef)[n]!;
 }
 
-describe("evaluateWinConditions: real per-leader predicate data", () => {
-  it("Head of Security wins while the President is not eliminated", () => {
-    const state = baseState();
-    const { playerId } = leaderOwner(state, "Head of Security");
+describe("evaluateWinConditions: real per-leader predicate data (all AND'd)", () => {
+  it("Head of Security wins only when BOTH survives AND the President is not eliminated", () => {
+    let state = baseState();
+    const { playerId, card: hos } = leaderOwner(state, "Head of Security");
+    state = place(state, hos.id, "loc-0", playerId);
+
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(true);
   });
 
-  it("Head of Security still wins via 'survives' once the President is eliminated", () => {
+  it("Head of Security does NOT win from surviving alone once the President is eliminated (the reported bug)", () => {
     let state = baseState();
     const { playerId, card: hos } = leaderOwner(state, "Head of Security");
-    state = place(state, hos.id, "loc-0", playerId); // "survives" requires actually being in play
+    state = place(state, hos.id, "loc-0", playerId); // survives: true
     state = { ...state, president: { status: "eliminated", locationId: null, eliminatedAtLocationId: "loc-0" } };
-    expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(true);
+
+    expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
+  });
+
+  it("Head of Security does NOT win from the President being safe alone if its own leader died", () => {
+    let state = baseState();
+    const { playerId, card: hos } = leaderOwner(state, "Head of Security");
+    state = eliminate(state, hos.id); // survives: false; President still never entered — notEliminated: true
+
+    expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
   });
 
   it("Wife wins only if the President was eliminated specifically at the Palace", () => {
@@ -69,48 +80,76 @@ describe("evaluateWinConditions: real per-leader predicate data", () => {
     expect(evaluateWinConditions(elsewhere, cardData, winConditions).has(playerId)).toBe(false);
   });
 
-  it("Commander General wins on a Regime card majority at HQ, independent of the President", () => {
+  it("Commander General wins only when President-eliminated AND survives AND Regime majority at HQ all hold", () => {
     let state = baseState();
     const { playerId, card: cg } = leaderOwner(state, "Commander General");
     const hqId = state.board.find((l) => l.name === "HQ")!.id;
     const guard1 = nthOfDefRef(state, "Republican Guard", 0);
     const guard2 = nthOfDefRef(state, "Republican Guard", 1);
     const rebel = nthOfDefRef(state, "Gunman", 0);
-    state = eliminate(state, cg.id); // Commander General itself is dead — isolates the factionMajority path
+    state = place(state, cg.id, hqId, playerId); // survives: true
     state = place(state, guard1.id, hqId, "a");
     state = place(state, guard2.id, hqId, "a");
     state = place(state, rebel.id, hqId, "b");
+    state = { ...state, president: { status: "eliminated", locationId: null, eliminatedAtLocationId: "loc-0" } };
 
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(true);
   });
 
-  it("Commander General does not win on a tied or losing count at HQ", () => {
+  it("Commander General does not win if it died itself, even with the President eliminated and a Regime majority at HQ", () => {
     let state = baseState();
     const { playerId, card: cg } = leaderOwner(state, "Commander General");
     const hqId = state.board.find((l) => l.name === "HQ")!.id;
-    const guard = nthOfDefRef(state, "Republican Guard", 0);
-    const rebel = nthOfDefRef(state, "Gunman", 0);
-    state = eliminate(state, cg.id);
-    state = place(state, guard.id, hqId, "a");
-    state = place(state, rebel.id, hqId, "b"); // 1-1 tie, not a majority
+    const guard1 = nthOfDefRef(state, "Republican Guard", 0);
+    const guard2 = nthOfDefRef(state, "Republican Guard", 1);
+    state = eliminate(state, cg.id); // survives: false
+    state = place(state, guard1.id, hqId, "a");
+    state = place(state, guard2.id, hqId, "a");
+    state = { ...state, president: { status: "eliminated", locationId: null, eliminatedAtLocationId: "loc-0" } };
 
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
   });
 
-  it("Heir Apparent wins via 'no other surviving leaders' even if its own leader also died", () => {
+  it("Commander General does not win on a tied or losing count at HQ, even alive with the President eliminated", () => {
+    let state = baseState();
+    const { playerId, card: cg } = leaderOwner(state, "Commander General");
+    const hqId = state.board.find((l) => l.name === "HQ")!.id;
+    const elsewhere = state.board.find((l) => l.name !== "HQ")!.id;
+    const guard = nthOfDefRef(state, "Republican Guard", 0);
+    const rebel = nthOfDefRef(state, "Gunman", 0);
+    state = place(state, cg.id, elsewhere, playerId); // survives, but not at HQ — doesn't skew its own tally
+    state = place(state, guard.id, hqId, "a");
+    state = place(state, rebel.id, hqId, "b"); // 1-1 tie, not a majority
+    state = { ...state, president: { status: "eliminated", locationId: null, eliminatedAtLocationId: "loc-0" } };
+
+    expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
+  });
+
+  it("Heir Apparent wins via 'no other surviving leaders' only while its own leader is also still alive", () => {
     let state = baseState();
     const { playerId, card: heir } = leaderOwner(state, "Heir Apparent");
+    state = place(state, heir.id, "loc-0", playerId); // survives: true
     for (const c of state.cards) {
       if (c.kind === "leader" && c.id !== heir.id) state = eliminate(state, c.id);
     }
-    state = eliminate(state, heir.id);
 
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(true);
   });
 
-  it("Opposition Leader wins with a rebel present at 5+ locations", () => {
+  it("Heir Apparent does NOT win if its own leader also died, even with no other surviving leaders", () => {
     let state = baseState();
-    const { playerId } = leaderOwner(state, "Opposition Leader");
+    const { playerId } = leaderOwner(state, "Heir Apparent");
+    for (const c of state.cards) {
+      if (c.kind === "leader") state = eliminate(state, c.id); // Heir Apparent included — survives: false
+    }
+
+    expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
+  });
+
+  it("Opposition Leader wins with a rebel present at 5+ locations, only while it survives", () => {
+    let state = baseState();
+    const { playerId, card: oppLeader } = leaderOwner(state, "Opposition Leader");
+    state = place(state, oppLeader.id, "loc-0", playerId);
     const rebelDefRefs = ["Gunman", "Assassin", "Mr. Lucky", "Martyr", "Journalist"];
     for (let i = 0; i < 5; i++) {
       const card = nthOfDefRef(state, rebelDefRefs[i]!, 0);
@@ -120,9 +159,10 @@ describe("evaluateWinConditions: real per-leader predicate data", () => {
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(true);
   });
 
-  it("Opposition Leader does not win with a rebel at only 4 locations", () => {
+  it("Opposition Leader does not win with a rebel at only 4 locations, even alive", () => {
     let state = baseState();
-    const { playerId } = leaderOwner(state, "Opposition Leader");
+    const { playerId, card: oppLeader } = leaderOwner(state, "Opposition Leader");
+    state = place(state, oppLeader.id, "loc-0", playerId);
     const rebelDefRefs = ["Gunman", "Assassin", "Mr. Lucky", "Martyr"];
     for (let i = 0; i < 4; i++) {
       const card = nthOfDefRef(state, rebelDefRefs[i]!, 0);
@@ -132,54 +172,69 @@ describe("evaluateWinConditions: real per-leader predicate data", () => {
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
   });
 
-  it("Master Assassin wins by eliminating the President with a card they control", () => {
+  it("Opposition Leader does not win from a 5-location rebel spread alone if it died itself", () => {
     let state = baseState();
-    const { playerId } = leaderOwner(state, "Master Assassin");
+    const { playerId, card: oppLeader } = leaderOwner(state, "Opposition Leader");
+    state = eliminate(state, oppLeader.id); // survives: false
+    const rebelDefRefs = ["Gunman", "Assassin", "Mr. Lucky", "Martyr", "Journalist"];
+    for (let i = 0; i < 5; i++) {
+      const card = nthOfDefRef(state, rebelDefRefs[i]!, 0);
+      state = place(state, card.id, state.board[i]!.id, "a");
+    }
+
+    expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
+  });
+
+  it("Master Assassin wins by eliminating the President with a card they control, while alive", () => {
+    let state = baseState();
+    const { playerId, card: assassin } = leaderOwner(state, "Master Assassin");
+    state = place(state, assassin.id, "loc-0", playerId); // survives: true
     state = {
       ...state,
-      president: {
-        status: "eliminated",
-        locationId: null,
-        eliminatedAtLocationId: "loc-0",
-        eliminatedByPlayerId: playerId,
-      },
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: "loc-0", eliminatedByPlayerId: playerId },
     };
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(true);
   });
 
-  it("Master Assassin does not win from a President kill attributed to someone else", () => {
+  it("Master Assassin does NOT win from the President kill alone if it died itself (the 'or' clause doesn't bypass 'survives')", () => {
     let state = baseState();
     const { playerId, card: assassin } = leaderOwner(state, "Master Assassin");
-    const other = state.players.find((p) => p.id !== playerId)!.id;
-    state = eliminate(state, assassin.id); // isolate — no "survives" fallback either
+    state = eliminate(state, assassin.id); // survives: false
     state = {
       ...state,
-      president: {
-        status: "eliminated",
-        locationId: null,
-        eliminatedAtLocationId: "loc-0",
-        eliminatedByPlayerId: other,
-      },
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: "loc-0", eliminatedByPlayerId: playerId },
     };
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
   });
 
-  it("Master Assassin wins by eliminating 2 leaders with cards they control", () => {
+  it("Master Assassin does not win from a President kill attributed to someone else, even while alive", () => {
+    let state = baseState();
+    const { playerId, card: assassin } = leaderOwner(state, "Master Assassin");
+    const other = state.players.find((p) => p.id !== playerId)!.id;
+    state = place(state, assassin.id, "loc-0", playerId);
+    state = {
+      ...state,
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: "loc-0", eliminatedByPlayerId: other },
+    };
+    expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
+  });
+
+  it("Master Assassin wins by eliminating 2 leaders with cards they control, while alive", () => {
     let state = baseState();
     const { playerId, card: assassin } = leaderOwner(state, "Master Assassin");
     const otherLeaders = state.cards.filter((c) => c.kind === "leader" && c.id !== assassin.id);
-    state = eliminate(state, assassin.id); // isolate — no "survives" fallback
+    state = place(state, assassin.id, "loc-0", playerId);
     state = eliminate(state, otherLeaders[0]!.id, playerId);
     state = eliminate(state, otherLeaders[1]!.id, playerId);
 
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(true);
   });
 
-  it("Master Assassin does not win from just 1 leader elimination", () => {
+  it("Master Assassin does not win from just 1 leader elimination, even while alive", () => {
     let state = baseState();
     const { playerId, card: assassin } = leaderOwner(state, "Master Assassin");
     const otherLeaders = state.cards.filter((c) => c.kind === "leader" && c.id !== assassin.id);
-    state = eliminate(state, assassin.id);
+    state = place(state, assassin.id, "loc-0", playerId);
     state = eliminate(state, otherLeaders[0]!.id, playerId);
 
     expect(evaluateWinConditions(state, cardData, winConditions).has(playerId)).toBe(false);
@@ -258,14 +313,54 @@ describe("evaluateWinConditions: meta-condition fixed point", () => {
   });
 
   it("empties the winner set if literally every player would win", () => {
-    const state = baseState();
-    // Every leader trivially "wins" via survives, and nobody's eliminated
-    // — the global override must empty the set rather than declare a
-    // shared victory for the whole table.
+    let state = baseState();
+    // Every leader is actually placed in play (not left in hand — a
+    // fresh setupGame() deals them there, where "survives" is false) so
+    // "survives" is genuinely true for everyone, exercising the real
+    // "all players win" case rather than the empty set arising by
+    // accident because nobody actually met their condition.
+    for (const leader of state.cards.filter((c) => c.kind === "leader")) {
+      state = place(state, leader.id, "loc-0", leader.controller!);
+    }
     const predicates: Record<string, readonly WinPredicate[]> = Object.fromEntries(
       cardData.leaders.map((l) => [l.name, [{ type: "survives" } satisfies WinPredicate]]),
     );
     const winners = evaluateWinConditions(state, cardData, predicates);
     expect(winners.size).toBe(0);
+  });
+
+  it("evaluates an explicit 'or' among nested predicates within an otherwise-AND'd list", () => {
+    let state = baseState();
+    const { playerId, card: assassin } = leaderOwner(state, "Master Assassin");
+    state = place(state, assassin.id, "loc-0", playerId); // survives: true
+    const predicates: Record<string, readonly WinPredicate[]> = {
+      "Master Assassin": [
+        {
+          type: "or",
+          predicates: [
+            { type: "eliminatedByControlled", target: "president" },
+            { type: "eliminatedByControlled", target: { leaderCount: 2 } },
+          ],
+        },
+        { type: "survives" },
+      ],
+    };
+
+    // Neither branch of the "or" holds yet.
+    expect(evaluateWinConditions(state, cardData, predicates).has(playerId)).toBe(false);
+
+    // Satisfying just one branch (the President) is enough for the "or",
+    // and "survives" (the separate AND'd sentence) already holds.
+    const withPresidentKilled = {
+      ...state,
+      president: { status: "eliminated" as const, locationId: null, eliminatedByPlayerId: playerId },
+    };
+    expect(evaluateWinConditions(withPresidentKilled, cardData, predicates).has(playerId)).toBe(true);
+
+    // The other branch (2 leaders) also independently satisfies the "or"
+    // — needs a second other leader, hence 8 players in baseState().
+    const otherLeaders = state.cards.filter((c) => c.kind === "leader" && c.id !== assassin.id);
+    const withTwoLeadersKilled = eliminate(eliminate(state, otherLeaders[0]!.id, playerId), otherLeaders[1]!.id, playerId);
+    expect(evaluateWinConditions(withTwoLeadersKilled, cardData, predicates).has(playerId)).toBe(true);
   });
 });

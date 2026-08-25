@@ -1245,7 +1245,14 @@ function declareEliminateTargets(
   const bypassProtection = (effect.ignoreProtected ?? false) || bypassProtectionOverride;
 
   if (effect.target.kind === "president") {
-    const legal = isLegalPresidentTarget(state, cardData, actingPlayerId, bypassProtection);
+    // Wife's "Eliminate the President" needs her co-located with him
+    // (location: {mode:"self"}) — the same co-location gate Traffic Cop's
+    // move effect already enforces (applyMoveEffect below), just checked
+    // here instead since isLegalPresidentTarget has no notion of a source
+    // card's own location.
+    const coLocated =
+      effect.target.location?.mode !== "self" || state.president.locationId === actingCard.locationId;
+    const legal = coLocated && isLegalPresidentTarget(state, cardData, actingPlayerId, bypassProtection);
     validateTargets(effect.target.count, targetIds, legal ? [PRESIDENT_TARGET_ID] : []);
     return {
       targetIds: [...targetIds],
@@ -1561,8 +1568,9 @@ function drawRandomTargets(
 // The President isn't a CardInstance, so he can't appear in `state.cards`
 // — this sentinel represents him within the same targetIds/eligible-set
 // mechanism used for ordinary card targets, rather than needing a second
-// parallel target-selection type.
-const PRESIDENT_TARGET_ID = "president";
+// parallel target-selection type. Exported so consumers (e.g. the bot
+// package) can submit/recognize it without re-hardcoding the literal.
+export const PRESIDENT_TARGET_ID = "president";
 
 // Applies elimination to a single in-play card, honoring passive
 // interception — the one place this actually happens, shared by every

@@ -23,7 +23,13 @@ export type WinPredicate =
   | { readonly type: "locationSpread"; readonly faction: Faction; readonly minLocations: number }
   | { readonly type: "eliminatedByControlled"; readonly target: "president" | { readonly leaderCount: number } }
   | { readonly type: "metaNoFactionLeaderWins"; readonly faction: Faction }
-  | { readonly type: "metaNoOtherPlayerWins" };
+  | { readonly type: "metaNoOtherPlayerWins" }
+  // An explicit "or" *within* an otherwise-AND'd list — Master Assassin's
+  // "Eliminate the President or 2 leaders with cards you control. Survive."
+  // is (eliminatedByControlled:president OR eliminatedByControlled:2
+  // leaders) AND survives; the "or" wraps just the first sentence, kept as
+  // its own predicate slot rather than flattened.
+  | { readonly type: "or"; readonly predicates: readonly WinPredicate[] };
 
 // Pure query, not wired into the turn machine — per the design ("checked
 // exactly once, when the game actually ends... not polled continuously"),
@@ -31,7 +37,13 @@ export type WinPredicate =
 // President survives past the last location, or
 // GameState.turn.endgameTurnsRemaining reaches 0) and calls this then.
 //
-// Within one leader's predicate list, entries are OR'd. Meta-conditions
+// Within one leader's predicate list, entries are AND'd — every sentence
+// in the leader's card_data.json win_conditions text is a separate,
+// simultaneously-required condition (corrected 2026-08-24; see
+// rev_day_engine_design memory — the list was originally built as OR'd,
+// which was wrong). An explicit "or" *inside* one sentence (Master
+// Assassin) is represented by the `{type: "or"}` wrapper above, evaluated
+// as a genuine OR among its own nested predicates. Meta-conditions
 // (metaNoFactionLeaderWins/metaNoOtherPlayerWins) reference *other*
 // players' resolved win status, so they're resolved via a small
 // fixed-point loop (re-evaluate every player against the previous
@@ -109,7 +121,16 @@ export function evaluateWinConditions(
     return count >= target.leaderCount;
   };
 
-  const evalDirectPredicate = (playerId: PlayerId, predicate: WinPredicate): boolean => {
+  // Handles every predicate shape, including the two that need to read
+  // *other* players' resolved status (against `priorWinners`, the
+  // previous fixed-point pass's snapshot — see below) and the "or"
+  // wrapper (a genuine OR among its own nested predicates, evaluated
+  // recursively through this same function).
+  const evaluatePredicate = (
+    playerId: PlayerId,
+    predicate: WinPredicate,
+    priorWinners: ReadonlySet<PlayerId>,
+  ): boolean => {
     switch (predicate.type) {
       case "presidentStatus":
         return predicate.value === "eliminated"
@@ -131,10 +152,16 @@ export function evaluateWinConditions(
       case "eliminatedByControlled":
         return eliminatedByControlled(playerId, predicate.target);
       case "metaNoFactionLeaderWins":
+        return state.players.every((p) => {
+          if (p.id === playerId) return true;
+          const otherLeader = leaderOf(p.id);
+          const otherFaction = otherLeader && getFaction(cardData, otherLeader);
+          return otherFaction !== predicate.faction || !priorWinners.has(p.id);
+        });
       case "metaNoOtherPlayerWins":
-        // Resolved in the fixed-point loop below, against the *previous*
-        // iteration's winners — never true on a direct, single-pass read.
-        return false;
+        return state.players.every((p) => p.id === playerId || !priorWinners.has(p.id));
+      case "or":
+        return predicate.predicates.some((p) => evaluatePredicate(playerId, p, priorWinners));
     }
   };
 
@@ -155,20 +182,10 @@ export function evaluateWinConditions(
       const leader = leaderOf(player.id);
       if (!leader) continue;
       const predicates = winConditions[leader.defRef] ?? [];
-      const wins = predicates.some((predicate) => {
-        if (predicate.type === "metaNoFactionLeaderWins") {
-          return state.players.every((p) => {
-            if (p.id === player.id) return true;
-            const otherLeader = leaderOf(p.id);
-            const otherFaction = otherLeader && getFaction(cardData, otherLeader);
-            return otherFaction !== predicate.faction || !priorWinners.has(p.id);
-          });
-        }
-        if (predicate.type === "metaNoOtherPlayerWins") {
-          return state.players.every((p) => p.id === player.id || !priorWinners.has(p.id));
-        }
-        return evalDirectPredicate(player.id, predicate);
-      });
+      // Every sentence (list entry) is a separate, simultaneously-required
+      // condition — an empty list (a leader with no encoded conditions,
+      // or one genuinely with none) vacuously never wins.
+      const wins = predicates.length > 0 && predicates.every((predicate) => evaluatePredicate(player.id, predicate, priorWinners));
       if (wins) nextWinners.add(player.id);
     }
     const changed =
