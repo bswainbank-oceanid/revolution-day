@@ -22,6 +22,12 @@ export function GameScreen({ session, loading, error, act }: GameScreenProps) {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
   const [selectedAbilityIndex, setSelectedAbilityIndex] = useState<number | null>(null);
+  // Only used for a Motorcade played after the President's already been
+  // eliminated — its text is "move a card you control to any location"
+  // instead of a normal forward move, so it needs its own in-play card
+  // pick, separate from selectedCardId (which holds the Motorcade itself,
+  // a *hand* card, for this same turnMode).
+  const [selectedMoveCardId, setSelectedMoveCardId] = useState<string | null>(null);
 
   const [selectedTargetIds, setSelectedTargetIds] = useState<Set<string>>(new Set());
   const [selectedTargetLocationIds, setSelectedTargetLocationIds] = useState<Set<string>>(new Set());
@@ -33,6 +39,7 @@ export function GameScreen({ session, loading, error, act }: GameScreenProps) {
     setSelectedCardId(null);
     setSelectedLocationId(null);
     setSelectedAbilityIndex(null);
+    setSelectedMoveCardId(null);
   }
 
   function resetResolutionSelection() {
@@ -77,6 +84,14 @@ export function GameScreen({ session, loading, error, act }: GameScreenProps) {
 
   const frame = state.resolutionStack[state.resolutionStack.length - 1];
 
+  // A selected hand card that's a Motorcade needs playMotorcade, not
+  // playCard — and if the President's already eliminated, its text
+  // changes to "move a card you control to any location" instead of a
+  // normal forward move, needing its own in-play-card pick on the board.
+  const selectedHandCard = selectedCardId ? state.cards.find((c) => c.id === selectedCardId) : undefined;
+  const playingMotorcade = turnMode === "playCard" && selectedHandCard?.kind === "motorcade";
+  const motorcadeNeedsMove = playingMotorcade && state.president.status === "eliminated";
+
   return (
     <div className="game-screen">
       {error && <p className="error">{error}</p>}
@@ -84,15 +99,31 @@ export function GameScreen({ session, loading, error, act }: GameScreenProps) {
 
       <Board
         state={state}
-        selectedCardIds={frame ? selectedTargetIds : turnMode !== "idle" ? selectedCardOrLocSet(selectedCardId) : undefined}
-        onCardClick={frame ? (id) => toggleTarget(id) : turnMode !== "idle" ? (id) => onTurnCardClick(id) : undefined}
+        selectedCardIds={
+          frame
+            ? selectedTargetIds
+            : motorcadeNeedsMove
+              ? selectedCardOrLocSet(selectedMoveCardId)
+              : turnMode !== "idle"
+                ? selectedCardOrLocSet(selectedCardId)
+                : undefined
+        }
+        onCardClick={
+          frame
+            ? (id) => toggleTarget(id)
+            : motorcadeNeedsMove
+              ? (id) => setSelectedMoveCardId(id)
+              : turnMode !== "idle"
+                ? (id) => onTurnCardClick(id)
+                : undefined
+        }
         selectedLocationIds={
           frame ? selectedTargetLocationIds : turnMode !== "idle" ? selectedCardOrLocSet(selectedLocationId) : undefined
         }
         onLocationClick={
           frame
             ? (id) => toggleTargetLocation(id)
-            : turnMode === "playCard" || turnMode === "moveCard"
+            : turnMode === "moveCard" || (turnMode === "playCard" && (motorcadeNeedsMove || !playingMotorcade))
               ? (id) => setSelectedLocationId(id)
               : undefined
         }
@@ -118,6 +149,9 @@ export function GameScreen({ session, loading, error, act }: GameScreenProps) {
           selectedLocationId={selectedLocationId}
           selectedAbilityIndex={selectedAbilityIndex}
           setSelectedAbilityIndex={setSelectedAbilityIndex}
+          playingMotorcade={playingMotorcade}
+          motorcadeNeedsMove={motorcadeNeedsMove}
+          selectedMoveCardId={selectedMoveCardId}
           onCancel={resetTurnSelection}
           onSubmit={submit}
         />
@@ -160,6 +194,9 @@ interface TurnActionPanelProps {
   readonly selectedLocationId: string | null;
   readonly selectedAbilityIndex: number | null;
   readonly setSelectedAbilityIndex: (index: number) => void;
+  readonly playingMotorcade: boolean;
+  readonly motorcadeNeedsMove: boolean;
+  readonly selectedMoveCardId: string | null;
   readonly onCancel: () => void;
   readonly onSubmit: (action: Action) => Promise<void>;
 }
@@ -173,6 +210,9 @@ function TurnActionPanel({
   selectedLocationId,
   selectedAbilityIndex,
   setSelectedAbilityIndex,
+  playingMotorcade,
+  motorcadeNeedsMove,
+  selectedMoveCardId,
   onCancel,
   onSubmit,
 }: TurnActionPanelProps) {
@@ -210,7 +250,47 @@ function TurnActionPanel({
         </>
       )}
 
-      {turnMode === "playCard" && (
+      {turnMode === "playCard" && playingMotorcade && !motorcadeNeedsMove && (
+        <>
+          <p className="hint">
+            A Motorcade moves the President forward automatically — no location needed. Just confirm.
+          </p>
+          <button type="button" disabled={!selectedCardId} onClick={() => onSubmit({ type: "playMotorcade", cardId: selectedCardId! })}>
+            Confirm
+          </button>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+        </>
+      )}
+
+      {turnMode === "playCard" && motorcadeNeedsMove && (
+        <>
+          <p className="hint">
+            The President's already been eliminated — this Motorcade instead moves one of your own cards. Click one
+            of your in-play cards, then a destination.
+          </p>
+          <button
+            type="button"
+            disabled={!selectedCardId || !selectedMoveCardId || !selectedLocationId}
+            onClick={() =>
+              onSubmit({
+                type: "playMotorcade",
+                cardId: selectedCardId!,
+                moveOwnCardId: selectedMoveCardId!,
+                moveToLocationId: selectedLocationId!,
+              })
+            }
+          >
+            Confirm
+          </button>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+        </>
+      )}
+
+      {turnMode === "playCard" && !playingMotorcade && (
         <>
           <p className="hint">Click a hand card, then a location.</p>
           <button
