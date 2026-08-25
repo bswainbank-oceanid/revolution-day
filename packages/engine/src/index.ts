@@ -53,8 +53,8 @@ export type {
   ConditionOperand,
   MoveDestination,
 } from "./effects/dsl";
-export { evaluateWinConditions } from "./effects/winConditions";
-export type { WinPredicate } from "./effects/winConditions";
+export { evaluateWinConditions, explainWinConditions, isGameOver, revealAllBlendedCards } from "./effects/winConditions";
+export type { WinPredicate, WinConditionExplanation, PlayerWinOutcome } from "./effects/winConditions";
 export { winConditions } from "./data/winConditions";
 export type { PassiveDefinition } from "./effects/passives";
 export { getPassive, passives } from "./data/passives";

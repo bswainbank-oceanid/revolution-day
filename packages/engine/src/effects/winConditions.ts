@@ -199,3 +199,193 @@ export function evaluateWinConditions(
   }
   return winners;
 }
+
+// One player's outcome, broken down predicate by predicate — the "why"
+// behind a win or loss. `predicates` mirrors the leader's own
+// winConditions list shape 1:1 (including nested "or" predicates as a
+// single entry, not expanded) so a caller can render it directly against
+// the same data the leader's card text describes.
+export interface PlayerWinOutcome {
+  readonly playerId: PlayerId;
+  readonly leaderDefRef: string | null;
+  readonly won: boolean;
+  readonly predicates: readonly { readonly predicate: WinPredicate; readonly satisfied: boolean }[];
+}
+
+export interface WinConditionExplanation {
+  readonly winners: readonly PlayerId[];
+  readonly losers: readonly PlayerId[];
+  // True when every player's individual predicates were satisfied and the
+  // "if all players win, everyone loses" override is what actually zeroed
+  // the winner set — surfaced explicitly so a "why did nobody win" caller
+  // isn't left looking at all-true predicates with no explanation.
+  readonly allPlayersWouldWin: boolean;
+  readonly outcomes: readonly PlayerWinOutcome[]; // one per player, seat order
+}
+
+// Same computation as evaluateWinConditions, but keeps the per-predicate
+// results instead of collapsing straight to a winner set — built as a
+// second entry point rather than folding into evaluateWinConditions
+// itself so that function's existing signature/callers (its own tests,
+// any code that only ever needed the plain winner set) don't have to
+// change. Duplicates the fixed-point loop rather than sharing it with
+// evaluateWinConditions: the two need different-shaped accumulators
+// (Set<PlayerId> vs. a per-player predicate log) at each pass, and the
+// loop body itself is short enough that threading a shared inner function
+// through both wouldn't actually save much.
+export function explainWinConditions(
+  state: GameState,
+  cardData: CardData,
+  winConditions: Readonly<Record<string, readonly WinPredicate[]>>,
+): WinConditionExplanation {
+  const leaderOf = (playerId: PlayerId): CardInstance | undefined =>
+    state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+  const survives = (playerId: PlayerId): boolean => {
+    const leader = leaderOf(playerId);
+    return leader !== undefined && leader.zone === "inPlay";
+  };
+  const locationByName = (name: string): { id: string } => {
+    const loc = state.board.find((l) => l.name === name);
+    if (!loc) throw new Error(`No location named "${name}" on this board`);
+    return loc;
+  };
+  const cardsAt = (locationId: string): CardInstance[] =>
+    state.cards.filter((c) => c.zone === "inPlay" && c.locationId === locationId);
+  const factionMajority = (locationName: string, faction: Faction): boolean => {
+    const cards = cardsAt(locationByName(locationName).id);
+    let matching = 0;
+    let other = 0;
+    for (const c of cards) {
+      if (getFaction(cardData, c) === faction) matching++;
+      else other++;
+    }
+    return matching > other;
+  };
+  const locationSpread = (faction: Faction, minLocations: number): boolean => {
+    const locationIds = new Set<string>();
+    for (const c of state.cards) {
+      if (c.zone === "inPlay" && c.locationId && getFaction(cardData, c) === faction) locationIds.add(c.locationId);
+    }
+    return locationIds.size >= minLocations;
+  };
+  const eliminatedByControlled = (
+    playerId: PlayerId,
+    target: Extract<WinPredicate, { type: "eliminatedByControlled" }>["target"],
+  ): boolean => {
+    if (target === "president") {
+      return state.president.status === "eliminated" && state.president.eliminatedByPlayerId === playerId;
+    }
+    const count = state.cards.filter(
+      (c) => c.kind === "leader" && c.zone === "eliminated" && c.eliminatedByPlayerId === playerId,
+    ).length;
+    return count >= target.leaderCount;
+  };
+  const evaluatePredicate = (playerId: PlayerId, predicate: WinPredicate, priorWinners: ReadonlySet<PlayerId>): boolean => {
+    switch (predicate.type) {
+      case "presidentStatus":
+        return predicate.value === "eliminated"
+          ? state.president.status === "eliminated"
+          : state.president.status !== "eliminated";
+      case "presidentEliminatedAt":
+        return (
+          state.president.status === "eliminated" &&
+          state.president.eliminatedAtLocationId === locationByName(predicate.locationName).id
+        );
+      case "survives":
+        return survives(playerId);
+      case "noOtherSurvivingLeaders":
+        return state.players.every((p) => p.id === playerId || !survives(p.id));
+      case "factionMajority":
+        return factionMajority(predicate.locationName, predicate.faction);
+      case "locationSpread":
+        return locationSpread(predicate.faction, predicate.minLocations);
+      case "eliminatedByControlled":
+        return eliminatedByControlled(playerId, predicate.target);
+      case "metaNoFactionLeaderWins":
+        return state.players.every((p) => {
+          if (p.id === playerId) return true;
+          const otherLeader = leaderOf(p.id);
+          const otherFaction = otherLeader && getFaction(cardData, otherLeader);
+          return otherFaction !== predicate.faction || !priorWinners.has(p.id);
+        });
+      case "metaNoOtherPlayerWins":
+        return state.players.every((p) => p.id === playerId || !priorWinners.has(p.id));
+      case "or":
+        return predicate.predicates.some((p) => evaluatePredicate(playerId, p, priorWinners));
+    }
+  };
+
+  let winners = new Set<PlayerId>();
+  const maxIterations = state.players.length + 2;
+  for (let i = 0; i < maxIterations; i++) {
+    const priorWinners = winners;
+    const nextWinners = new Set<PlayerId>();
+    for (const player of state.players) {
+      const leader = leaderOf(player.id);
+      if (!leader) continue;
+      const predicates = winConditions[leader.defRef] ?? [];
+      const wins = predicates.length > 0 && predicates.every((predicate) => evaluatePredicate(player.id, predicate, priorWinners));
+      if (wins) nextWinners.add(player.id);
+    }
+    const changed = nextWinners.size !== priorWinners.size || [...nextWinners].some((id) => !priorWinners.has(id));
+    winners = nextWinners;
+    if (!changed) break;
+  }
+
+  // One final pass at the fixed point to capture per-predicate results —
+  // meta-conditions read `winners` itself here, which is safe precisely
+  // because the loop above only just stopped changing (i.e. re-evaluating
+  // against `winners` reproduces `winners`).
+  const outcomes: PlayerWinOutcome[] = state.players.map((player) => {
+    const leader = leaderOf(player.id);
+    const predicates = leader ? (winConditions[leader.defRef] ?? []) : [];
+    return {
+      playerId: player.id,
+      leaderDefRef: leader?.defRef ?? null,
+      won: winners.has(player.id),
+      predicates: predicates.map((predicate) => ({
+        predicate,
+        satisfied: evaluatePredicate(player.id, predicate, winners),
+      })),
+    };
+  });
+
+  const allPlayersWouldWin = state.players.length > 0 && winners.size === state.players.length;
+  const finalWinners = allPlayersWouldWin ? new Set<PlayerId>() : winners;
+
+  return {
+    winners: state.players.filter((p) => finalWinners.has(p.id)).map((p) => p.id),
+    losers: state.players.filter((p) => !finalWinners.has(p.id)).map((p) => p.id),
+    allPlayersWouldWin,
+    outcomes: outcomes.map((o) => ({ ...o, won: finalWinners.has(o.playerId) })),
+  };
+}
+
+// True once the game has reached one of its two end states — the
+// President surviving past the last board location, or the post-
+// elimination endgame countdown reaching 0 (see reducer.ts: set to
+// 3 * players.length + 1 the moment he's eliminated, so every player,
+// including whoever's turn is already in progress at that moment and
+// gets to finish it uninterrupted, still gets exactly 3 full turns
+// afterward before the game ends — the in-progress turn's own eventual
+// endTurn consumes the "+1" without counting toward anyone's 3). A pure
+// query, not polled by the engine itself; a caller (the server) checks
+// this after every applied action, since either condition can become true
+// mid-turn, not just at a turn boundary.
+export function isGameOver(state: GameState): boolean {
+  return state.president.status === "survived" || state.turn.endgameTurnsRemaining === 0;
+}
+
+// "All blended (face-down) characters are revealed at the end of the
+// game" (additional_rulings, card_data.json) — evaluateWinConditions/
+// explainWinConditions already read true affiliation internally
+// regardless of faceUp, so this is purely about the *displayed* state
+// once the game is over: a caller (the server) applies this once, at the
+// moment isGameOver first becomes true, so a finished game's persisted
+// state shows everyone's real identity rather than stale face-down cards.
+export function revealAllBlendedCards(state: GameState): GameState {
+  return {
+    ...state,
+    cards: state.cards.map((c) => (c.zone === "inPlay" && c.faceUp === false ? { ...c, faceUp: true } : c)),
+  };
+}

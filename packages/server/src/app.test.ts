@@ -1,7 +1,9 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { GameState } from "@rev-day/engine";
 import type { FastifyInstance } from "fastify";
 
 // A fresh temp SQLite file per test run, set *before* importing ./app (which
@@ -9,6 +11,8 @@ import type { FastifyInstance } from "fastify";
 // time) — keeps this suite from touching the real dev.sqlite.
 process.env.DATABASE_PATH = path.join(mkdtempSync(path.join(tmpdir(), "rev-day-server-test-")), "test.sqlite");
 const { buildApp } = await import("./app");
+const { db } = await import("./db/client");
+const { games } = await import("./db/schema");
 
 let app: FastifyInstance;
 
@@ -258,5 +262,111 @@ describe("?viewerId= filtering", () => {
     for (const entry of listRes.json()) {
       expect(entry.resultingState.rng).toBeUndefined();
     }
+  });
+});
+
+describe("game over", () => {
+  // Forces the game one endTurn away from the post-elimination countdown
+  // expiring, without actually having to play out 3*playerIds.length real
+  // turns through the API — this suite is testing the server's detection/
+  // finalization wiring, not the engine's own turn-counting (that's
+  // covered directly in the engine's reducer.test.ts).
+  async function forceOneTurnFromGameOver(id: number, state: GameState) {
+    await db
+      .update(games)
+      .set({ state: { ...state, turn: { ...state.turn, phase: "action", actionsRemaining: 0, endgameTurnsRemaining: 1 } } })
+      .where(eq(games.id, id));
+  }
+
+  it("ends the game mid-action when the endgame countdown reaches 0, and rejects further actions", async () => {
+    const created = await app.inject({ method: "POST", url: "/games", payload: { playerIds: ["a", "b", "c"], seed: 20 } });
+    const { id, state } = created.json();
+    const player = state.turn.currentPlayerId;
+    await forceOneTurnFromGameOver(id, state);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/games/${id}/actions`,
+      payload: { actingPlayerId: player, action: { type: "endTurn" } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.gameOver).not.toBeNull();
+    expect(body.gameOver.winners).toBeInstanceOf(Array);
+    expect(body.gameOver.losers).toBeInstanceOf(Array);
+    expect(body.gameOver.outcomes).toHaveLength(3);
+    expect(body.state.turn.endgameTurnsRemaining).toBe(0);
+
+    // Persisted, not just returned in this one response.
+    const fetched = await app.inject({ method: "GET", url: `/games/${id}` });
+    expect(fetched.json().gameOver).toEqual(body.gameOver);
+
+    // Further actions — human or bot — are rejected outright, permanently.
+    const again = await app.inject({
+      method: "POST",
+      url: `/games/${id}/actions`,
+      payload: { actingPlayerId: player, action: { type: "draw" } },
+    });
+    expect(again.statusCode).toBe(409);
+    expect(again.json().gameOver).toEqual(body.gameOver);
+
+    const botAgain = await app.inject({ method: "POST", url: `/games/${id}/bot-turn`, payload: { playerId: player } });
+    expect(botAgain.statusCode).toBe(409);
+    expect(botAgain.json().gameOver).toEqual(body.gameOver);
+  });
+
+  it("reveals face-down cards in the persisted state once the game ends", async () => {
+    const created = await app.inject({ method: "POST", url: "/games", payload: { playerIds: ["a", "b", "c"], seed: 21 } });
+    const { id, state } = created.json();
+    const player = state.turn.currentPlayerId;
+
+    const blendCard = state.cards.find((c: { kind: string }) => c.kind === "nonLeader");
+    const cards = state.cards.map((c: { id: string }) =>
+      c.id === blendCard.id
+        ? { ...c, zone: "inPlay", locationId: state.board[0].id, controller: player, faceUp: false }
+        : c,
+    );
+    await db
+      .update(games)
+      .set({
+        state: {
+          ...state,
+          cards,
+          turn: { ...state.turn, phase: "action", actionsRemaining: 0, endgameTurnsRemaining: 1 },
+        },
+      })
+      .where(eq(games.id, id));
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/games/${id}/actions`,
+      payload: { actingPlayerId: player, action: { type: "endTurn" } },
+    });
+
+    const revealedCard = res.json().state.cards.find((c: { id: string }) => c.id === blendCard.id);
+    expect(revealedCard.faceUp).toBe(true);
+  });
+
+  it("ends the game mid bot-turn and truncates any steps the bot would have taken afterward", async () => {
+    const created = await app.inject({ method: "POST", url: "/games", payload: { playerIds: ["a", "b", "c"], seed: 22 } });
+    const { id, state } = created.json();
+    const player = state.turn.currentPlayerId;
+    await forceOneTurnFromGameOver(id, state);
+
+    // With phase "action" and actionsRemaining already 0, the bot's very
+    // first (and only) decision is forced straight to endTurn — see
+    // decideTurnAction in packages/bots — so this deterministically ends
+    // the game on the bot's first step, exercising the truncation path
+    // rather than a full, non-deterministic bot turn.
+    const res = await app.inject({ method: "POST", url: `/games/${id}/bot-turn`, payload: { playerId: player } });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.actionsTaken).toBe(1);
+    expect(body.gameOver).not.toBeNull();
+    expect(body.logged).toHaveLength(1);
+    expect(body.logged[0].action).toEqual({ type: "endTurn" });
+    expect(body.state.turn.endgameTurnsRemaining).toBe(0);
   });
 });

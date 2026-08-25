@@ -18,7 +18,8 @@ await client.execute(`
     created_at TEXT NOT NULL DEFAULT (current_timestamp),
     player_ids TEXT NOT NULL,
     seed INTEGER NOT NULL,
-    state TEXT NOT NULL
+    state TEXT NOT NULL,
+    game_over TEXT
   )
 `);
 await client.execute(`

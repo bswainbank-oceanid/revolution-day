@@ -302,14 +302,15 @@ function applyEndTurn(state: GameState): GameState {
     p.id === currentPlayerId ? { ...p, hasTakenFirstTurn: true } : p,
   );
 
-  // Set to 3 the moment the President is eliminated (eliminateSingleTarget)
-  // and decrements once per completed turn from there. "Every player
-  // (including the current player) gets three more turns" could mean
-  // per-round or per-individual-turn — read here as per-individual-turn
-  // (this counter, not a round counter); a caller checking win conditions
-  // (see effects/winConditions.ts) should do so once this reaches 0, or
-  // once the President survives past the last location — the engine
-  // itself doesn't force the game to end.
+  // Set to 3*players.length+1 the moment the President is eliminated
+  // (eliminateSingleTarget) and decrements once per completed turn from
+  // there, unconditionally — see that function's comment for why the "+1"
+  // gives every player, including whoever's turn is already in progress
+  // at the moment he dies, exactly 3 full turns following his elimination.
+  // A caller checking win conditions (effects/winConditions.ts's
+  // isGameOver) should do so once this reaches 0, or once the President
+  // survives past the last location — the engine itself doesn't force the
+  // game to end.
   const endgameTurnsRemaining =
     state.turn.endgameTurnsRemaining === null ? null : Math.max(0, state.turn.endgameTurnsRemaining - 1);
 
@@ -1625,8 +1626,8 @@ function eliminateCard(
 // `eliminatedByPlayerId` is whoever controls the *eliminating* card (not
 // necessarily the acting player, under remote activation) — stamped once,
 // backing Master Assassin's win condition (see CardInstance.eliminatedByPlayerId).
-// Newly eliminating the President also starts the 3-turn endgame countdown
-// here, the one place his status actually transitions to "eliminated".
+// Newly eliminating the President also starts the endgame countdown here,
+// the one place his status actually transitions to "eliminated".
 function eliminateSingleTarget(
   state: GameState,
   targetId: string,
@@ -1641,7 +1642,17 @@ function eliminateSingleTarget(
         eliminatedAtLocationId: state.president.locationId ?? undefined,
         eliminatedByPlayerId: eliminatedByPlayerId ?? undefined,
       },
-      turn: { ...state.turn, endgameTurnsRemaining: 3 },
+      // "Everyone, including whoever's turn is already in progress right
+      // now, gets 3 more full turns" — the in-progress turn isn't cut
+      // short and finishes normally, but doesn't itself count toward
+      // anyone's 3 (a turn already underway when he dies isn't "following"
+      // his elimination). Its own eventual endTurn still decrements this
+      // counter once (applyEndTurn below, unconditionally, whenever
+      // non-null) — the "+1" here exists purely to absorb that one free
+      // decrement, so the 3*players.length turns that follow are exactly
+      // 3 full turns for every player. See isGameOver in
+      // effects/winConditions.ts, which reads this reaching 0.
+      turn: { ...state.turn, endgameTurnsRemaining: 3 * state.players.length + 1 },
       pendingPassiveQueue: state.pendingPassiveQueue,
     };
   }

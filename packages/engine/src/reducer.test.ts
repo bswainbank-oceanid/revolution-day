@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { cardData } from "./data/cardData";
+import { isGameOver } from "./effects/winConditions";
 import { applyAction } from "./reducer";
+import { getAllowedLocationTypes } from "./state/cardLookup";
 import type { Action } from "./actions";
 import type { CardInstance } from "./state/cards";
 import type { GameState, PlayerId } from "./state/game";
@@ -914,6 +916,65 @@ describe("applyAction: President targeting (Wife)", () => {
     state = act(state, player, { type: "activateAbility", cardId: wife.id, abilityIndex: 0 });
 
     expect(() => act(state, player, { type: "chooseTargets", targetIds: ["president"] })).toThrow();
+  });
+});
+
+// Once the President is eliminated, a player whose own leader is still
+// sitting in hand must play it before any other action that turn
+// (requireLeaderPlayedIfStuck) — a no-op once it's already in play.
+function playLeaderIfStuck(state: GameState, playerId: PlayerId): GameState {
+  const stuck = state.cards.find((c) => c.kind === "leader" && c.zone === "hand" && c.controller === playerId);
+  if (!stuck) return state;
+  const allowedTypes = getAllowedLocationTypes(cardData, stuck);
+  const location = state.board.find((l) => allowedTypes.includes(l.type))!;
+  return act(state, playerId, { type: "playCard", cardId: stuck.id, locationId: location.id });
+}
+
+describe("applyAction: endgame countdown after President elimination", () => {
+  it("gives every player, including whoever's turn is already in progress, exactly 3 more full turns", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const player = state.turn.currentPlayerId; // whoever's turn is already underway
+    const wife = state.cards.find((c) => c.defRef === "Wife")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, wife.id, loc, player);
+    state = { ...state, president: { status: "alive", locationId: loc } };
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: wife.id, abilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: ["president"] });
+
+    // 3 players * 3 turns each + 1 to absorb the in-progress turn's own
+    // endTurn (which doesn't count toward anyone's 3) — see reducer.ts's
+    // eliminateSingleTarget comment.
+    expect(state.turn.endgameTurnsRemaining).toBe(10);
+    expect(isGameOver(state)).toBe(false);
+
+    // The already-in-progress turn finishes normally, uninterrupted — its
+    // own endTurn still decrements the counter once, but that decrement
+    // is exactly the "+1" being absorbed, not one of anyone's 3. (Might
+    // need to play their own leader first too, same forced-play rule as
+    // everyone else from here on.)
+    state = playLeaderIfStuck(state, player);
+    state = act(state, player, { type: "endTurn" });
+    expect(state.turn.endgameTurnsRemaining).toBe(9);
+    expect(isGameOver(state)).toBe(false);
+
+    // 3 full round-robin cycles of the table (9 more turns) follow.
+    for (let i = 0; i < 8; i++) {
+      state = act(state, state.turn.currentPlayerId, { type: "draw" });
+      state = playLeaderIfStuck(state, state.turn.currentPlayerId);
+      state = act(state, state.turn.currentPlayerId, { type: "endTurn" });
+      expect(isGameOver(state)).toBe(false);
+    }
+    expect(state.turn.endgameTurnsRemaining).toBe(1);
+
+    // The 9th (final) post-elimination turn — the game ends right at the
+    // end of it, matching "3 more full turns," not before.
+    state = act(state, state.turn.currentPlayerId, { type: "draw" });
+    expect(isGameOver(state)).toBe(false); // not yet — this turn hasn't ended
+    state = playLeaderIfStuck(state, state.turn.currentPlayerId);
+    state = act(state, state.turn.currentPlayerId, { type: "endTurn" });
+    expect(state.turn.endgameTurnsRemaining).toBe(0);
+    expect(isGameOver(state)).toBe(true);
   });
 });
 

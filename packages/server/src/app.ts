@@ -1,6 +1,16 @@
 import { takeBotTurn } from "@rev-day/bots";
-import { applyAction, cardData, evaluateWinConditions, filterForPlayer, setupGame, winConditions } from "@rev-day/engine";
-import type { Action, FilteredGameState, GameState, PlayerId } from "@rev-day/engine";
+import {
+  applyAction,
+  cardData,
+  evaluateWinConditions,
+  explainWinConditions,
+  filterForPlayer,
+  isGameOver,
+  revealAllBlendedCards,
+  setupGame,
+  winConditions,
+} from "@rev-day/engine";
+import type { Action, FilteredGameState, GameState, PlayerId, WinConditionExplanation } from "@rev-day/engine";
 import { eq } from "drizzle-orm";
 import Fastify from "fastify";
 import type { FastifyReply } from "fastify";
@@ -47,6 +57,34 @@ export function buildApp(options?: { logger?: boolean }) {
 
   function maybeFilterState(state: GameState, viewerId: PlayerId | undefined): GameState | FilteredGameState {
     return viewerId === undefined ? state : filterForPlayer(state, viewerId);
+  }
+
+  // If `state` has just reached one of the two end states (checked after
+  // every applied action — the game can end mid-turn, not just at a turn
+  // boundary), reveals every still-blended card and computes the winners/
+  // losers/why breakdown. Returns `{ state, gameOver }` either way — state
+  // is the revealed version once over, otherwise unchanged — so callers
+  // can use it directly as "what to persist" without a separate branch.
+  function checkGameOver(state: GameState): { state: GameState; gameOver: WinConditionExplanation | null } {
+    if (!isGameOver(state)) return { state, gameOver: null };
+    const revealed = revealAllBlendedCards(state);
+    return { state: revealed, gameOver: explainWinConditions(revealed, cardData, winConditions) };
+  }
+
+  // Shared guard for both action-applying routes: once a game's gameOver
+  // is set, it's set permanently (see schema.ts) — no further actions are
+  // legal, human or bot. Sends the 409 itself, matching resolveViewerId's
+  // style, since a real gameOver payload is more useful here than a bare
+  // error string.
+  function rejectIfAlreadyOver(
+    row: { gameOver: WinConditionExplanation | null },
+    viewerId: PlayerId | undefined,
+    state: GameState,
+    reply: FastifyReply,
+  ): boolean {
+    if (row.gameOver === null) return false;
+    reply.code(409).send({ error: "This game is already over", gameOver: row.gameOver, state: maybeFilterState(state, viewerId) });
+    return true;
   }
 
   app.get("/health", async () => ({ status: "ok" }));
@@ -102,18 +140,20 @@ export function buildApp(options?: { logger?: boolean }) {
     }
     const viewerId = resolveViewerId(request, row.playerIds, reply);
     if (viewerId === "invalid") return;
+    if (rejectIfAlreadyOver(row, viewerId, row.state, reply)) return;
 
-    let nextState: GameState;
+    let appliedState: GameState;
     try {
-      nextState = applyAction(row.state, body.actingPlayerId, body.action, cardData);
+      appliedState = applyAction(row.state, body.actingPlayerId, body.action, cardData);
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
+    const { state: nextState, gameOver } = checkGameOver(appliedState);
 
     const priorActions = await db.query.gameActions.findMany({ where: eq(gameActions.gameId, id) });
     const seq = priorActions.length;
 
-    await db.update(games).set({ state: nextState }).where(eq(games.id, id));
+    await db.update(games).set({ state: nextState, gameOver }).where(eq(games.id, id));
     const [logged] = await db
       .insert(gameActions)
       .values({
@@ -128,6 +168,7 @@ export function buildApp(options?: { logger?: boolean }) {
     return {
       id,
       state: maybeFilterState(nextState, viewerId),
+      gameOver,
       logged: { ...logged, resultingState: maybeFilterState(logged!.resultingState, viewerId) },
     };
   });
@@ -163,15 +204,22 @@ export function buildApp(options?: { logger?: boolean }) {
     }
     const viewerId = resolveViewerId(request, row.playerIds, reply);
     if (viewerId === "invalid") return;
+    if (rejectIfAlreadyOver(row, viewerId, row.state, reply)) return;
 
-    const { state: nextState, actions } = takeBotTurn(row.state, body.playerId, cardData);
-
-    await db.update(games).set({ state: nextState }).where(eq(games.id, id));
+    const { state: computedState, actions } = takeBotTurn(row.state, body.playerId, cardData);
 
     const priorActions = await db.query.gameActions.findMany({ where: eq(gameActions.gameId, id) });
     let seq = priorActions.length;
     const logged = [];
+    // The game can end mid-turn, including partway through a bot's own
+    // turn (e.g. its own Motorcade play pushes the President past the
+    // last location) — checked after each individual step, not just once
+    // at the end, so any steps takeBotTurn computed *after* the game
+    // actually ended are discarded here rather than persisted/logged.
+    let finalState = computedState;
+    let gameOver: WinConditionExplanation | null = null;
     for (const step of actions) {
+      const { state: resultingState, gameOver: stepGameOver } = checkGameOver(step.resultingState);
       const [loggedRow] = await db
         .insert(gameActions)
         .values({
@@ -179,13 +227,20 @@ export function buildApp(options?: { logger?: boolean }) {
           seq: seq++,
           actingPlayerId: step.actingPlayerId,
           action: step.action,
-          resultingState: step.resultingState,
+          resultingState,
         })
         .returning();
       logged.push({ ...loggedRow!, resultingState: maybeFilterState(loggedRow!.resultingState, viewerId) });
+      if (stepGameOver) {
+        finalState = resultingState;
+        gameOver = stepGameOver;
+        break;
+      }
     }
 
-    return { id, state: maybeFilterState(nextState, viewerId), actionsTaken: logged.length, logged };
+    await db.update(games).set({ state: finalState, gameOver }).where(eq(games.id, id));
+
+    return { id, state: maybeFilterState(finalState, viewerId), actionsTaken: logged.length, gameOver, logged };
   });
 
   // A pure query, not something the engine triggers on its own — the

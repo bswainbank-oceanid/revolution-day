@@ -4,7 +4,7 @@ import { winConditions } from "../data/winConditions";
 import { setupGame } from "../setup";
 import type { CardInstance } from "../state/cards";
 import type { GameState, PlayerId } from "../state/game";
-import { evaluateWinConditions } from "./winConditions";
+import { evaluateWinConditions, explainWinConditions, isGameOver, revealAllBlendedCards } from "./winConditions";
 import type { WinPredicate } from "./winConditions";
 
 function baseState(playerIds: readonly string[] = ["a", "b", "c", "d", "e", "f", "g", "h"]): GameState {
@@ -362,5 +362,108 @@ describe("evaluateWinConditions: meta-condition fixed point", () => {
     const otherLeaders = state.cards.filter((c) => c.kind === "leader" && c.id !== assassin.id);
     const withTwoLeadersKilled = eliminate(eliminate(state, otherLeaders[0]!.id, playerId), otherLeaders[1]!.id, playerId);
     expect(evaluateWinConditions(withTwoLeadersKilled, cardData, predicates).has(playerId)).toBe(true);
+  });
+});
+
+describe("explainWinConditions", () => {
+  it("agrees with evaluateWinConditions on the winner set", () => {
+    let state = baseState();
+    const { playerId, card: hos } = leaderOwner(state, "Head of Security");
+    state = place(state, hos.id, "loc-0", playerId);
+
+    const winners = evaluateWinConditions(state, cardData, winConditions);
+    const explanation = explainWinConditions(state, cardData, winConditions);
+
+    expect(explanation.winners).toEqual([...winners]);
+    expect(new Set(explanation.losers)).toEqual(new Set(state.players.map((p) => p.id).filter((id) => !winners.has(id))));
+  });
+
+  it("reports each predicate's own pass/fail, not just the overall outcome", () => {
+    let state = baseState();
+    const { playerId, card: hos } = leaderOwner(state, "Head of Security");
+    state = place(state, hos.id, "loc-0", playerId); // survives: true
+    state = { ...state, president: { status: "eliminated", locationId: null, eliminatedAtLocationId: "loc-0" } };
+
+    const explanation = explainWinConditions(state, cardData, winConditions);
+    const outcome = explanation.outcomes.find((o) => o.playerId === playerId)!;
+
+    expect(outcome.won).toBe(false); // the reported bug's exact scenario
+    expect(outcome.leaderDefRef).toBe("Head of Security");
+    expect(outcome.predicates).toEqual([
+      { predicate: { type: "presidentStatus", value: "notEliminated" }, satisfied: false },
+      { predicate: { type: "survives" }, satisfied: true },
+    ]);
+  });
+
+  it("flags allPlayersWouldWin and empties winners/losers-as-winners when the override fires", () => {
+    let state = baseState();
+    for (const leader of state.cards.filter((c) => c.kind === "leader")) {
+      state = place(state, leader.id, "loc-0", leader.controller!);
+    }
+    const predicates: Record<string, readonly WinPredicate[]> = Object.fromEntries(
+      cardData.leaders.map((l) => [l.name, [{ type: "survives" } satisfies WinPredicate]]),
+    );
+
+    const explanation = explainWinConditions(state, cardData, predicates);
+
+    expect(explanation.allPlayersWouldWin).toBe(true);
+    expect(explanation.winners).toEqual([]);
+    expect(explanation.losers).toEqual(state.players.map((p) => p.id)); // nobody actually wins
+    // But each individual predicate genuinely was satisfied — the override,
+    // not a failed condition, is why nobody's marked as having won.
+    for (const outcome of explanation.outcomes) {
+      expect(outcome.won).toBe(false);
+      expect(outcome.predicates.every((p) => p.satisfied)).toBe(true);
+    }
+  });
+
+  it("reports a player with no leader in play as having no predicates and not winning", () => {
+    const state = baseState(["a", "b", "c"]); // leaders start in hand, nobody placed
+    const explanation = explainWinConditions(state, cardData, winConditions);
+
+    for (const outcome of explanation.outcomes) {
+      expect(outcome.won).toBe(false);
+    }
+  });
+});
+
+describe("isGameOver", () => {
+  it("is false for a fresh game", () => {
+    expect(isGameOver(baseState(["a", "b", "c"]))).toBe(false);
+  });
+
+  it("is true once the President has survived past the last location", () => {
+    const state = { ...baseState(["a", "b", "c"]), president: { status: "survived" as const, locationId: null } };
+    expect(isGameOver(state)).toBe(true);
+  });
+
+  it("is true once the post-elimination endgame countdown reaches 0", () => {
+    let state = baseState(["a", "b", "c"]);
+    state = { ...state, turn: { ...state.turn, endgameTurnsRemaining: 0 } };
+    expect(isGameOver(state)).toBe(true);
+  });
+
+  it("is false while the countdown is still running", () => {
+    let state = baseState(["a", "b", "c"]);
+    state = { ...state, turn: { ...state.turn, endgameTurnsRemaining: 1 } };
+    expect(isGameOver(state)).toBe(false);
+  });
+});
+
+describe("revealAllBlendedCards", () => {
+  it("flips face-down in-play cards face-up, and leaves everything else untouched", () => {
+    let state = baseState(["a", "b", "c"]);
+    const [faceDown, stillHand] = state.cards.filter((c) => c.kind === "nonLeader");
+    state = {
+      ...state,
+      cards: state.cards.map((c) =>
+        c.id === faceDown!.id ? { ...c, zone: "inPlay" as const, locationId: "loc-0", controller: "a", faceUp: false } : c,
+      ),
+    };
+
+    const revealed = revealAllBlendedCards(state);
+
+    expect(revealed.cards.find((c) => c.id === faceDown!.id)!.faceUp).toBe(true);
+    expect(revealed.cards.find((c) => c.id === stillHand!.id)!.zone).toBe("hand"); // untouched, still in hand
   });
 });

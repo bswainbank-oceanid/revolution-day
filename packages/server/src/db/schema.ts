@@ -1,4 +1,4 @@
-import type { Action, GameState, PlayerId } from "@rev-day/engine";
+import type { Action, GameState, PlayerId, WinConditionExplanation } from "@rev-day/engine";
 import { sql } from "drizzle-orm";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
@@ -14,6 +14,12 @@ export const games = sqliteTable("games", {
   playerIds: text("player_ids", { mode: "json" }).notNull().$type<readonly PlayerId[]>(),
   seed: integer("seed").notNull(),
   state: text("state", { mode: "json" }).notNull().$type<GameState>(),
+  // Null until isGameOver(state) first becomes true (checked by the server
+  // after every applied action, since the game can end mid-turn — see
+  // rev_day_engine_design memory); set exactly once, at that moment, and
+  // never cleared. Its presence is what makes a game "over": once set,
+  // POST .../actions and .../bot-turn refuse to apply anything further.
+  gameOver: text("game_over", { mode: "json" }).$type<WinConditionExplanation | null>(),
 });
 
 // One row per successfully-applied action — the "state, action taken,
