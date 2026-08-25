@@ -85,11 +85,22 @@ function abilityHasEliminateEffect(def: AbilityDefinition): boolean {
 // *before* committing, not after — only the ability's first effect, not
 // the whole sequence (a later effect running dry is rarer and harder to
 // predict up front; the retry/fallback mechanism absorbs that instead).
+// `deciderId` is whoever is actually making this choice — the same
+// player decideEliminateTargetIds filters "opposing" against — which is
+// NOT always sourceCard.controller: under remote activation, sourceCard
+// is someone else's card, but the player deciding whether to activate it
+// (and, later, who its targets are chosen relative to) is the original
+// acting player. Passing sourceCard.controller here for that case was a
+// real bug — this check would approve a remote ability whose only
+// "opposing to the card's own controller" target turned out to be the
+// decider's own card, which decideEliminateTargetIds would then correctly
+// refuse, leaving nothing submittable and the bot stuck.
 function abilityHasAvailableFirstTarget(
   state: FilteredGameState,
   cardData: CardData,
   sourceCard: FilteredCardInstance,
   def: AbilityDefinition,
+  deciderId: PlayerId,
 ): boolean {
   const effect = def.effects[0];
   if (!effect) return false;
@@ -106,7 +117,7 @@ function abilityHasAvailableFirstTarget(
         if (effect.verb !== "eliminate") return true;
         const coLocated =
           effect.target.location?.mode !== "self" || state.president.locationId === sourceCard.locationId;
-        return presidentIsLegalTarget(state, cardData, sourceCard.controller, effect.ignoreProtected ?? false, coLocated);
+        return presidentIsLegalTarget(state, cardData, deciderId, effect.ignoreProtected ?? false, coLocated);
       }
       if (effect.verb === "eliminate" && effect.target.selection === "random") return true; // engine draws automatically
       const minNeeded = requiredMinCount(effect.target.count);
@@ -119,7 +130,7 @@ function abilityHasAvailableFirstTarget(
       // already hard-constrains controller itself.
       const relevantPool =
         effect.verb === "eliminate" && effect.target.controller !== "self" && effect.target.controller !== "other"
-          ? pool.filter((c) => c.controller !== sourceCard.controller)
+          ? pool.filter((c) => c.controller !== deciderId)
           : pool;
       return relevantPool.length >= minNeeded;
     }
@@ -241,7 +252,7 @@ function decideActivateAbility(
       const def = getAbilityEffects(instance.defRef, abilityIndex);
       if (!def) return false;
       if (objective === "protect" && abilityTargetsPresident(def)) return false;
-      if (!abilityHasAvailableFirstTarget(state, cardData, card, def)) return false;
+      if (!abilityHasAvailableFirstTarget(state, cardData, card, def, playerId)) return false;
       return true;
     });
   if (usable.length === 0) return { type: "endTurn" };
@@ -281,7 +292,7 @@ function decideChooseTargets(
     case "play":
       return decidePlayTargets(state, playerId, cardData, effect, rng);
     case "activateRemote":
-      return decideActivateRemoteTargets(state, cardData, sourceCard, effect, rng);
+      return decideActivateRemoteTargets(state, playerId, cardData, sourceCard, effect, rng);
     case "move":
       return decideMoveEffectTargets(state, rng);
     case "triggerAlarm":
@@ -368,6 +379,7 @@ function decidePlayTargets(
 
 function decideActivateRemoteTargets(
   state: FilteredGameState,
+  playerId: PlayerId,
   cardData: CardData,
   sourceCard: FilteredCardInstance,
   effect: Extract<EffectNode, { verb: "activateRemote" }>,
@@ -393,7 +405,7 @@ function decideActivateRemoteTargets(
       // Death Squad's eliminate-1-or-2 ability with nothing left at its
       // location, and got stuck the same way).
       const def = getAbilityEffects(instance.defRef, abilityIndex);
-      return def ? abilityHasAvailableFirstTarget(state, cardData, chosenCard, def) : false;
+      return def ? abilityHasAvailableFirstTarget(state, cardData, chosenCard, def, playerId) : false;
     });
   const chosenAbility = pickRandom(rng, activatable);
   if (!chosenAbility) return { type: "chooseTargets", targetIds: [] };
@@ -466,7 +478,7 @@ function decideAlarmAction(
       const def = getAbilityEffects(instance.defRef, abilityIndex);
       if (!def) continue;
       if (objective === "protect" && abilityTargetsPresident(def)) continue;
-      if (!abilityHasAvailableFirstTarget(state, cardData, card, def)) continue;
+      if (!abilityHasAvailableFirstTarget(state, cardData, card, def, playerId)) continue;
       options.push({ cardId: card.id, abilityIndex, hasEliminate: abilityHasEliminateEffect(def) });
     }
   }

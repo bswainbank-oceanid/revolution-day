@@ -258,9 +258,6 @@ describe("decideBotAction: avoids abilities with no legal way to complete", () =
     expect(action).toMatchObject({ type: "activateAbility", cardId: wife.id });
   });
 
-  // Regression: Wife's ability needs her co-located with the President
-  // (location: {mode:"self"}) — presidentIsLegalTarget previously had no
-  // notion of the source card's own location at all.
   // Regression: activateRemote (Head of Security) picked a target card +
   // one of its Activate abilities without checking whether *that* ability
   // has any legal first target — a real bot got permanently stuck
@@ -293,6 +290,51 @@ describe("decideBotAction: avoids abilities with no legal way to complete", () =
       expect(action).toMatchObject({ type: "chooseTargets" });
       const targetIds = (action as { targetIds: readonly string[] }).targetIds;
       expect(targetIds).not.toContain(deathSquad.id);
+    }
+  });
+
+  // Regression: abilityHasAvailableFirstTarget's "never eliminate own
+  // cards" pool filter (see the earlier own-cards test) checked
+  // sourceCard.controller — correct for a direct activateAbility (the
+  // card's controller and the deciding player are always the same there),
+  // but wrong under remote activation, where they can differ. Here,
+  // alice remotely activates bob's Army Sniper; the *only* Rebel card at
+  // its location is alice's own Rebel Soldier — "opposing to bob" (the
+  // old, wrong check) says yes, but "opposing to alice" (who's actually
+  // deciding, and who decideEliminateTargetIds correctly filters against
+  // once the ability is committed to) says no candidates exist at all. A
+  // real bot got stuck exactly this way, remotely activating Army
+  // Sniper's ability and then having nothing legal left to submit.
+  it("never remotely activates an ability whose only target is the deciding player's own card", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]); // 8 players — Puppet-Master guaranteed dealt
+    const puppetMaster = findByDefRef(state, "Puppet-Master");
+    const player = puppetMaster.controller ?? state.turn.currentPlayerId;
+    const pmLoc = state.board[0]!.id;
+    const armySniper = findByDefRef(state, "Army Sniper");
+    const otherPlayer = state.players.find((p) => p.id !== player)!.id;
+    const sniperLoc = state.board[1]!.id;
+    const rebelSoldier = findByDefRef(state, "Rebel Soldier");
+    state = place(state, puppetMaster.id, pmLoc, player);
+    state = place(state, armySniper.id, sniperLoc, otherPlayer);
+    state = place(state, rebelSoldier.id, sniperLoc, player); // the only Rebel card there, and it's the decider's own
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: puppetMaster.id,
+      actingPlayerId: player,
+      abilityIndex: 1, // Puppet-Master's second Activate ability: activateRemote, no faction filter
+      locationId: pmLoc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).toMatchObject({ type: "chooseTargets" });
+      const targetIds = (action as { targetIds: readonly string[] }).targetIds;
+      expect(targetIds).not.toContain(armySniper.id);
     }
   });
 
