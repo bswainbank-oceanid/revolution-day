@@ -1,24 +1,53 @@
 import { takeBotTurn } from "@rev-day/bots";
-import { applyAction, cardData, evaluateWinConditions, setupGame, winConditions } from "@rev-day/engine";
-import type { Action, GameState, PlayerId } from "@rev-day/engine";
+import { applyAction, cardData, evaluateWinConditions, filterForPlayer, setupGame, winConditions } from "@rev-day/engine";
+import type { Action, FilteredGameState, GameState, PlayerId } from "@rev-day/engine";
 import { eq } from "drizzle-orm";
 import Fastify from "fastify";
+import type { FastifyReply } from "fastify";
 import { db } from "./db/client";
 import { gameActions, games } from "./db/schema";
 
 // Testing/dev harness: drives applyAction over HTTP so the engine can
 // actually be exercised end to end (manual testing, and building toward
 // the trajectory logs the locked persistence design calls for) — not the
-// real v2 multiplayer-authoritative server. No per-player filtering yet
-// (no filterForPlayer exists): full GameState in, full GameState out. See
-// rev_day_architecture memory for the real v1/v2 plan this is separate
-// from.
+// real v2 multiplayer-authoritative server. Every route returning `state`
+// accepts an optional `?viewerId=` query param: given, the response's
+// `state` is filterForPlayer'd for that player instead of the full
+// ground-truth GameState (rng, hidden hands/deck, face-down cards all
+// redacted). Omitted, callers get the full state — the existing behavior,
+// still relied on by the bot harness's own tests and anything doing
+// server-side introspection. See rev_day_architecture memory for the real
+// v1/v2 plan this harness is separate from.
 //
 // Route setup lives here, factored out from index.ts's listen() call, so
 // tests can build an app and use Fastify's inject() without binding a
 // real port.
 export function buildApp(options?: { logger?: boolean }) {
   const app = Fastify({ logger: options?.logger ?? false });
+
+  // Resolves the optional `?viewerId=` query param against the game's
+  // actual player list — silently treating a typo'd/unknown id as "no
+  // filtering" would be a confusing way to leak full state, so it's a 400
+  // instead (the route returns right after, matching the existing
+  // not-found/validation style below). Returns "invalid" only once the
+  // 400 has already been sent; undefined means "no filtering requested".
+  function resolveViewerId(
+    request: { query: unknown },
+    playerIds: readonly PlayerId[],
+    reply: FastifyReply,
+  ): PlayerId | undefined | "invalid" {
+    const viewerId = (request.query as { viewerId?: string }).viewerId;
+    if (viewerId === undefined) return undefined;
+    if (!playerIds.includes(viewerId)) {
+      reply.code(400).send({ error: `viewerId '${viewerId}' is not a player in this game` });
+      return "invalid";
+    }
+    return viewerId;
+  }
+
+  function maybeFilterState(state: GameState, viewerId: PlayerId | undefined): GameState | FilteredGameState {
+    return viewerId === undefined ? state : filterForPlayer(state, viewerId);
+  }
 
   app.get("/health", async () => ({ status: "ok" }));
 
@@ -37,8 +66,11 @@ export function buildApp(options?: { logger?: boolean }) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
 
+    const viewerId = resolveViewerId(request, playerIds, reply);
+    if (viewerId === "invalid") return;
+
     const [row] = await db.insert(games).values({ playerIds, seed, state }).returning();
-    return row;
+    return { ...row, state: maybeFilterState(row!.state, viewerId) };
   });
 
   app.get("/games/:id", async (request, reply) => {
@@ -47,7 +79,9 @@ export function buildApp(options?: { logger?: boolean }) {
     if (!row) {
       return reply.code(404).send({ error: `Game ${id} not found` });
     }
-    return row;
+    const viewerId = resolveViewerId(request, row.playerIds, reply);
+    if (viewerId === "invalid") return;
+    return { ...row, state: maybeFilterState(row.state, viewerId) };
   });
 
   // Applies one action, persists the resulting state, and logs the
@@ -66,6 +100,8 @@ export function buildApp(options?: { logger?: boolean }) {
     if (!body?.actingPlayerId || !body.action) {
       return reply.code(400).send({ error: "actingPlayerId and action are required" });
     }
+    const viewerId = resolveViewerId(request, row.playerIds, reply);
+    if (viewerId === "invalid") return;
 
     let nextState: GameState;
     try {
@@ -89,7 +125,11 @@ export function buildApp(options?: { logger?: boolean }) {
       })
       .returning();
 
-    return { id, state: nextState, logged };
+    return {
+      id,
+      state: maybeFilterState(nextState, viewerId),
+      logged: { ...logged, resultingState: maybeFilterState(logged!.resultingState, viewerId) },
+    };
   });
 
   app.get("/games/:id/actions", async (request, reply) => {
@@ -98,7 +138,10 @@ export function buildApp(options?: { logger?: boolean }) {
     if (!gameRow) {
       return reply.code(404).send({ error: `Game ${id} not found` });
     }
-    return db.query.gameActions.findMany({ where: eq(gameActions.gameId, id), orderBy: gameActions.seq });
+    const viewerId = resolveViewerId(request, gameRow.playerIds, reply);
+    if (viewerId === "invalid") return;
+    const rows = await db.query.gameActions.findMany({ where: eq(gameActions.gameId, id), orderBy: gameActions.seq });
+    return rows.map((row) => ({ ...row, resultingState: maybeFilterState(row.resultingState, viewerId) }));
   });
 
   // Drives one bot's turn to completion (@rev-day/bots' takeBotTurn) —
@@ -118,6 +161,8 @@ export function buildApp(options?: { logger?: boolean }) {
     if (!body?.playerId) {
       return reply.code(400).send({ error: "playerId is required" });
     }
+    const viewerId = resolveViewerId(request, row.playerIds, reply);
+    if (viewerId === "invalid") return;
 
     const { state: nextState, actions } = takeBotTurn(row.state, body.playerId, cardData);
 
@@ -137,10 +182,10 @@ export function buildApp(options?: { logger?: boolean }) {
           resultingState: step.resultingState,
         })
         .returning();
-      logged.push(loggedRow);
+      logged.push({ ...loggedRow!, resultingState: maybeFilterState(loggedRow!.resultingState, viewerId) });
     }
 
-    return { id, state: nextState, actionsTaken: logged.length, logged };
+    return { id, state: maybeFilterState(nextState, viewerId), actionsTaken: logged.length, logged };
   });
 
   // A pure query, not something the engine triggers on its own — the

@@ -189,3 +189,74 @@ describe("POST /games/:id/bot-turn", () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe("?viewerId= filtering", () => {
+  it("omitting viewerId still returns the full, unfiltered state (existing behavior)", async () => {
+    const created = await app.inject({ method: "POST", url: "/games", payload: { playerIds: ["a", "b", "c"], seed: 8 } });
+    const state = created.json().state;
+    expect(state.rng).toBeDefined();
+    const othersHand = state.cards.find((c: { zone: string; controller: string }) => c.zone === "hand" && c.controller !== "a");
+    expect(othersHand.defRef).not.toBeNull();
+  });
+
+  it("POST /games?viewerId= returns the initial state filtered for that player", async () => {
+    const res = await app.inject({ method: "POST", url: "/games?viewerId=a", payload: { playerIds: ["a", "b", "c"], seed: 9 } });
+    const state = res.json().state;
+    expect(state.rng).toBeUndefined();
+    const othersHand = state.cards.find((c: { zone: string; controller: string }) => c.zone === "hand" && c.controller !== "a");
+    expect(othersHand.defRef).toBeNull();
+    const ownHand = state.cards.find((c: { zone: string; controller: string }) => c.zone === "hand" && c.controller === "a");
+    expect(ownHand.defRef).not.toBeNull();
+  });
+
+  it("GET /games/:id?viewerId= returns the filtered state", async () => {
+    const created = await app.inject({ method: "POST", url: "/games", payload: { playerIds: ["a", "b", "c"], seed: 10 } });
+    const { id } = created.json();
+
+    const res = await app.inject({ method: "GET", url: `/games/${id}?viewerId=b` });
+
+    expect(res.statusCode).toBe(200);
+    const state = res.json().state;
+    expect(state.rng).toBeUndefined();
+    const othersHand = state.cards.find((c: { zone: string; controller: string }) => c.zone === "hand" && c.controller !== "b");
+    expect(othersHand.defRef).toBeNull();
+  });
+
+  it("rejects a viewerId that isn't a player in the game", async () => {
+    const created = await app.inject({ method: "POST", url: "/games", payload: { playerIds: ["a", "b", "c"], seed: 11 } });
+    const { id } = created.json();
+
+    const res = await app.inject({ method: "GET", url: `/games/${id}?viewerId=nobody` });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain("nobody");
+  });
+
+  it("filters state and each logged action's resultingState across /actions and /bot-turn", async () => {
+    const created = await app.inject({ method: "POST", url: "/games", payload: { playerIds: ["a", "b", "c"], seed: 12 } });
+    const { id, state } = created.json();
+    const player = state.turn.currentPlayerId;
+
+    const actionRes = await app.inject({
+      method: "POST",
+      url: `/games/${id}/actions?viewerId=${player}`,
+      payload: { actingPlayerId: player, action: { type: "draw" } },
+    });
+    const actionBody = actionRes.json();
+    expect(actionBody.state.rng).toBeUndefined();
+    expect(actionBody.logged.resultingState.rng).toBeUndefined();
+
+    const otherPlayer = state.players.find((p: { id: string }) => p.id !== player).id;
+    const botRes = await app.inject({ method: "POST", url: `/games/${id}/bot-turn?viewerId=${otherPlayer}`, payload: { playerId: player } });
+    const botBody = botRes.json();
+    expect(botBody.state.rng).toBeUndefined();
+    for (const entry of botBody.logged) {
+      expect(entry.resultingState.rng).toBeUndefined();
+    }
+
+    const listRes = await app.inject({ method: "GET", url: `/games/${id}/actions?viewerId=${otherPlayer}` });
+    for (const entry of listRes.json()) {
+      expect(entry.resultingState.rng).toBeUndefined();
+    }
+  });
+});
