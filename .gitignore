@@ -25,3 +25,6 @@ npm-debug.log*
 !.vscode/extensions.json
 .DS_Store
 Thumbs.db
+
+# Claude Code local project settings
+.claude/
