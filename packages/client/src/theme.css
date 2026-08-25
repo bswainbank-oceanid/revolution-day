@@ -1,0 +1,74 @@
+/* Palette + typography from export/DESIGN_REFERENCE.md — the same values
+   the print card/board art was generated from, so the digital UI matches
+   the physical prototype rather than inventing its own look. */
+
+@font-face {
+  font-family: "Oswald";
+  src: url("/fonts/Oswald-Regular.ttf") format("truetype");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Oswald";
+  src: url("/fonts/Oswald-Medium.ttf") format("truetype");
+  font-weight: 500;
+}
+@font-face {
+  font-family: "Oswald";
+  src: url("/fonts/Oswald-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+}
+@font-face {
+  font-family: "Oswald";
+  src: url("/fonts/Oswald-Bold.ttf") format("truetype");
+  font-weight: 700;
+}
+
+:root {
+  --regime-dark: rgb(58, 10, 10);
+  --regime-mid: rgb(122, 24, 22);
+  --regime-light: rgb(205, 75, 55);
+
+  --rebel-dark: rgb(12, 22, 14);
+  --rebel-mid: rgb(28, 42, 26);
+  --rebel-light: rgb(95, 135, 75);
+
+  --ink: rgb(21, 21, 9);
+  --cream: rgb(238, 227, 199);
+  --gold: rgb(196, 155, 61);
+  --border-white: rgb(240, 238, 230);
+
+  /* 50/50 blend of Regime/Rebel base_dark and base_mid, per the print
+     spec's neutral cover/box/card-back color. */
+  --neutral-dark: rgb(35, 16, 12);
+  --neutral-mid: rgb(75, 33, 24);
+
+  --location-dark: rgb(42, 51, 46);
+  --location-mid: rgb(66, 79, 71);
+  --location-light: rgb(110, 128, 116);
+
+  --marker-crimson: rgb(230, 57, 70);
+  --marker-cobalt: rgb(69, 123, 230);
+  --marker-amber: rgb(255, 149, 5);
+  --marker-lemon: rgb(244, 208, 63);
+  --marker-violet: rgb(155, 89, 220);
+  --marker-teal: rgb(38, 179, 160);
+}
+
+body {
+  background: var(--neutral-dark);
+  color: var(--cream);
+  font-family: "Oswald", sans-serif;
+  font-weight: 400;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+button {
+  font-family: inherit;
+  font-weight: 600;
+}

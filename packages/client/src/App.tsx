@@ -1,20 +1,24 @@
-import { getEngineInfo } from "@rev-day/engine";
 import "./App.css";
+import { GameScreen } from "./GameScreen";
+import { useGame } from "./useGame";
 
 function App() {
-  const info = getEngineInfo();
+  const { session, loading, error, startNewGame, act } = useGame();
 
-  return (
-    <main className="scaffold-check">
-      <h1>{info.game}</h1>
-      <p>Client scaffold is wired to the engine package.</p>
-      <ul>
-        <li>Leaders loaded: {info.leaderCount}</li>
-        <li>Non-leader cards loaded: {info.nonLeaderCount}</li>
-        <li>Locations: {info.locations.join(" → ")}</li>
-      </ul>
-    </main>
-  );
+  if (!session) {
+    return (
+      <main className="new-game">
+        <h1>Revolution Day</h1>
+        <p>Solo vs. bots — this session is you plus 2 bots.</p>
+        {error && <p className="error">{error}</p>}
+        <button type="button" onClick={startNewGame} disabled={loading}>
+          {loading ? "Starting…" : "New Game"}
+        </button>
+      </main>
+    );
+  }
+
+  return <GameScreen session={session} loading={loading} error={error} act={act} />;
 }
 
 export default App;

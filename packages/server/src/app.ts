@@ -1,3 +1,4 @@
+import cors from "@fastify/cors";
 import { takeBotTurn } from "@rev-day/bots";
 import {
   applyAction,
@@ -34,6 +35,13 @@ import { gameActions, games } from "./db/schema";
 // real port.
 export function buildApp(options?: { logger?: boolean }) {
   const app = Fastify({ logger: options?.logger ?? false });
+
+  // The Vite client dev server runs on a different origin (localhost:5173
+  // vs. this server's 3001) — the browser blocks cross-origin fetches
+  // without this. Dev-only allowlist, matching the "internal project, not
+  // a public release yet" threat model in rev_day_architecture memory;
+  // revisit once there's a real deployed client origin to allow instead.
+  void app.register(cors, { origin: "http://localhost:5173" });
 
   // Resolves the optional `?viewerId=` query param against the game's
   // actual player list — silently treating a typo'd/unknown id as "no

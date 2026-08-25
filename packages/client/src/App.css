@@ -1,6 +1,184 @@
-.scaffold-check {
-  max-width: 40rem;
-  margin: 4rem auto;
+.new-game {
+  max-width: 32rem;
+  margin: 6rem auto;
   padding: 0 1.5rem;
-  font-family: system-ui, sans-serif;
+  text-align: center;
+}
+
+.new-game button,
+.action-panel button {
+  background: var(--gold);
+  color: var(--ink);
+  border: 1px solid var(--border-white);
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  margin: 0.25rem;
+}
+
+.new-game button:disabled,
+.action-panel button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.error {
+  color: var(--marker-crimson);
+  font-weight: 600;
+}
+
+.hint {
+  opacity: 0.75;
+  font-size: 0.9rem;
+}
+
+.game-screen {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.board {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+
+.location {
+  background: var(--location-dark);
+  border: 1px solid var(--location-light);
+  border-radius: 6px;
+  padding: 0.5rem;
+  width: 11rem;
+}
+
+.location.location-selected {
+  outline: 3px solid var(--gold);
+}
+
+.location-tile {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.location-tile img {
+  width: 100%;
+  border-radius: 4px;
+  display: block;
+}
+
+.location-label {
+  display: block;
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+
+.president-marker {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  color: var(--gold);
+  font-size: 1.5rem;
+  text-shadow: 0 0 4px black;
+}
+
+.location-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+.hand {
+  margin-bottom: 1.5rem;
+}
+
+.hand-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.card {
+  background: var(--neutral-mid);
+  border: 1px solid var(--border-white);
+  border-radius: 4px;
+  padding: 0.25rem;
+  width: 5.5rem;
+  cursor: default;
+  color: var(--cream);
+  text-align: center;
+}
+
+.card.card-clickable {
+  cursor: pointer;
+}
+
+.card.card-selected {
+  outline: 3px solid var(--gold);
+}
+
+.card-art {
+  width: 100%;
+  border-radius: 3px;
+  display: block;
+}
+
+.card-label {
+  display: block;
+  font-size: 0.7rem;
+  margin-top: 0.2rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-facedown-badge {
+  display: block;
+  font-size: 0.6rem;
+  color: var(--gold);
+}
+
+.action-panel {
+  background: var(--neutral-mid);
+  border: 1px solid var(--border-white);
+  border-radius: 6px;
+  padding: 1rem;
+}
+
+.ability-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+  text-align: left;
+}
+
+.ability-list li {
+  margin-bottom: 0.4rem;
+}
+
+.game-over {
+  max-width: 48rem;
+  margin: 2rem auto;
+  padding: 0 1.5rem;
+}
+
+.outcomes-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.outcomes-table th,
+.outcomes-table td {
+  border: 1px solid var(--border-white);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
 }
