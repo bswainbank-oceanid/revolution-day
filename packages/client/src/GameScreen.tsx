@@ -244,6 +244,12 @@ function TurnActionPanel({
           <button type="button" onClick={() => setTurnMode("activateAbility")}>
             Activate Ability
           </button>
+          {/* A voluntary draw — one of the two budgeted action-phase
+              actions, distinct from the mandatory draw-phase draw above.
+              No selection needed, so it submits directly like End Turn. */}
+          <button type="button" onClick={() => onSubmit({ type: "draw" })}>
+            Draw
+          </button>
           <button type="button" onClick={() => onSubmit({ type: "endTurn" })}>
             End Turn
           </button>
