@@ -75,6 +75,14 @@ export function useGame(): UseGameResult {
         setSession({ ...session, state, gameOver });
       } catch (err) {
         setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
+        // A 404 means the game itself is gone (e.g. the server's dev
+        // database got wiped/restarted underneath an open tab) — the
+        // stale session.state would otherwise sit frozen forever, showing
+        // whatever it last rendered with no way to recover except a full
+        // page reload. Falling back to the New Game screen is the actual
+        // correct state to be in once the game we're pointed at no longer
+        // exists.
+        if (err instanceof ApiError && err.status === 404) setSession(null);
       } finally {
         setLoading(false);
       }
