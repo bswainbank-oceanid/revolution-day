@@ -198,24 +198,6 @@
 
 /* --- New layout (BUILD_PLAN.md), step 3 onward --- */
 
-.debug-view-toggle {
-  position: fixed;
-  top: 4px;
-  left: 4px;
-  z-index: 10;
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  max-width: 300px;
-}
-.debug-view-toggle button {
-  font-size: 0.6rem;
-  padding: 2px 4px;
-  background: var(--gold);
-  border: none;
-  cursor: pointer;
-}
-
 h2,
 h3 {
   margin: 0 0 0.4em;
@@ -324,6 +306,9 @@ h3 {
   max-width: 420px;
   border-radius: 6px;
 }
+.card-viewer-art-draggable {
+  cursor: grab;
+}
 .eliminated-x {
   position: absolute;
   inset: 0;
@@ -391,6 +376,10 @@ h3 {
   border: none;
   background: none;
   cursor: pointer;
+}
+.city-tile-drop-target img {
+  outline: 3px solid var(--gold);
+  outline-offset: -3px;
 }
 .city-tile-image img {
   width: 100%;
@@ -485,6 +474,10 @@ h3 {
   max-height: 260px;
   border-radius: 6px;
 }
+.location-image-drop-target img {
+  outline: 3px solid var(--gold);
+  outline-offset: -3px;
+}
 .location-president-marker {
   position: absolute;
   width: 40px;
@@ -522,6 +515,13 @@ h3 {
   border: 2px solid;
   border-radius: 3px;
   display: block;
+}
+.mini-card-clickable {
+  cursor: pointer;
+}
+.mini-card[draggable="true"],
+.hand-strip-card[draggable="true"] {
+  cursor: grab;
 }
 .seat-cluster-empty {
   width: 46px;
@@ -569,6 +569,9 @@ h3 {
   width: 60px;
   border-radius: 3px;
 }
+.hand-strip-card-clickable {
+  cursor: pointer;
+}
 .actions-box {
   flex: 0 0 auto;
   text-align: center;
@@ -584,4 +587,9 @@ h3 {
   font-weight: 700;
   margin: 0;
   color: var(--gold);
+}
+.actions-box button {
+  display: block;
+  width: 100%;
+  margin-top: 0.4rem;
 }

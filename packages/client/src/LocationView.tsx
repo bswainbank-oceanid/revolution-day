@@ -1,4 +1,4 @@
-import type { FilteredGameState, PlayerId } from "@rev-day/engine";
+import type { FilteredCardInstance, FilteredGameState, PlayerId } from "@rev-day/engine";
 import { MiniCard } from "./MiniCard";
 import { locationArtUrl, cardArtUrl, CARD_BACK_URL } from "./art";
 import { playerColor, playerLabel, playersInSeatOrder } from "./players";
@@ -34,9 +34,31 @@ interface LocationViewProps {
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
   readonly onBackgroundClick?: () => void;
+  readonly onSelectCard?: (card: FilteredCardInstance) => void;
+  // Step 5: an in-play MiniCard the human controls is itself a drag
+  // source here (moveCard, adjacency-only); the location image is a drop
+  // target for whatever's currently being dragged (from here, the hand
+  // strip, or the Card Viewer) — see App.tsx for the shared drag state.
+  readonly canDrag?: (card: FilteredCardInstance) => boolean;
+  readonly onCardDragStart?: (card: FilteredCardInstance) => void;
+  readonly onCardDragEnd?: () => void;
+  readonly isDropTarget?: boolean;
+  readonly onDropCard?: (locationId: string) => void;
 }
 
-export function LocationView({ state, locationId, humanPlayerId, botPlayerIds, onBackgroundClick }: LocationViewProps) {
+export function LocationView({
+  state,
+  locationId,
+  humanPlayerId,
+  botPlayerIds,
+  onBackgroundClick,
+  onSelectCard,
+  canDrag,
+  onCardDragStart,
+  onCardDragEnd,
+  isDropTarget,
+  onDropCard,
+}: LocationViewProps) {
   const location = state.board.find((l) => l.id === locationId);
   if (!location) return null;
   const streetIndex = state.board.filter((l) => l.type === "Street").findIndex((l) => l.id === locationId);
@@ -45,14 +67,26 @@ export function LocationView({ state, locationId, humanPlayerId, botPlayerIds, o
   const president = state.president;
   const presidentHere = president.status === "alive" && president.locationId === locationId;
 
-  const seatProps = { state, locationId, humanPlayerId, botPlayerIds };
+  const seatProps = { state, locationId, humanPlayerId, botPlayerIds, onSelectCard, canDrag, onCardDragStart, onCardDragEnd };
 
   return (
     <div className="location-view-bg" onClick={onBackgroundClick}>
       <h2>LOCATION VIEW — {location.name ?? location.type}</h2>
       <div className="location-view-grid">
         <Seat {...seatProps} seat="tl" playerIds={seats.get("tl") ?? []} />
-        <div className="location-image-wrap" onClick={(e) => e.stopPropagation()}>
+        <div
+          className={`location-image-wrap${isDropTarget ? " location-image-drop-target" : ""}`}
+          onClick={(e) => e.stopPropagation()}
+          onDragOver={isDropTarget ? (e) => e.preventDefault() : undefined}
+          onDrop={
+            isDropTarget && onDropCard
+              ? (e) => {
+                  e.preventDefault();
+                  onDropCard(locationId);
+                }
+              : undefined
+          }
+        >
           <img src={art} alt="" />
           {presidentHere && <img src={cardArtUrl("President")} alt="President" className="location-president-marker" />}
         </div>
@@ -75,6 +109,10 @@ function Seat({
   locationId,
   humanPlayerId,
   botPlayerIds,
+  onSelectCard,
+  canDrag,
+  onCardDragStart,
+  onCardDragEnd,
 }: {
   readonly state: FilteredGameState;
   readonly seat: SeatName;
@@ -82,6 +120,10 @@ function Seat({
   readonly locationId: string;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  readonly onSelectCard?: (card: FilteredCardInstance) => void;
+  readonly canDrag?: (card: FilteredCardInstance) => boolean;
+  readonly onCardDragStart?: (card: FilteredCardInstance) => void;
+  readonly onCardDragEnd?: () => void;
 }) {
   return (
     <div className={`location-seat location-seat-${seat}`} onClick={(e) => e.stopPropagation()}>
@@ -93,6 +135,10 @@ function Seat({
           locationId={locationId}
           humanPlayerId={humanPlayerId}
           botPlayerIds={botPlayerIds}
+          onSelectCard={onSelectCard}
+          canDrag={canDrag}
+          onCardDragStart={onCardDragStart}
+          onCardDragEnd={onCardDragEnd}
         />
       ))}
     </div>
@@ -105,12 +151,20 @@ function SeatCluster({
   locationId,
   humanPlayerId,
   botPlayerIds,
+  onSelectCard,
+  canDrag,
+  onCardDragStart,
+  onCardDragEnd,
 }: {
   readonly state: FilteredGameState;
   readonly playerId: PlayerId;
   readonly locationId: string;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  readonly onSelectCard?: (card: FilteredCardInstance) => void;
+  readonly canDrag?: (card: FilteredCardInstance) => boolean;
+  readonly onCardDragStart?: (card: FilteredCardInstance) => void;
+  readonly onCardDragEnd?: () => void;
 }) {
   const seatIndex = state.players.find((p) => p.id === playerId)?.seatIndex ?? 0;
   const color = playerColor(seatIndex);
@@ -132,7 +186,16 @@ function SeatCluster({
           <img src={CARD_BACK_URL} alt="" className="mini-card seat-cluster-empty" style={{ borderColor: color, opacity: 0.25 }} />
         ) : (
           cards.map((card, i) => (
-            <MiniCard key={card.id} card={card} borderColor={color} style={{ marginLeft: i === 0 ? 0 : -34 }} />
+            <MiniCard
+              key={card.id}
+              card={card}
+              borderColor={color}
+              style={{ marginLeft: i === 0 ? 0 : -34 }}
+              onSelect={onSelectCard}
+              draggable={canDrag?.(card) ?? false}
+              onDragStart={onCardDragStart}
+              onDragEnd={onCardDragEnd}
+            />
           ))
         )}
       </div>

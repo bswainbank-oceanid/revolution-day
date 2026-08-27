@@ -4,6 +4,9 @@ import { CARD_BACK_URL, cardArtUrl } from "./art";
 interface CardViewerProps {
   readonly card: FilteredCardInstance | null;
   readonly controllerLabel: string | null;
+  readonly draggable?: boolean;
+  readonly onDragStart?: (card: FilteredCardInstance) => void;
+  readonly onDragEnd?: () => void;
 }
 
 // The full card art is already the complete designed face (name, deploy
@@ -11,10 +14,15 @@ interface CardViewerProps {
 // the PNG, confirmed against export/cards/*.png directly), so this is
 // mostly "render it large" rather than reconstructing the card layout.
 //
+// Step 5 note: the viewed card doubles as a drag source (BUILD_PLAN.md's
+// "drag from hand or the Card Viewer onto a location") — draggable only
+// when App.tsx's canDrag(card) says it's actually the human's own
+// hand/in-play card with a real turn action available.
+//
 // Step 3 note: same face-down handling as MiniCard — a face-down card
 // (even the viewer's own) shows a plain back for now; the true-art +
 // "still blended" badge for the viewer's own cards is step 8.
-export function CardViewer({ card, controllerLabel }: CardViewerProps) {
+export function CardViewer({ card, controllerLabel, draggable, onDragStart, onDragEnd }: CardViewerProps) {
   if (!card) {
     return (
       <div className="card-viewer card-viewer-empty">
@@ -35,7 +43,22 @@ export function CardViewer({ card, controllerLabel }: CardViewerProps) {
         </p>
       )}
       <div className="card-viewer-art-wrap">
-        <img src={art} alt="" className="card-viewer-art" />
+        <img
+          src={art}
+          alt=""
+          className={`card-viewer-art${draggable ? " card-viewer-art-draggable" : ""}`}
+          draggable={draggable}
+          onDragStart={
+            draggable && onDragStart
+              ? (e) => {
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", card.id);
+                  onDragStart(card);
+                }
+              : undefined
+          }
+          onDragEnd={onDragEnd}
+        />
         {isEliminated && <span className="eliminated-x">✕</span>}
       </div>
     </div>

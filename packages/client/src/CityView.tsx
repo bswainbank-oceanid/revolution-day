@@ -5,13 +5,20 @@ import { playerColor, playersInSeatOrder } from "./players";
 interface CityViewProps {
   readonly state: FilteredGameState;
   readonly onSelectLocation?: (locationId: string) => void;
+  // Step 5: drag-and-drop play/move — a location tile highlights when a
+  // card is being dragged and this tile is a legal drop target for it
+  // (allowedDropLocationIds is recomputed in App.tsx from the dragged
+  // card's zone: playable location types for a hand card, adjacency for
+  // an in-play card), and accepts the drop via onDropCard.
+  readonly allowedDropLocationIds?: ReadonlySet<string>;
+  readonly onDropCard?: (locationId: string) => void;
 }
 
 // 3x2 grid in board (linear) order — DESIGN_NOTES.md: "Street / HQ /
 // Street (top row), Arena / Street / Palace (bottom row)" is just
 // state.board's own sequence chunked into two rows of 3, since the board
 // itself is already laid out in that linear order.
-export function CityView({ state, onSelectLocation }: CityViewProps) {
+export function CityView({ state, onSelectLocation, allowedDropLocationIds, onDropCard }: CityViewProps) {
   let streetIndex = 0;
   const president = state.president;
 
@@ -36,13 +43,23 @@ export function CityView({ state, onSelectLocation }: CityViewProps) {
             counts.set(card.controller, (counts.get(card.controller) ?? 0) + 1);
           }
           const presidentHere = president.status === "alive" && president.locationId === location.id;
+          const isDropTarget = allowedDropLocationIds?.has(location.id) ?? false;
           return (
             <div key={location.id} className="city-tile">
               <button
                 type="button"
-                className="city-tile-image"
+                className={`city-tile-image${isDropTarget ? " city-tile-drop-target" : ""}`}
                 onClick={onSelectLocation ? () => onSelectLocation(location.id) : undefined}
                 disabled={!onSelectLocation}
+                onDragOver={isDropTarget ? (e) => e.preventDefault() : undefined}
+                onDrop={
+                  isDropTarget && onDropCard
+                    ? (e) => {
+                        e.preventDefault();
+                        onDropCard(location.id);
+                      }
+                    : undefined
+                }
               >
                 <img src={art} alt="" />
                 <span className="city-tile-badge">{index + 1}</span>

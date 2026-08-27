@@ -1,23 +1,67 @@
 # Revolution Day client — full UI rebuild against the locked mockups
 
-Status: **Steps 1-3 complete and verified.** Step 1: filtered-targeting logic
+Status: **Steps 1-4 complete and verified.** Step 1: filtered-targeting logic
 promoted into `packages/engine`, `packages/bots/src/targetPool.ts` deleted. Step 2:
 the fixed 1920x1080 scaling canvas (`GameCanvas.tsx`) with the 5 regions laid out
 exactly per `DESIGN_NOTES.md`'s pixel table. Step 3: every region rendering real
 game data (`TurnRibbon`, `CardViewer`, `ActivateAbilityBox`, `CityView`,
 `LocationView` incl. `SEATING_SPEC.md`'s seat-assignment table, `GameLog`,
-`GameChat` stub, `HandStrip`, `ActionsBox`) — `App.tsx` currently drives the
-center pane with a *temporary* debug City/Location toggle, to be replaced by
-real navigation in step 4. Player labels are "Player N"/"Bot N" by seat
-(play) order + "(You)" for the local player, not raw player IDs — a
+`GameChat` stub, `HandStrip`, `ActionsBox`). Player labels are "Player N"/"Bot N"
+by seat (play) order + "(You)" for the local player, not raw player IDs — a
 refinement made during step 3, applied via a shared `playerLabel` helper in
 `players.ts`. One real bug found and fixed during step 3 verification: the
 President's off-board/survived marker was positioned with a negative offset
 that pushed it into the left column's space instead of staying inside the
-center pane — fixed by giving `.city-grid` real side margins. GameScreen.tsx
-(the first slice's ad hoc layout) is disconnected but not yet deleted — the
-app is not currently playable and won't be again until interactivity catches
-up around step 5-7. Steps 4-9 not yet started.
+center pane — fixed by giving `.city-grid` real side margins.
+
+Step 4: real view navigation via a new `useViewNavigation` hook — City View
+tile click goes to that location's Location View, clicking the brown
+background outside the location image returns to City View, replacing the
+temporary debug toggle entirely. Also absorbed the two related interactions
+that didn't get their own numbered step: clicking a card (a hand card, or an
+in-play card's `MiniCard` in Location View) selects it into the Card Viewer,
+and selecting an in-play card also navigates to its location if you weren't
+already there (`App.tsx`'s `selectCard`, shared by both). `CardViewer`'s
+controller label is now computed for whichever card is actually selected
+(`"You"` vs. `playerLabel(...)`), not hardcoded to the human's leader.
+Verified live: City↔Location navigation, hand-card click updating the Card
+Viewer, no console errors. Mini-card click in Location View shares the exact
+same handler as the hand-card click (already verified) but couldn't be
+live-exercised itself — a fresh game has 0 cards in play until real actions
+exist (step 5), since bots don't play cards on their own first turn either.
+GameScreen.tsx (the first slice's ad hoc layout) is disconnected but not yet
+deleted.
+
+Step 5: core turn actions minus targeting. `useGame.ts`'s bot-turn loop
+(`runBotsUntilHumanOrOver`) became `runUntilHumanDecision` — it now also
+auto-submits the human's mandatory start-of-turn draw (`turn.phase ===
+"draw"`) and forced end-turn (`actionsRemaining === 0`) the moment either
+condition holds, alongside the existing bot-turn stepping, so neither is a
+button. `ActionsBox` gained real voluntary Draw/End Turn buttons. Drag-and-
+drop play/move is native HTML5 DnD, driven by one shared `draggedCard`
+state in `App.tsx`: a card can be dragged from the hand strip, an in-play
+`MiniCard`, or the Card Viewer (once a card is selected there) — all three
+share one `canDrag(card)` check (own card, real turn action available,
+not Motorcade). `allowedDropLocationIds` is computed per drag from the
+engine directly (`getAllowedLocationTypes` for a hand card, `adjacent
+LocationIds` for an in-play card) so highlighting is exact, not guessed.
+City View tiles and the Location View location image both accept drops
+and highlight when they're legal for whatever's being dragged. Also fixed
+a small pre-existing GameLog grammar bug ("You ended their turn.") that
+step 5 made reachable by a human action for the first time. The app is
+now genuinely playable — a full human turn (draw, play, move, end turn)
+works end to end against bots, with only ability activation/targeting
+still missing (step 6).
+
+Verified live: mandatory draw/forced end-turn firing with no click across
+several turns, voluntary Draw and End Turn buttons, a hand-card drag-drop
+play (onto a City View tile), and an in-play-card drag-drop move via the
+Card Viewer onto a highlighted adjacent tile (dragging the in-Location-
+View MiniCard itself can't reach an adjacent tile without navigating
+mid-drag, which native DnD doesn't support here — the Card Viewer is the
+real path for moves, and is already wired for it).
+
+Steps 6-9 not yet started.
 
 ## Context
 

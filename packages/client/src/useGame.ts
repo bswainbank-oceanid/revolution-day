@@ -30,13 +30,21 @@ interface UseGameResult {
   readonly act: (action: Action) => Promise<void>;
 }
 
-// Runs bot turns until it's the human's decision again, or the game ends,
+// Drives play forward until a *real* human decision is on the table,
 // collecting every individual step along the way (not just the final
-// state) — A bot's own turn can itself pause on a decision belonging to a
-// *different* bot (e.g. an alarm response) — decider() names whoever's
-// turn it actually is at each step, not necessarily the same bot that
-// just went, so this keeps calling botTurn for whichever bot that is.
-async function runBotsUntilHumanOrOver(
+// state). Three things happen automatically along the way, none of them a
+// genuine choice:
+//   - bot turns (a bot's own turn can itself pause on a decision belonging
+//     to a *different* bot, e.g. an alarm response — decider() names
+//     whoever's turn it actually is at each step, not necessarily the same
+//     bot that just went, so this keeps calling botTurn for whichever bot
+//     that is)
+//   - the human's mandatory start-of-turn draw (turn.phase === "draw")
+//   - the human's forced end-turn once actionsRemaining hits 0
+// Both human cases are still submitted as real actions (the engine wants
+// them logged even though there's no choice), just not surfaced as
+// buttons — see BUILD_PLAN.md's "no confirms anywhere" section.
+async function runUntilHumanDecision(
   gameId: number,
   humanPlayerId: PlayerId,
   state: FilteredGameState,
@@ -45,11 +53,28 @@ async function runBotsUntilHumanOrOver(
   const entries: LogEntry[] = [];
   for (;;) {
     const nextPlayer = decider(current);
-    if (nextPlayer === humanPlayerId) return { state: current, gameOver: null, entries };
-    const result = await botTurn(gameId, humanPlayerId, nextPlayer);
-    for (const step of result.logged) {
-      entries.push({ actingPlayerId: step.actingPlayerId, action: step.action, resultingState: step.resultingState });
+    if (nextPlayer !== humanPlayerId) {
+      const result = await botTurn(gameId, humanPlayerId, nextPlayer);
+      for (const step of result.logged) {
+        entries.push({ actingPlayerId: step.actingPlayerId, action: step.action, resultingState: step.resultingState });
+      }
+      current = result.state;
+      if (result.gameOver) return { state: current, gameOver: result.gameOver, entries };
+      continue;
     }
+
+    const isTurnActionMoment = current.resolutionStack.length === 0;
+    const autoAction: Action | null = !isTurnActionMoment
+      ? null
+      : current.turn.phase === "draw"
+        ? { type: "draw" }
+        : current.turn.actionsRemaining === 0
+          ? { type: "endTurn" }
+          : null;
+    if (!autoAction) return { state: current, gameOver: null, entries };
+
+    const result = await applyAction(gameId, humanPlayerId, humanPlayerId, autoAction);
+    entries.push({ actingPlayerId: humanPlayerId, action: autoAction, resultingState: result.state });
     current = result.state;
     if (result.gameOver) return { state: current, gameOver: result.gameOver, entries };
   }
@@ -67,7 +92,7 @@ export function useGame(): UseGameResult {
       const humanPlayerId = "you";
       const botPlayerIds = ["bot-1", "bot-2"];
       const row = await createGame([humanPlayerId, ...botPlayerIds], humanPlayerId);
-      const { state, gameOver, entries } = await runBotsUntilHumanOrOver(row.id, humanPlayerId, row.state);
+      const { state, gameOver, entries } = await runUntilHumanDecision(row.id, humanPlayerId, row.state);
       setSession({ gameId: row.id, humanPlayerId, botPlayerIds, state, gameOver, log: entries });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -88,7 +113,7 @@ export function useGame(): UseGameResult {
           setSession({ ...session, state: result.state, gameOver: result.gameOver, log: [...session.log, ownEntry] });
           return;
         }
-        const { state, gameOver, entries } = await runBotsUntilHumanOrOver(session.gameId, session.humanPlayerId, result.state);
+        const { state, gameOver, entries } = await runUntilHumanDecision(session.gameId, session.humanPlayerId, result.state);
         setSession({ ...session, state, gameOver, log: [...session.log, ownEntry, ...entries] });
       } catch (err) {
         setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));

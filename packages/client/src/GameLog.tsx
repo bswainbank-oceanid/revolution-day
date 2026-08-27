@@ -23,7 +23,7 @@ function describeEntry(entry: LogEntry, humanPlayerId: PlayerId, botPlayerIds: r
     case "activateAbility":
       return `${who} activated ${cardName(resultingState, action.cardId)}.`;
     case "endTurn":
-      return `${who} ended their turn.`;
+      return entry.actingPlayerId === humanPlayerId ? "You ended your turn." : `${who} ended their turn.`;
     case "chooseTargets":
       return `${who} chose targets.`;
     case "useResponse":

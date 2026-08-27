@@ -5,6 +5,10 @@ interface MiniCardProps {
   readonly card: FilteredCardInstance;
   readonly borderColor: string;
   readonly style?: React.CSSProperties;
+  readonly onSelect?: (card: FilteredCardInstance) => void;
+  readonly draggable?: boolean;
+  readonly onDragStart?: (card: FilteredCardInstance) => void;
+  readonly onDragEnd?: () => void;
 }
 
 // The small overlapping-cluster card used in Location View seats and the
@@ -18,7 +22,34 @@ interface MiniCardProps {
 // interaction-design conversation). That carve-out is step 8's job
 // (BUILD_PLAN.md); until then this deliberately under-informs about your
 // own blended cards rather than half-implementing the badge.
-export function MiniCard({ card, borderColor, style }: MiniCardProps) {
+export function MiniCard({ card, borderColor, style, onSelect, draggable, onDragStart, onDragEnd }: MiniCardProps) {
   const art = card.faceUp === false ? CARD_BACK_URL : cardArtUrl(card.defRef);
-  return <img src={art} alt="" className="mini-card" style={{ borderColor, ...style }} />;
+  return (
+    <img
+      src={art}
+      alt=""
+      className={`mini-card${onSelect ? " mini-card-clickable" : ""}`}
+      style={{ borderColor, ...style }}
+      draggable={draggable}
+      onClick={
+        onSelect
+          ? (e) => {
+              e.stopPropagation();
+              onSelect(card);
+            }
+          : undefined
+      }
+      onDragStart={
+        draggable && onDragStart
+          ? (e) => {
+              e.stopPropagation();
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", card.id);
+              onDragStart(card);
+            }
+          : undefined
+      }
+      onDragEnd={onDragEnd}
+    />
+  );
 }
