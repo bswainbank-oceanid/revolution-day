@@ -1,8 +1,13 @@
 import {
   adjacentLocationIds,
+  asCardInstance,
+  candidateHandCards,
+  candidateInPlayCards,
   getAbilities,
   getAbilityEffects,
   getPassive,
+  knownFaction,
+  presidentIsLegalTarget,
   PRESIDENT_TARGET_ID,
   winConditions,
 } from "@rev-day/engine";
@@ -25,7 +30,6 @@ import type { PresidentObjective } from "./presidentObjective";
 import { presidentObjectiveFor } from "./presidentObjective";
 import type { Rng } from "./random";
 import { coinFlip, pickN, pickRandom, pickWeighted } from "./random";
-import { asCardInstance, candidateHandCards, candidateInPlayCards, knownFaction, presidentIsLegalTarget } from "./targetPool";
 
 // The full "brain": one decision at a time, given the current (filtered —
 // no hidden identities) state. Pure, no I/O, doesn't call applyAction

@@ -1,5 +1,20 @@
-import { adjacentLocationIds, getFaction, hasAttribute } from "@rev-day/engine";
-import type { CardData, CardInstance, Faction, FilteredCardInstance, FilteredGameState, TargetSelector } from "@rev-day/engine";
+import { getFaction, hasAttribute } from "../state/cardLookup";
+import { adjacentLocationIds } from "../state/board";
+import type { CardInstance } from "../state/cards";
+import type { Faction, CardData } from "../types";
+import type { TargetSelector } from "./dsl";
+import type { FilteredCardInstance, FilteredGameState } from "./filterForPlayer";
+
+// A filtered-state-aware mirror of the engine's own targeting/eligibility
+// logic (resolveEligibleTargets, resolveEligibleHandCards,
+// isLegalPresidentTarget in effects/targeting.ts) — those all expect a
+// full GameState with guaranteed-non-null defRefs, which a viewer's
+// filterForPlayer'd view doesn't have for hidden cards. Originally built
+// for the bots package (packages/bots/src/targetPool.ts); promoted here
+// so bots and the client both consume one implementation instead of two
+// copies that can quietly drift apart — this logic already had a real,
+// live bug found and fixed once (see rev_day_engine_design memory), and
+// a second independent copy in the client would double that risk.
 
 // Safe once defRef is confirmed non-null — FilteredCardInstance and
 // CardInstance are otherwise structurally identical, so this is a plain
@@ -10,8 +25,9 @@ export function asCardInstance(card: FilteredCardInstance): CardInstance | undef
 }
 
 // A card's faction can only be known if its identity is known — a
-// face-down card the bot doesn't control has neither, matching "face-down
-// cards do not count as regime or rebel for targeting purposes".
+// face-down card the viewer doesn't control has neither, matching
+// "face-down cards do not count as regime or rebel for targeting
+// purposes".
 export function knownFaction(cardData: CardData, card: FilteredCardInstance): Faction | undefined {
   const instance = asCardInstance(card);
   return instance ? getFaction(cardData, instance) : undefined;
@@ -70,18 +86,15 @@ function isProtectedActiveFiltered(cardData: CardData, card: FilteredCardInstanc
 }
 
 // A filtered-state-aware mirror of the engine's own isLegalPresidentTarget
-// (effects/targeting.ts) — can't reuse that directly since it expects a
-// full GameState with guaranteed-non-null defRefs. Needed because
-// abilityHasAvailableFirstTarget previously assumed "the President sentinel
-// is always a legal candidate," which is wrong whenever his status isn't
-// "alive" (eliminated, not yet entered, or — the case that actually broke
-// a live bot — "survived", the endgame state once he's outlasted the
-// board): a real regression, see rev_day_engine_design memory. `coLocated`
-// mirrors the engine's own separate co-location gate in
-// declareEliminateTargets (Wife needs to actually be with the President;
-// isLegalPresidentTarget itself has no notion of a source card) — the
-// caller computes it since only it knows the effect's target.location mode
-// and the source card's own location.
+// (effects/targeting.ts) — needed because a naive "the President sentinel
+// is always a legal candidate" assumption is wrong whenever his status
+// isn't "alive" (eliminated, not yet entered, or "survived", the endgame
+// state once he's outlasted the board): a real regression, see
+// rev_day_engine_design memory. `coLocated` mirrors the engine's own
+// separate co-location gate in declareEliminateTargets (Wife needs to
+// actually be with the President; isLegalPresidentTarget itself has no
+// notion of a source card) — the caller computes it since only it knows
+// the effect's target.location mode and the source card's own location.
 export function presidentIsLegalTarget(
   state: FilteredGameState,
   cardData: CardData,

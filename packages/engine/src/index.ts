@@ -60,6 +60,13 @@ export type { PassiveDefinition } from "./effects/passives";
 export { getPassive, passives } from "./data/passives";
 export { filterForPlayer } from "./effects/filterForPlayer";
 export type { FilteredCardInstance, FilteredGameState } from "./effects/filterForPlayer";
+export {
+  asCardInstance,
+  knownFaction,
+  candidateInPlayCards,
+  candidateHandCards,
+  presidentIsLegalTarget,
+} from "./effects/filteredTargeting";
 
 import { cardData } from "./data/cardData";
 
