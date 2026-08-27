@@ -3,12 +3,23 @@ import type { Action, FilteredGameState, PlayerId, WinConditionExplanation } fro
 import { ApiError, applyAction, botTurn, createGame } from "./api";
 import { decider } from "./decider";
 
+export interface LogEntry {
+  readonly actingPlayerId: PlayerId;
+  readonly action: Action;
+  readonly resultingState: FilteredGameState;
+}
+
 export interface GameSession {
   readonly gameId: number;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
   readonly state: FilteredGameState;
   readonly gameOver: WinConditionExplanation | null;
+  // Every individual action taken this session, human's and bots', in
+  // order — GameLog renders this, and it's also the shape step 7's
+  // playback choreography will step through instead of jumping straight
+  // to the final post-bot-turn state.
+  readonly log: readonly LogEntry[];
 }
 
 interface UseGameResult {
@@ -19,8 +30,9 @@ interface UseGameResult {
   readonly act: (action: Action) => Promise<void>;
 }
 
-// Runs bot turns until it's the human's decision again, or the game ends.
-// A bot's own turn can itself pause on a decision belonging to a
+// Runs bot turns until it's the human's decision again, or the game ends,
+// collecting every individual step along the way (not just the final
+// state) — A bot's own turn can itself pause on a decision belonging to a
 // *different* bot (e.g. an alarm response) — decider() names whoever's
 // turn it actually is at each step, not necessarily the same bot that
 // just went, so this keeps calling botTurn for whichever bot that is.
@@ -28,14 +40,18 @@ async function runBotsUntilHumanOrOver(
   gameId: number,
   humanPlayerId: PlayerId,
   state: FilteredGameState,
-): Promise<{ state: FilteredGameState; gameOver: WinConditionExplanation | null }> {
+): Promise<{ state: FilteredGameState; gameOver: WinConditionExplanation | null; entries: LogEntry[] }> {
   let current = state;
+  const entries: LogEntry[] = [];
   for (;;) {
     const nextPlayer = decider(current);
-    if (nextPlayer === humanPlayerId) return { state: current, gameOver: null };
+    if (nextPlayer === humanPlayerId) return { state: current, gameOver: null, entries };
     const result = await botTurn(gameId, humanPlayerId, nextPlayer);
+    for (const step of result.logged) {
+      entries.push({ actingPlayerId: step.actingPlayerId, action: step.action, resultingState: step.resultingState });
+    }
     current = result.state;
-    if (result.gameOver) return { state: current, gameOver: result.gameOver };
+    if (result.gameOver) return { state: current, gameOver: result.gameOver, entries };
   }
 }
 
@@ -51,8 +67,8 @@ export function useGame(): UseGameResult {
       const humanPlayerId = "you";
       const botPlayerIds = ["bot-1", "bot-2"];
       const row = await createGame([humanPlayerId, ...botPlayerIds], humanPlayerId);
-      const { state, gameOver } = await runBotsUntilHumanOrOver(row.id, humanPlayerId, row.state);
-      setSession({ gameId: row.id, humanPlayerId, botPlayerIds, state, gameOver });
+      const { state, gameOver, entries } = await runBotsUntilHumanOrOver(row.id, humanPlayerId, row.state);
+      setSession({ gameId: row.id, humanPlayerId, botPlayerIds, state, gameOver, log: entries });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -67,12 +83,13 @@ export function useGame(): UseGameResult {
       setError(null);
       try {
         const result = await applyAction(session.gameId, session.humanPlayerId, session.humanPlayerId, action);
+        const ownEntry: LogEntry = { actingPlayerId: session.humanPlayerId, action, resultingState: result.state };
         if (result.gameOver) {
-          setSession({ ...session, state: result.state, gameOver: result.gameOver });
+          setSession({ ...session, state: result.state, gameOver: result.gameOver, log: [...session.log, ownEntry] });
           return;
         }
-        const { state, gameOver } = await runBotsUntilHumanOrOver(session.gameId, session.humanPlayerId, result.state);
-        setSession({ ...session, state, gameOver });
+        const { state, gameOver, entries } = await runBotsUntilHumanOrOver(session.gameId, session.humanPlayerId, result.state);
+        setSession({ ...session, state, gameOver, log: [...session.log, ownEntry, ...entries] });
       } catch (err) {
         setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
         // A 404 means the game itself is gone (e.g. the server's dev

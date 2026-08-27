@@ -1,0 +1,50 @@
+.canvas-wrapper {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--neutral-dark);
+}
+
+.game-canvas {
+  width: 1920px;
+  height: 1080px;
+  flex: 0 0 auto;
+  transform-origin: center center;
+  display: grid;
+  grid-template-columns: 480px 1180px 260px;
+  grid-template-rows: 175px 715px 190px;
+  grid-template-areas:
+    "ribbon ribbon ribbon"
+    "left center right"
+    "left bottom right";
+  background: var(--neutral-mid);
+  color: var(--cream);
+}
+
+.region-ribbon {
+  grid-area: ribbon;
+}
+.region-left {
+  grid-area: left;
+}
+.region-center {
+  grid-area: center;
+}
+.region-right {
+  grid-area: right;
+}
+.region-bottom {
+  grid-area: bottom;
+}
+
+.region-ribbon,
+.region-left,
+.region-center,
+.region-right,
+.region-bottom {
+  overflow: hidden;
+  box-sizing: border-box;
+}

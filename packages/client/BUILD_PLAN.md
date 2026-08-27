@@ -1,7 +1,23 @@
 # Revolution Day client — full UI rebuild against the locked mockups
 
-Status: **Step 1 complete and verified** (filtered-targeting logic promoted into
-`packages/engine`, `packages/bots/src/targetPool.ts` deleted). Steps 2-9 not yet started.
+Status: **Steps 1-3 complete and verified.** Step 1: filtered-targeting logic
+promoted into `packages/engine`, `packages/bots/src/targetPool.ts` deleted. Step 2:
+the fixed 1920x1080 scaling canvas (`GameCanvas.tsx`) with the 5 regions laid out
+exactly per `DESIGN_NOTES.md`'s pixel table. Step 3: every region rendering real
+game data (`TurnRibbon`, `CardViewer`, `ActivateAbilityBox`, `CityView`,
+`LocationView` incl. `SEATING_SPEC.md`'s seat-assignment table, `GameLog`,
+`GameChat` stub, `HandStrip`, `ActionsBox`) — `App.tsx` currently drives the
+center pane with a *temporary* debug City/Location toggle, to be replaced by
+real navigation in step 4. Player labels are "Player N"/"Bot N" by seat
+(play) order + "(You)" for the local player, not raw player IDs — a
+refinement made during step 3, applied via a shared `playerLabel` helper in
+`players.ts`. One real bug found and fixed during step 3 verification: the
+President's off-board/survived marker was positioned with a negative offset
+that pushed it into the left column's space instead of staying inside the
+center pane — fixed by giving `.city-grid` real side margins. GameScreen.tsx
+(the first slice's ad hoc layout) is disconnected but not yet deleted — the
+app is not currently playable and won't be again until interactivity catches
+up around step 5-7. Steps 4-9 not yet started.
 
 ## Context
 
