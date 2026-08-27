@@ -1,7 +1,9 @@
 import { useCallback, useState } from "react";
+import { getAbilityEffects } from "@rev-day/engine";
 import type { Action, FilteredGameState, PlayerId, WinConditionExplanation } from "@rev-day/engine";
 import { ApiError, applyAction, botTurn, createGame } from "./api";
 import { decider } from "./decider";
+import { computeTrivialChooseTargets } from "./targetDecision";
 
 export interface LogEntry {
   readonly actingPlayerId: PlayerId;
@@ -30,20 +32,43 @@ interface UseGameResult {
   readonly act: (action: Action) => Promise<void>;
 }
 
+// Whatever the human's next submission should be with zero real choice
+// involved, or null if a genuine decision is on the table. Covers the
+// step 5 cases (mandatory draw, forced end-turn) plus step 6's: a pending
+// ability effect that has only one possible submission (self/binding
+// target, random selection, "all" mode, a forced/empty pool, the
+// President as Wife's only possible target, etc. — see
+// computeTrivialChooseTargets for the exact rules).
+function computeAutoAction(state: FilteredGameState, humanPlayerId: PlayerId): Action | null {
+  if (state.resolutionStack.length === 0) {
+    if (state.turn.phase === "draw") return { type: "draw" };
+    if (state.turn.actionsRemaining === 0) return { type: "endTurn" };
+    return null;
+  }
+  const frame = state.resolutionStack[state.resolutionStack.length - 1]!;
+  if (frame.kind !== "abilityResolution") return null;
+  const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId);
+  if (!sourceCard || sourceCard.defRef === null) return null;
+  const definition = getAbilityEffects(sourceCard.defRef, frame.abilityIndex);
+  const effect = definition?.effects[frame.effectIndex ?? 0];
+  if (!effect) return null;
+  const trivial = computeTrivialChooseTargets(state, sourceCard, humanPlayerId, effect);
+  if (!trivial) return null;
+  return trivial.locationIds
+    ? { type: "chooseTargets", targetIds: trivial.targetIds, locationIds: trivial.locationIds }
+    : { type: "chooseTargets", targetIds: trivial.targetIds };
+}
+
 // Drives play forward until a *real* human decision is on the table,
 // collecting every individual step along the way (not just the final
-// state). Three things happen automatically along the way, none of them a
-// genuine choice:
-//   - bot turns (a bot's own turn can itself pause on a decision belonging
-//     to a *different* bot, e.g. an alarm response — decider() names
-//     whoever's turn it actually is at each step, not necessarily the same
-//     bot that just went, so this keeps calling botTurn for whichever bot
-//     that is)
-//   - the human's mandatory start-of-turn draw (turn.phase === "draw")
-//   - the human's forced end-turn once actionsRemaining hits 0
-// Both human cases are still submitted as real actions (the engine wants
-// them logged even though there's no choice), just not surfaced as
-// buttons — see BUILD_PLAN.md's "no confirms anywhere" section.
+// state) — bot turns (a bot's own turn can itself pause on a decision
+// belonging to a *different* bot, e.g. an alarm response — decider()
+// names whoever's turn it actually is at each step, not necessarily the
+// same bot that just went, so this keeps calling botTurn for whichever
+// bot that is) and every human submission computeAutoAction says has no
+// real choice — still submitted as a real action (the engine wants it
+// logged even though there's no choice), just not surfaced as a button.
+// See BUILD_PLAN.md's "no confirms anywhere" section.
 async function runUntilHumanDecision(
   gameId: number,
   humanPlayerId: PlayerId,
@@ -63,14 +88,7 @@ async function runUntilHumanDecision(
       continue;
     }
 
-    const isTurnActionMoment = current.resolutionStack.length === 0;
-    const autoAction: Action | null = !isTurnActionMoment
-      ? null
-      : current.turn.phase === "draw"
-        ? { type: "draw" }
-        : current.turn.actionsRemaining === 0
-          ? { type: "endTurn" }
-          : null;
+    const autoAction = computeAutoAction(current, humanPlayerId);
     if (!autoAction) return { state: current, gameOver: null, entries };
 
     const result = await applyAction(gameId, humanPlayerId, humanPlayerId, autoAction);

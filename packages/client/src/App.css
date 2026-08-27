@@ -335,6 +335,27 @@ h3 {
   border-radius: 4px;
   padding: 0.4rem;
   font-size: 0.8rem;
+  cursor: pointer;
+}
+.target-mode-toggle {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+.target-mode-toggle button {
+  flex: 1;
+  font-size: 0.7rem;
+  padding: 0.3rem;
+  background: var(--neutral-mid);
+  color: var(--cream);
+  border: 1px solid var(--border-white);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.target-mode-toggle button.active {
+  background: var(--gold);
+  color: var(--neutral-dark);
+  border-color: var(--gold);
 }
 
 /* Center pane */
@@ -519,6 +540,16 @@ h3 {
 .mini-card-clickable {
   cursor: pointer;
 }
+.mini-card-targetable {
+  cursor: pointer;
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+  filter: drop-shadow(0 0 4px var(--gold));
+}
+.mini-card-target-selected {
+  outline: 3px solid var(--marker-crimson);
+  filter: drop-shadow(0 0 6px var(--marker-crimson));
+}
 .mini-card[draggable="true"],
 .hand-strip-card[draggable="true"] {
   cursor: grab;
@@ -571,6 +602,15 @@ h3 {
 }
 .hand-strip-card-clickable {
   cursor: pointer;
+}
+.hand-strip-card-targetable {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+  filter: drop-shadow(0 0 4px var(--gold));
+}
+.hand-strip-card-target-selected {
+  outline: 3px solid var(--marker-crimson);
+  filter: drop-shadow(0 0 6px var(--marker-crimson));
 }
 .actions-box {
   flex: 0 0 auto;

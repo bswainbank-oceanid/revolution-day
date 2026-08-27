@@ -1,6 +1,7 @@
 import type { FilteredGameState } from "@rev-day/engine";
 import { locationArtUrl } from "./art";
 import { playerColor, playersInSeatOrder } from "./players";
+import type { ActiveLocationPick } from "./useTargetSelection";
 
 interface CityViewProps {
   readonly state: FilteredGameState;
@@ -12,13 +13,18 @@ interface CityViewProps {
   // an in-play card), and accepts the drop via onDropCard.
   readonly allowedDropLocationIds?: ReadonlySet<string>;
   readonly onDropCard?: (locationId: string) => void;
+  // Step 6: a location-only target choice (Traffic Cop's destination,
+  // Anarchist's alarm location) — while active, tiles take over from
+  // normal navigation: a candidate tile submits the choice on click,
+  // everything else is inert.
+  readonly locationPick?: ActiveLocationPick | null;
 }
 
 // 3x2 grid in board (linear) order — DESIGN_NOTES.md: "Street / HQ /
 // Street (top row), Arena / Street / Palace (bottom row)" is just
 // state.board's own sequence chunked into two rows of 3, since the board
 // itself is already laid out in that linear order.
-export function CityView({ state, onSelectLocation, allowedDropLocationIds, onDropCard }: CityViewProps) {
+export function CityView({ state, onSelectLocation, allowedDropLocationIds, onDropCard, locationPick }: CityViewProps) {
   let streetIndex = 0;
   const president = state.president;
 
@@ -44,13 +50,21 @@ export function CityView({ state, onSelectLocation, allowedDropLocationIds, onDr
           }
           const presidentHere = president.status === "alive" && president.locationId === location.id;
           const isDropTarget = allowedDropLocationIds?.has(location.id) ?? false;
+          const isLocationPickCandidate = locationPick?.candidateLocationIds.includes(location.id) ?? false;
+          const onClick = locationPick
+            ? isLocationPickCandidate
+              ? () => locationPick.choose(location.id)
+              : undefined
+            : onSelectLocation
+              ? () => onSelectLocation(location.id)
+              : undefined;
           return (
             <div key={location.id} className="city-tile">
               <button
                 type="button"
-                className={`city-tile-image${isDropTarget ? " city-tile-drop-target" : ""}`}
-                onClick={onSelectLocation ? () => onSelectLocation(location.id) : undefined}
-                disabled={!onSelectLocation}
+                className={`city-tile-image${isDropTarget || isLocationPickCandidate ? " city-tile-drop-target" : ""}`}
+                onClick={onClick}
+                disabled={!onClick}
                 onDragOver={isDropTarget ? (e) => e.preventDefault() : undefined}
                 onDrop={
                   isDropTarget && onDropCard

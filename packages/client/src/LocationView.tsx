@@ -2,6 +2,7 @@ import type { FilteredCardInstance, FilteredGameState, PlayerId } from "@rev-day
 import { MiniCard } from "./MiniCard";
 import { locationArtUrl, cardArtUrl, CARD_BACK_URL } from "./art";
 import { playerColor, playerLabel, playersInSeatOrder } from "./players";
+import type { ActiveCardPick } from "./useTargetSelection";
 
 type SeatName = "bottomCenter" | "bl" | "tl" | "tr" | "br";
 
@@ -44,6 +45,11 @@ interface LocationViewProps {
   readonly onCardDragEnd?: () => void;
   readonly isDropTarget?: boolean;
   readonly onDropCard?: (locationId: string) => void;
+  // Step 6: while a card-pick is active and not in View Cards mode, a
+  // candidate MiniCard's click toggles it as a target instead of
+  // selecting it into the Card Viewer, and non-candidates go inert.
+  readonly cardPick?: ActiveCardPick | null;
+  readonly pickModeActive?: boolean;
 }
 
 export function LocationView({
@@ -58,6 +64,8 @@ export function LocationView({
   onCardDragEnd,
   isDropTarget,
   onDropCard,
+  cardPick,
+  pickModeActive,
 }: LocationViewProps) {
   const location = state.board.find((l) => l.id === locationId);
   if (!location) return null;
@@ -67,10 +75,21 @@ export function LocationView({
   const president = state.president;
   const presidentHere = president.status === "alive" && president.locationId === locationId;
 
-  const seatProps = { state, locationId, humanPlayerId, botPlayerIds, onSelectCard, canDrag, onCardDragStart, onCardDragEnd };
+  const seatProps = {
+    state,
+    locationId,
+    humanPlayerId,
+    botPlayerIds,
+    onSelectCard,
+    canDrag,
+    onCardDragStart,
+    onCardDragEnd,
+    cardPick,
+    pickModeActive,
+  };
 
   return (
-    <div className="location-view-bg" onClick={onBackgroundClick}>
+    <div className="location-view-bg" onClick={pickModeActive ? undefined : onBackgroundClick}>
       <h2>LOCATION VIEW — {location.name ?? location.type}</h2>
       <div className="location-view-grid">
         <Seat {...seatProps} seat="tl" playerIds={seats.get("tl") ?? []} />
@@ -102,18 +121,7 @@ export function LocationView({
   );
 }
 
-function Seat({
-  state,
-  seat,
-  playerIds,
-  locationId,
-  humanPlayerId,
-  botPlayerIds,
-  onSelectCard,
-  canDrag,
-  onCardDragStart,
-  onCardDragEnd,
-}: {
+interface SeatProps {
   readonly state: FilteredGameState;
   readonly seat: SeatName;
   readonly playerIds: readonly PlayerId[];
@@ -124,22 +132,15 @@ function Seat({
   readonly canDrag?: (card: FilteredCardInstance) => boolean;
   readonly onCardDragStart?: (card: FilteredCardInstance) => void;
   readonly onCardDragEnd?: () => void;
-}) {
+  readonly cardPick?: ActiveCardPick | null;
+  readonly pickModeActive?: boolean;
+}
+
+function Seat({ seat, playerIds, ...rest }: SeatProps) {
   return (
     <div className={`location-seat location-seat-${seat}`} onClick={(e) => e.stopPropagation()}>
       {playerIds.map((playerId) => (
-        <SeatCluster
-          key={playerId}
-          state={state}
-          playerId={playerId}
-          locationId={locationId}
-          humanPlayerId={humanPlayerId}
-          botPlayerIds={botPlayerIds}
-          onSelectCard={onSelectCard}
-          canDrag={canDrag}
-          onCardDragStart={onCardDragStart}
-          onCardDragEnd={onCardDragEnd}
-        />
+        <SeatCluster key={playerId} playerId={playerId} {...rest} />
       ))}
     </div>
   );
@@ -155,17 +156,9 @@ function SeatCluster({
   canDrag,
   onCardDragStart,
   onCardDragEnd,
-}: {
-  readonly state: FilteredGameState;
-  readonly playerId: PlayerId;
-  readonly locationId: string;
-  readonly humanPlayerId: PlayerId;
-  readonly botPlayerIds: readonly PlayerId[];
-  readonly onSelectCard?: (card: FilteredCardInstance) => void;
-  readonly canDrag?: (card: FilteredCardInstance) => boolean;
-  readonly onCardDragStart?: (card: FilteredCardInstance) => void;
-  readonly onCardDragEnd?: () => void;
-}) {
+  cardPick,
+  pickModeActive,
+}: Omit<SeatProps, "seat" | "playerIds"> & { readonly playerId: PlayerId }) {
   const seatIndex = state.players.find((p) => p.id === playerId)?.seatIndex ?? 0;
   const color = playerColor(seatIndex);
   const cards = state.cards.filter((c) => c.zone === "inPlay" && c.locationId === locationId && c.controller === playerId);
@@ -185,18 +178,25 @@ function SeatCluster({
         {cards.length === 0 ? (
           <img src={CARD_BACK_URL} alt="" className="mini-card seat-cluster-empty" style={{ borderColor: color, opacity: 0.25 }} />
         ) : (
-          cards.map((card, i) => (
-            <MiniCard
-              key={card.id}
-              card={card}
-              borderColor={color}
-              style={{ marginLeft: i === 0 ? 0 : -34 }}
-              onSelect={onSelectCard}
-              draggable={canDrag?.(card) ?? false}
-              onDragStart={onCardDragStart}
-              onDragEnd={onCardDragEnd}
-            />
-          ))
+          cards.map((card, i) => {
+            const isCandidate = cardPick?.candidates.some((c) => c.id === card.id) ?? false;
+            const isSelected = cardPick?.selectedIds.includes(card.id) ?? false;
+            const onSelect = pickModeActive ? (isCandidate ? () => cardPick!.toggle(card) : undefined) : onSelectCard;
+            return (
+              <MiniCard
+                key={card.id}
+                card={card}
+                borderColor={color}
+                style={{ marginLeft: i === 0 ? 0 : -34 }}
+                onSelect={onSelect}
+                draggable={!pickModeActive && (canDrag?.(card) ?? false)}
+                onDragStart={onCardDragStart}
+                onDragEnd={onCardDragEnd}
+                targetable={pickModeActive && isCandidate}
+                targetSelected={isSelected}
+              />
+            );
+          })
         )}
       </div>
     </div>

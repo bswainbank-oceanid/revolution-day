@@ -9,6 +9,10 @@ interface MiniCardProps {
   readonly draggable?: boolean;
   readonly onDragStart?: (card: FilteredCardInstance) => void;
   readonly onDragEnd?: () => void;
+  // Step 6: real target highlighting during an active card-pick — a
+  // distinct visual from the plain "clickable to view" state.
+  readonly targetable?: boolean;
+  readonly targetSelected?: boolean;
 }
 
 // The small overlapping-cluster card used in Location View seats and the
@@ -22,13 +26,17 @@ interface MiniCardProps {
 // interaction-design conversation). That carve-out is step 8's job
 // (BUILD_PLAN.md); until then this deliberately under-informs about your
 // own blended cards rather than half-implementing the badge.
-export function MiniCard({ card, borderColor, style, onSelect, draggable, onDragStart, onDragEnd }: MiniCardProps) {
+export function MiniCard({ card, borderColor, style, onSelect, draggable, onDragStart, onDragEnd, targetable, targetSelected }: MiniCardProps) {
   const art = card.faceUp === false ? CARD_BACK_URL : cardArtUrl(card.defRef);
+  const classes = ["mini-card"];
+  if (onSelect) classes.push("mini-card-clickable");
+  if (targetable) classes.push("mini-card-targetable");
+  if (targetSelected) classes.push("mini-card-target-selected");
   return (
     <img
       src={art}
       alt=""
-      className={`mini-card${onSelect ? " mini-card-clickable" : ""}`}
+      className={classes.join(" ")}
       style={{ borderColor, ...style }}
       draggable={draggable}
       onClick={

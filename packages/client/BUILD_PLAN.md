@@ -61,7 +61,44 @@ View MiniCard itself can't reach an adjacent tile without navigating
 mid-drag, which native DnD doesn't support here — the Card Viewer is the
 real path for moves, and is already wired for it).
 
-Steps 6-9 not yet started.
+Step 6: target selection. New `targetDecision.ts` (pure logic: is the
+current ability effect trivial/auto-advanceable, or does it need a real
+card/location pick, plus button-gating via `abilityIsUsable` so a click
+never leads into a guaranteed dead end) and `useTargetSelection.ts` (the
+live React state — selection, the Choose Targets/View Cards toggle,
+response staging for `useResponse`). `useGame.ts`'s auto-advance loop now
+also skips every trivial ability effect (self/binding target, random
+selection, "all" mode, a forced/empty pool, Wife's president-only target)
+with no click, extending step 5's mandatory-draw/forced-end-turn
+automation. `ActivateAbilityBox` and `ActionsBox` are now fully live:
+real Activate/Response/Intercept buttons, the Choose Targets/View Cards
+toggle, Done for variable-count picks, Pass for alarm/intercept windows.
+`CityView`, `LocationView`, `MiniCard`, and `HandStrip` all gained real
+target highlighting and click-to-toggle, sourced directly from the
+engine's own `candidateInPlayCards`/`candidateHandCards`/
+`presidentIsLegalTarget` (no separate highlighting logic to drift).
+Navigation auto-follows a single-location-locked pick and force-shows
+City View for a location-only pick (Traffic Cop's destination,
+Anarchist's alarm location).
+
+Deliberately out of scope, gated off at the ability-button level so the
+human can never reach an unsupported resolution state through their own
+choice (bots are unaffected — they decide these independently):
+`activateRemote` (Head of Security, Puppet-Master's 2nd ability,
+Guerrilla Commander's 1st, Commander General's 2nd — nested card+ability
+picking) and Opposition Leader's "place 2 rebels at any locations" (its
+1st ability — per-target location pairing). Every other Activate/Response
+ability in the current 28-card set is fully interactive, including
+multi-effect sequences (Master Assassin, Secret Police, Suicide Bomber)
+and every resolution-stack window (alarm response, protected-targeting
+reveal, Motorcade interception, reactive-passive play).
+
+Verified live via extended Playwright runs playing many real turns against
+bots: multiple real ability activations resolving correctly end to end
+(including Suicide Bomber's full 3-step auto-advancing sequence with zero
+clicks), an alarm response, and a "choose 1 of 4 eligible" exact-count
+pick with correct highlighting and auto-submit. No console errors in any
+run. Steps 7-9 not yet started.
 
 ## Context
 

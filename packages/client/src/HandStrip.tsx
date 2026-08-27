@@ -1,5 +1,6 @@
 import type { FilteredCardInstance, FilteredGameState, PlayerId } from "@rev-day/engine";
 import { cardArtUrl } from "./art";
+import type { ActiveCardPick } from "./useTargetSelection";
 
 interface HandStripProps {
   readonly state: FilteredGameState;
@@ -8,9 +9,13 @@ interface HandStripProps {
   readonly canDrag?: (card: FilteredCardInstance) => boolean;
   readonly onDragStart?: (card: FilteredCardInstance) => void;
   readonly onDragEnd?: () => void;
+  // Step 6: a "play" or reactive-window pick draws its candidates from
+  // the hand — same candidate/selected/toggle handling as MiniCard's.
+  readonly cardPick?: ActiveCardPick | null;
+  readonly pickModeActive?: boolean;
 }
 
-export function HandStrip({ state, playerId, onSelectCard, canDrag, onDragStart, onDragEnd }: HandStripProps) {
+export function HandStrip({ state, playerId, onSelectCard, canDrag, onDragStart, onDragEnd, cardPick, pickModeActive }: HandStripProps) {
   const hand = state.cards.filter((c) => c.zone === "hand" && c.controller === playerId);
   return (
     <div className="hand-strip">
@@ -18,14 +23,21 @@ export function HandStrip({ state, playerId, onSelectCard, canDrag, onDragStart,
       <div className="hand-strip-cards">
         {hand.length === 0 && <p className="hint">Empty</p>}
         {hand.map((card) => {
-          const draggable = canDrag?.(card) ?? false;
+          const isCandidate = cardPick?.candidates.some((c) => c.id === card.id) ?? false;
+          const isSelected = cardPick?.selectedIds.includes(card.id) ?? false;
+          const onClick = pickModeActive ? (isCandidate ? () => cardPick!.toggle(card) : undefined) : onSelectCard ? () => onSelectCard(card) : undefined;
+          const draggable = !pickModeActive && (canDrag?.(card) ?? false);
+          const classes = ["hand-strip-card"];
+          if (onClick) classes.push("hand-strip-card-clickable");
+          if (pickModeActive && isCandidate) classes.push("hand-strip-card-targetable");
+          if (isSelected) classes.push("hand-strip-card-target-selected");
           return (
             <img
               key={card.id}
               src={cardArtUrl(card.defRef)}
               alt={card.defRef ?? ""}
-              className={`hand-strip-card${onSelectCard ? " hand-strip-card-clickable" : ""}`}
-              onClick={onSelectCard ? () => onSelectCard(card) : undefined}
+              className={classes.join(" ")}
+              onClick={onClick}
               draggable={draggable}
               onDragStart={
                 draggable && onDragStart
