@@ -1,9 +1,10 @@
-import type { FilteredCardInstance } from "@rev-day/engine";
-import { CARD_BACK_URL, cardArtUrl } from "./art";
+import type { FilteredCardInstance, PlayerId } from "@rev-day/engine";
+import { cardFaceUrl, isOwnBlended } from "./art";
 
 interface MiniCardProps {
   readonly card: FilteredCardInstance;
   readonly borderColor: string;
+  readonly viewerId: PlayerId;
   readonly style?: React.CSSProperties;
   readonly onSelect?: (card: FilteredCardInstance) => void;
   readonly draggable?: boolean;
@@ -19,45 +20,61 @@ interface MiniCardProps {
 // ribbon's deck stack — matches SEATING_SPEC.md: legibility of individual
 // cards isn't the goal here, just "whose card, face-up or down."
 //
-// Step 3 (static content pass) note: this always shows a face-down card
-// as a plain back, even the viewer's own — that's the general rule for
-// everyone else's cards, but the viewer's own blended cards are meant to
-// get a different treatment (true art + a "still hidden" badge, per the
-// interaction-design conversation). That carve-out is step 8's job
-// (BUILD_PLAN.md); until then this deliberately under-informs about your
-// own blended cards rather than half-implementing the badge.
-export function MiniCard({ card, borderColor, style, onSelect, draggable, onDragStart, onDragEnd, targetable, targetSelected }: MiniCardProps) {
-  const art = card.faceUp === false ? CARD_BACK_URL : cardArtUrl(card.defRef);
+// Step 8: the viewer's own blended cards show their true art plus a small
+// eye badge in the upper-right corner — same treatment and badge as
+// CardViewer, via the shared art.ts helpers, so the two never drift.
+// Anyone else's blended card stays a plain back (no defRef to show).
+export function MiniCard({
+  card,
+  borderColor,
+  viewerId,
+  style,
+  onSelect,
+  draggable,
+  onDragStart,
+  onDragEnd,
+  targetable,
+  targetSelected,
+}: MiniCardProps) {
+  const art = cardFaceUrl(card, viewerId);
+  const ownBlended = isOwnBlended(card, viewerId);
   const classes = ["mini-card"];
   if (onSelect) classes.push("mini-card-clickable");
   if (targetable) classes.push("mini-card-targetable");
   if (targetSelected) classes.push("mini-card-target-selected");
   return (
-    <img
-      src={art}
-      alt=""
-      className={classes.join(" ")}
-      style={{ borderColor, ...style }}
-      draggable={draggable}
-      onClick={
-        onSelect
-          ? (e) => {
-              e.stopPropagation();
-              onSelect(card);
-            }
-          : undefined
-      }
-      onDragStart={
-        draggable && onDragStart
-          ? (e) => {
-              e.stopPropagation();
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData("text/plain", card.id);
-              onDragStart(card);
-            }
-          : undefined
-      }
-      onDragEnd={onDragEnd}
-    />
+    <span className="mini-card-wrap" style={style}>
+      <img
+        src={art}
+        alt=""
+        className={classes.join(" ")}
+        style={{ borderColor }}
+        draggable={draggable}
+        onClick={
+          onSelect
+            ? (e) => {
+                e.stopPropagation();
+                onSelect(card);
+              }
+            : undefined
+        }
+        onDragStart={
+          draggable && onDragStart
+            ? (e) => {
+                e.stopPropagation();
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", card.id);
+                onDragStart(card);
+              }
+            : undefined
+        }
+        onDragEnd={onDragEnd}
+      />
+      {ownBlended && (
+        <span className="mini-card-blend-badge" title="Blended — hidden from other players">
+          👁
+        </span>
+      )}
+    </span>
   );
 }

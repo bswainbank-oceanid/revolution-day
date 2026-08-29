@@ -1,3 +1,5 @@
+import type { FilteredCardInstance, PlayerId } from "@rev-day/engine";
+
 // Maps card_data.json's defRef strings and board location types to the
 // real finished art in public/ (copied from export/cards, export/locations
 // — see DESIGN_REFERENCE.md for the source). Explicit table rather than a
@@ -47,6 +49,27 @@ export function cardArtUrl(defRef: string | null): string {
   if (defRef === null) return CARD_BACK_URL;
   const file = CARD_ART[defRef];
   return file ? `/cards/${file}` : CARD_BACK_URL;
+}
+
+// Step 8 (BUILD_PLAN.md): a card the viewer controls that's currently
+// blended (face-down) — per-instance runtime state, not the permanent
+// printed Blend attribute. The viewer always has the real defRef for
+// their own cards (filterForPlayer never redacts it, regardless of
+// faceUp), which is what makes "show true art, but flag it as hidden
+// from everyone else" possible for exactly this one case.
+export function isOwnBlended(card: FilteredCardInstance, viewerId: PlayerId): boolean {
+  return card.faceUp === false && card.controller === viewerId;
+}
+
+// The face to render for a card instance: a plain back for anyone else's
+// blended card (the client genuinely has no defRef for it — filterForPlayer
+// never sends one), true art otherwise — including the viewer's own
+// blended cards, which get a separate eye-badge overlay instead of being
+// hidden from their own controller (see isOwnBlended and CardViewer/
+// MiniCard's badge rendering).
+export function cardFaceUrl(card: FilteredCardInstance, viewerId: PlayerId): string {
+  if (card.faceUp === false && !isOwnBlended(card, viewerId)) return CARD_BACK_URL;
+  return cardArtUrl(card.defRef);
 }
 
 const STREET_VARIANTS = ["01_street_a.png", "02_street_b.png", "03_street_c.png"];

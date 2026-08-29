@@ -1,9 +1,10 @@
-import type { FilteredCardInstance } from "@rev-day/engine";
-import { CARD_BACK_URL, cardArtUrl } from "./art";
+import type { FilteredCardInstance, PlayerId } from "@rev-day/engine";
+import { cardFaceUrl, isOwnBlended } from "./art";
 
 interface CardViewerProps {
   readonly card: FilteredCardInstance | null;
   readonly controllerLabel: string | null;
+  readonly viewerId: PlayerId;
   readonly draggable?: boolean;
   readonly onDragStart?: (card: FilteredCardInstance) => void;
   readonly onDragEnd?: () => void;
@@ -19,10 +20,12 @@ interface CardViewerProps {
 // when App.tsx's canDrag(card) says it's actually the human's own
 // hand/in-play card with a real turn action available.
 //
-// Step 3 note: same face-down handling as MiniCard — a face-down card
-// (even the viewer's own) shows a plain back for now; the true-art +
-// "still blended" badge for the viewer's own cards is step 8.
-export function CardViewer({ card, controllerLabel, draggable, onDragStart, onDragEnd }: CardViewerProps) {
+// Step 8: the viewer's own blended cards show their true art (defRef is
+// always known for own cards) plus a small eye badge in the upper-right
+// corner, clear of the printed name/icons/ability text — a distinct
+// treatment from anyone else's blended card, which stays a plain back
+// (see art.ts's cardFaceUrl/isOwnBlended).
+export function CardViewer({ card, controllerLabel, viewerId, draggable, onDragStart, onDragEnd }: CardViewerProps) {
   if (!card) {
     return (
       <div className="card-viewer card-viewer-empty">
@@ -30,8 +33,9 @@ export function CardViewer({ card, controllerLabel, draggable, onDragStart, onDr
       </div>
     );
   }
-  const art = card.faceUp === false ? CARD_BACK_URL : cardArtUrl(card.defRef);
+  const art = cardFaceUrl(card, viewerId);
   const isEliminated = card.zone === "eliminated";
+  const ownBlended = isOwnBlended(card, viewerId);
 
   return (
     <div className="card-viewer">
@@ -60,6 +64,11 @@ export function CardViewer({ card, controllerLabel, draggable, onDragStart, onDr
           onDragEnd={onDragEnd}
         />
         {isEliminated && <span className="eliminated-x">✕</span>}
+        {ownBlended && (
+          <span className="blend-badge" title="Blended — hidden from other players">
+            👁
+          </span>
+        )}
       </div>
     </div>
   );

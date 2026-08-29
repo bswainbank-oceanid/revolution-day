@@ -9,6 +9,7 @@ import { CityView } from "./CityView";
 import { GameCanvas } from "./GameCanvas";
 import { GameChat } from "./GameChat";
 import { GameLog } from "./GameLog";
+import { GameOverScreen } from "./GameOverScreen";
 import { HandStrip } from "./HandStrip";
 import { LocationView } from "./LocationView";
 import { playerLabel } from "./players";
@@ -101,6 +102,25 @@ function App() {
     );
   }
 
+  // Step 9: wait for playback to finish narrating the bot turn that ended
+  // the game (if any) before showing results — the human should still get
+  // to watch what happened, not have it snap away underneath the summary.
+  if (session.gameOver && !playback.isPlaying) {
+    return (
+      <main className="new-game">
+        <GameOverScreen
+          gameOver={session.gameOver}
+          state={session.state}
+          humanPlayerId={session.humanPlayerId}
+          botPlayerIds={session.botPlayerIds}
+        />
+        <button type="button" onClick={startNewGame} disabled={loading}>
+          {loading ? "Starting…" : "Play Again"}
+        </button>
+      </main>
+    );
+  }
+
   const { humanPlayerId, botPlayerIds, log } = session;
   const state = playback.displayState ?? session.state;
   const interactionLocked = loading || playback.isPlaying;
@@ -170,6 +190,7 @@ function App() {
           <CardViewer
             card={viewedCard}
             controllerLabel={controllerLabel}
+            viewerId={humanPlayerId}
             draggable={viewedCard ? canDrag(viewedCard) : false}
             onDragStart={setDraggedCard}
             onDragEnd={stopDragging}

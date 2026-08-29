@@ -5,8 +5,7 @@
   text-align: center;
 }
 
-.new-game button,
-.action-panel button {
+.new-game button {
   background: var(--gold);
   color: var(--ink);
   border: 1px solid var(--border-white);
@@ -16,8 +15,7 @@
   margin: 0.25rem;
 }
 
-.new-game button:disabled,
-.action-panel button:disabled {
+.new-game button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -43,138 +41,6 @@
 .hint {
   opacity: 0.75;
   font-size: 0.9rem;
-}
-
-.game-screen {
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 1rem;
-}
-
-.board {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  justify-content: center;
-  margin-bottom: 1.5rem;
-}
-
-.location {
-  background: var(--location-dark);
-  border: 1px solid var(--location-light);
-  border-radius: 6px;
-  padding: 0.5rem;
-  width: 11rem;
-}
-
-.location.location-selected {
-  outline: 3px solid var(--gold);
-}
-
-.location-tile {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  position: relative;
-  display: block;
-  width: 100%;
-}
-
-.location-tile img {
-  width: 100%;
-  border-radius: 4px;
-  display: block;
-}
-
-.location-label {
-  display: block;
-  font-weight: 600;
-  margin-top: 0.25rem;
-}
-
-.president-marker {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  color: var(--gold);
-  font-size: 1.5rem;
-  text-shadow: 0 0 4px black;
-}
-
-.location-cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  margin-top: 0.5rem;
-}
-
-.hand {
-  margin-bottom: 1.5rem;
-}
-
-.hand-cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.card {
-  background: var(--neutral-mid);
-  border: 1px solid var(--border-white);
-  border-radius: 4px;
-  padding: 0.25rem;
-  width: 5.5rem;
-  cursor: default;
-  color: var(--cream);
-  text-align: center;
-}
-
-.card.card-clickable {
-  cursor: pointer;
-}
-
-.card.card-selected {
-  outline: 3px solid var(--gold);
-}
-
-.card-art {
-  width: 100%;
-  border-radius: 3px;
-  display: block;
-}
-
-.card-label {
-  display: block;
-  font-size: 0.7rem;
-  margin-top: 0.2rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.card-facedown-badge {
-  display: block;
-  font-size: 0.6rem;
-  color: var(--gold);
-}
-
-.action-panel {
-  background: var(--neutral-mid);
-  border: 1px solid var(--border-white);
-  border-radius: 6px;
-  padding: 1rem;
-}
-
-.ability-list {
-  list-style: none;
-  padding: 0;
-  margin: 0.5rem 0;
-  text-align: left;
-}
-
-.ability-list li {
-  margin-bottom: 0.4rem;
 }
 
 .game-over {
@@ -318,6 +184,22 @@ h3 {
   font-size: 6rem;
   color: var(--marker-crimson);
   text-shadow: 0 0 8px black;
+}
+.blend-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--neutral-dark);
+  border: 2px solid var(--gold);
+  color: var(--gold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  line-height: 1;
 }
 .activate-ability-box {
   padding: 0.75rem;
@@ -531,11 +413,31 @@ h3 {
 .seat-cluster-cards {
   display: flex;
 }
+.mini-card-wrap {
+  position: relative;
+  display: inline-block;
+}
 .mini-card {
   width: 46px;
   border: 2px solid;
   border-radius: 3px;
   display: block;
+}
+.mini-card-blend-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--neutral-dark);
+  border: 1px solid var(--gold);
+  color: var(--gold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  line-height: 1;
 }
 .mini-card-clickable {
   cursor: pointer;

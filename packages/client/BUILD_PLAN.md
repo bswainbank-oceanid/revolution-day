@@ -1,6 +1,6 @@
 # Revolution Day client — full UI rebuild against the locked mockups
 
-Status: **Steps 1-7 complete and verified.** Step 1: filtered-targeting logic
+Status: **All 9 steps complete and verified.** Step 1: filtered-targeting logic
 promoted into `packages/engine`, `packages/bots/src/targetPool.ts` deleted. Step 2:
 the fixed 1920x1080 scaling canvas (`GameCanvas.tsx`) with the 5 regions laid out
 exactly per `DESIGN_NOTES.md`'s pixel table. Step 3: every region rendering real
@@ -140,7 +140,61 @@ location changed" priority rule, with the Motorcade card shown in the
 Card Viewer and both boxes reading "Watching the turn play out…"). Zero
 console errors in every run.
 
-Steps 8-9 not yet started.
+Step 8: blend/reveal treatment. New `art.ts` helpers `isOwnBlended(card,
+viewerId)` (a card the viewer controls that's currently face-down —
+per-instance runtime state, not the permanent printed Blend attribute)
+and `cardFaceUrl(card, viewerId)` (a plain back for anyone else's
+blended card — the client genuinely has no defRef for it — true art
+otherwise, including the viewer's own blended cards). `CardViewer` and
+`MiniCard` both switched from the old blanket "face-down → always a
+back" rule to this, and both render the same small eye-badge overlay
+(upper-right of the card art, clear of the printed name/icons/text) when
+`isOwnBlended` is true — one shared helper so the two never drift, per
+the locked design. `MiniCard` needed a wrapping `<span>` to host the
+absolutely-positioned badge (previously a bare `<img>`).
+
+Verified live: played a Blend-attribute card (Puppet-Master) from hand,
+confirmed the eye badge renders correctly in both the Location View
+MiniCard and the Card Viewer, showing the true art with the badge clearly
+distinct from the card's own printed Blend-attribute icon. Zero console
+errors.
+
+Step 9: `GameOverScreen` integration + final pass. It wasn't wired into
+`App.tsx` at all before this — now `session.gameOver` (once `playback`
+has finished narrating any bot turn that ended the game, so the human
+still gets to watch what happened rather than have it snap away) replaces
+the whole canvas with the results table and a "Play Again" button
+(reusing `startNewGame`). `GameOverScreen` itself carried over from the
+first slice essentially as-is, per the plan, with one real change: player
+labels via the shared `playerLabel` helper instead of raw player IDs,
+matching every other screen. `GameChat` stays the stub it already was
+from step 3 — no chat feature is being built.
+
+Also deleted the first slice's now-fully-superseded files (`GameScreen.tsx`,
+`Board.tsx`, `Hand.tsx`, `Card.tsx`) — they were already disconnected from
+`App.tsx` but still compiled as part of the package, and had started
+actively breaking the build (a stale `GameOverScreen` prop signature)
+once this step changed that component's props. Pruned their exclusively-
+owned dead CSS from `App.css` too, verified class-by-class against every
+surviving file before removal (kept `.error`/`.hint`/the `.new-game`
+button rules, which turned out to be shared).
+
+Verified live: reached real Game Over states via extended bot-vs-bot-vs-
+human play (both a "nobody won" and a "Winners: Bot N" outcome), confirmed
+correct player labels and win/loss predicate rendering, and confirmed
+"Play Again" correctly starts a fresh game. One round of flaky Playwright
+runs during this turned out to be ~49 orphaned Chromium processes
+accumulated from this session's own earlier crashed verification
+scripts, not a real bug — confirmed by a clean re-run immediately after
+killing them. Zero console errors in every clean run.
+
+**The full 9-step client rebuild is now complete.** The app is genuinely
+playable end to end: draw, play, move, activate abilities, respond to
+alarms, navigate the board, watch bot turns play out with real
+camera/Card-Viewer choreography, and reach a properly-labeled Game Over
+screen. Known, deliberately-scoped-out gaps remain documented above
+(`activateRemote`, Opposition Leader's per-target "any location" play) —
+both are gated off at the ability-button level rather than half-built.
 
 ## Context
 
