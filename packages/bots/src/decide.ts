@@ -8,6 +8,8 @@ import {
   getPassive,
   knownFaction,
   presidentIsLegalTarget,
+  presidentMatchesSelectorFiltered,
+  presidentPseudoCard,
   PRESIDENT_TARGET_ID,
   winConditions,
 } from "@rev-day/engine";
@@ -79,6 +81,31 @@ function abilityHasEliminateEffect(def: AbilityDefinition): boolean {
   return def.effects.some((e) => e.verb === "eliminate");
 }
 
+// The candidate pool for an eliminate effect — real matching cards, plus
+// the President when the selector's own conditions admit him (per
+// card_data.json's additional_rulings: "The President's faction counts as
+// Regime for all faction-based counting and protection rules" — *any*
+// unfiltered or Regime-faction eliminate selector can target him, subject
+// to the normal location and Protected-immunity rules, not just Wife's
+// dedicated kind:"president" selector). Mirrors the client's identically-
+// named helper (packages/client/src/targetDecision.ts) and reducer.ts's
+// declareEliminateTargets, so bots never consider a target the server
+// would actually reject, or miss one it would accept.
+function eliminateCandidatePool(
+  state: FilteredGameState,
+  cardData: CardData,
+  sourceCard: FilteredCardInstance,
+  actingPlayerId: PlayerId,
+  effect: Extract<EffectNode, { verb: "eliminate" }>,
+): FilteredCardInstance[] {
+  if (effect.target.ref !== "filter") return [];
+  const realCards = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+  const presidentEligible =
+    presidentMatchesSelectorFiltered(state, effect.target, sourceCard) &&
+    presidentIsLegalTarget(state, cardData, actingPlayerId, effect.ignoreProtected ?? false, true);
+  return presidentEligible ? [...realCards, presidentPseudoCard(state)] : realCards;
+}
+
 // Exact/range-minimum eliminate/reveal/peek/activateRemote/play effects
 // have no legal "decline" once the ability is already committed to —
 // unlike every resolution-stack window (which always has a pass/decline
@@ -109,34 +136,35 @@ function abilityHasAvailableFirstTarget(
   const effect = def.effects[0];
   if (!effect) return false;
   switch (effect.verb) {
-    case "eliminate":
-    case "reveal":
-    case "peek":
-    case "activateRemote": {
+    case "eliminate": {
       if (effect.target.ref !== "filter") return true; // self/binding — nothing to run out of
-      if (effect.target.kind === "president") {
-        // Only "eliminate" targets the President in current data (Wife) —
-        // reveal/peek/activateRemote can't reach this branch yet, so
-        // there's nothing to legality-check for them.
-        if (effect.verb !== "eliminate") return true;
-        const coLocated =
-          effect.target.location?.mode !== "self" || state.president.locationId === sourceCard.locationId;
-        return presidentIsLegalTarget(state, cardData, deciderId, effect.ignoreProtected ?? false, coLocated);
-      }
-      if (effect.verb === "eliminate" && effect.target.selection === "random") return true; // engine draws automatically
+      if (effect.target.selection === "random") return true; // engine draws automatically
       const minNeeded = requiredMinCount(effect.target.count);
       if (minNeeded === 0) return true;
-      const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+      const pool = eliminateCandidatePool(state, cardData, sourceCard, deciderId, effect);
       // The bot never player-chooses to eliminate its own cards (a hard
       // exclusion, not just a preference — see decideEliminateTargetIds),
       // so an eliminate ability with no *opposing* target is just as much
       // a dead end as one with no target at all, unless the selector
-      // already hard-constrains controller itself.
+      // already hard-constrains controller itself. The President (never
+      // "your own" — see eliminateCandidatePool) always passes this filter.
       const relevantPool =
-        effect.verb === "eliminate" && effect.target.controller !== "self" && effect.target.controller !== "other"
-          ? pool.filter((c) => c.controller !== deciderId)
-          : pool;
+        effect.target.controller === "self" || effect.target.controller === "other"
+          ? pool
+          : pool.filter((c) => c.controller !== deciderId);
       return relevantPool.length >= minNeeded;
+    }
+    case "reveal":
+    case "peek":
+    case "activateRemote": {
+      if (effect.target.ref !== "filter") return true; // self/binding — nothing to run out of
+      // Neither verb can reach the President in current data — every
+      // selector using them requires blendState:"faceDown", which he can
+      // never satisfy (no Blend attribute) — so no special-casing needed.
+      const minNeeded = requiredMinCount(effect.target.count);
+      if (minNeeded === 0) return true;
+      const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+      return pool.length >= minNeeded;
     }
     case "play": {
       if (effect.target.ref !== "filter") return true;
@@ -324,27 +352,52 @@ function decideEliminateTargetIds(
   if (effect.target.ref !== "filter") return [];
   if (effect.target.selection === "random") return []; // engine draws automatically
 
-  // Only Wife's ability currently has kind:"president" — no alternative
-  // candidate exists either way, so there's no real "choice" here, but
-  // this is also where an "eliminate" objective's preference for the
-  // President would bite if a future ability offered a genuine mix.
-  if (effect.target.kind === "president") {
-    return [PRESIDENT_TARGET_ID];
-  }
-
-  const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+  const pool = eliminateCandidatePool(state, cardData, sourceCard, playerId, effect);
   // "Targets are randomly chosen from opposing cards. Don't target your
   // own cards" — a hard exclusion, not a preference with an own-card
   // fallback: abilityHasAvailableFirstTarget already refuses to activate
   // an eliminate ability with no opposing candidate, so this should never
-  // actually need to fall back to `pool`.
-  const finalPool =
+  // actually need to fall back to `pool`. The President (controller: null)
+  // always passes this filter on his own.
+  let finalPool =
     effect.target.controller === "self" || effect.target.controller === "other"
       ? pool // already hard-constrained by the selector itself
       : pool.filter((c) => c.controller !== playerId);
 
+  // A "protect" leader never targets the President, even incidentally via
+  // a generic ability that happens to include him as one of several
+  // candidates now that eliminateCandidatePool can mix him in —
+  // abilityTargetsPresident (decideActivateAbility's own gate) only
+  // screens out abilities *dedicated* to him (Wife's kind:"president"), so
+  // this exclusion is still needed here for a plain "eliminate 1 target"
+  // that could otherwise go either way. But only when there's a real
+  // alternative: once an ability is already committed (this function is
+  // reached), there's no legal decline (see abilityHasAvailableFirstTarget's
+  // comment) — for Wife's own dedicated selector, or a remote activation
+  // that bypassed decideActivateAbility's gate, the President can be the
+  // *only* candidate, and stranding the bot with zero legal targets is
+  // worse than the incidental-avoidance this filter exists for.
+  if (objective === "protect") {
+    const minNeeded = requiredMinCount(effect.target.count);
+    const withoutPresident = finalPool.filter((c) => c.id !== PRESIDENT_TARGET_ID);
+    if (withoutPresident.length >= minNeeded) {
+      finalPool = withoutPresident;
+    }
+  }
+
   const count = countToPick(rng, effect.target.count, finalPool.length);
-  return pickN(rng, finalPool, count).map((c) => c.id);
+  const chosen = pickN(rng, finalPool, count);
+
+  // An "eliminate" leader prefers the President when he's a legal target
+  // and there's room to include him — the natural extension, now that a
+  // generic selector can offer a genuine mix, of the preference this
+  // function's own comment already anticipated.
+  if (objective === "eliminate" && count > 0 && !chosen.some((c) => c.id === PRESIDENT_TARGET_ID)) {
+    const presidentCandidate = finalPool.find((c) => c.id === PRESIDENT_TARGET_ID);
+    if (presidentCandidate) chosen[0] = presidentCandidate;
+  }
+
+  return chosen.map((c) => c.id);
 }
 
 function decideRevealOrPeekTargetIds(

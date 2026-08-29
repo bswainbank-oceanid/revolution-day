@@ -1,6 +1,8 @@
+import type { MouseEvent } from "react";
 import type { FilteredCardInstance, FilteredGameState, PlayerId } from "@rev-day/engine";
+import { PRESIDENT_TARGET_ID, presidentPseudoCard } from "@rev-day/engine";
 import { MiniCard } from "./MiniCard";
-import { locationArtUrl, cardArtUrl, CARD_BACK_URL } from "./art";
+import { locationArtUrl, cardArtUrl } from "./art";
 import { playerColor, playerLabel, playersInSeatOrder } from "./players";
 import type { ActiveCardPick } from "./useTargetSelection";
 
@@ -74,6 +76,13 @@ export function LocationView({
   const seats = assignSeats(state, humanPlayerId);
   const president = state.president;
   const presidentHere = president.status === "alive" && president.locationId === locationId;
+  const isPresidentCandidate = cardPick?.candidates.some((c) => c.id === PRESIDENT_TARGET_ID) ?? false;
+  const isPresidentSelected = cardPick?.selectedIds.includes(PRESIDENT_TARGET_ID) ?? false;
+  const onPresidentMarkerClick = (e: MouseEvent) => {
+    e.stopPropagation();
+    if (pickModeActive && isPresidentCandidate) cardPick!.toggle(presidentPseudoCard(state));
+    else onSelectCard?.(presidentPseudoCard(state));
+  };
 
   const seatProps = {
     state,
@@ -107,7 +116,16 @@ export function LocationView({
           }
         >
           <img src={art} alt="" />
-          {presidentHere && <img src={cardArtUrl("President")} alt="President" className="location-president-marker" />}
+          {presidentHere && (
+            <img
+              src={cardArtUrl("President")}
+              alt="President"
+              className={`location-president-marker${onSelectCard ? " city-president-clickable" : ""}${
+                pickModeActive && isPresidentCandidate ? " mini-card-targetable" : ""
+              }${isPresidentSelected ? " mini-card-target-selected" : ""}`}
+              onClick={onSelectCard ? onPresidentMarkerClick : undefined}
+            />
+          )}
         </div>
         <Seat {...seatProps} seat="tr" playerIds={seats.get("tr") ?? []} />
         <Seat {...seatProps} seat="bl" playerIds={seats.get("bl") ?? []} />
@@ -162,12 +180,11 @@ function SeatCluster({
   const seatIndex = state.players.find((p) => p.id === playerId)?.seatIndex ?? 0;
   const color = playerColor(seatIndex);
   const cards = state.cards.filter((c) => c.zone === "inPlay" && c.locationId === locationId && c.controller === playerId);
-  const isHuman = playerId === humanPlayerId;
 
-  // An empty seat is still drawn (SEATING_SPEC.md: "never omitted, so
-  // 'this is you' is never ambiguous") — for the local player only; other
-  // empty seats simply don't render (they're not seated here at all).
-  if (cards.length === 0 && !isHuman) return null;
+  // Only render a cluster where a player actually has cards at this
+  // location — including the human's own seat (a deliberate deviation
+  // from SEATING_SPEC.md's "never omitted" rule, per explicit direction).
+  if (cards.length === 0) return null;
 
   return (
     <div className="seat-cluster">
@@ -175,30 +192,26 @@ function SeatCluster({
         {playerLabel(state, playerId, humanPlayerId, botPlayerIds)}
       </span>
       <div className="seat-cluster-cards">
-        {cards.length === 0 ? (
-          <img src={CARD_BACK_URL} alt="" className="mini-card seat-cluster-empty" style={{ borderColor: color, opacity: 0.25 }} />
-        ) : (
-          cards.map((card, i) => {
-            const isCandidate = cardPick?.candidates.some((c) => c.id === card.id) ?? false;
-            const isSelected = cardPick?.selectedIds.includes(card.id) ?? false;
-            const onSelect = pickModeActive ? (isCandidate ? () => cardPick!.toggle(card) : undefined) : onSelectCard;
-            return (
-              <MiniCard
-                key={card.id}
-                card={card}
-                borderColor={color}
-                viewerId={humanPlayerId}
-                style={{ marginLeft: i === 0 ? 0 : -34 }}
-                onSelect={onSelect}
-                draggable={!pickModeActive && (canDrag?.(card) ?? false)}
-                onDragStart={onCardDragStart}
-                onDragEnd={onCardDragEnd}
-                targetable={pickModeActive && isCandidate}
-                targetSelected={isSelected}
-              />
-            );
-          })
-        )}
+        {cards.map((card, i) => {
+          const isCandidate = cardPick?.candidates.some((c) => c.id === card.id) ?? false;
+          const isSelected = cardPick?.selectedIds.includes(card.id) ?? false;
+          const onSelect = pickModeActive ? (isCandidate ? () => cardPick!.toggle(card) : undefined) : onSelectCard;
+          return (
+            <MiniCard
+              key={card.id}
+              card={card}
+              borderColor={color}
+              viewerId={humanPlayerId}
+              style={{ marginLeft: i === 0 ? 0 : -34 }}
+              onSelect={onSelect}
+              draggable={!pickModeActive && (canDrag?.(card) ?? false)}
+              onDragStart={onCardDragStart}
+              onDragEnd={onCardDragEnd}
+              targetable={pickModeActive && isCandidate}
+              targetSelected={isSelected}
+            />
+          );
+        })}
       </div>
     </div>
   );

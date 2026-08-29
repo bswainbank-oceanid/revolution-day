@@ -68,7 +68,7 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
   }
 
   if (topFrame?.kind === "alarmResolution" && card && card.controller === humanPlayerId) {
-    const responses = usableResponseAbilities(state, card, topFrame.triggeringCardId, humanPlayerId);
+    const responses = usableResponseAbilities(state, card, topFrame.triggeringCardId, topFrame.locationId, humanPlayerId);
     return (
       <div className="activate-ability-box">
         <h3>RESPOND</h3>

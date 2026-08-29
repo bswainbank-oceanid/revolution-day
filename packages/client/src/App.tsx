@@ -14,6 +14,7 @@ import { HandStrip } from "./HandStrip";
 import { LocationView } from "./LocationView";
 import { playerLabel } from "./players";
 import { TurnRibbon } from "./TurnRibbon";
+import { resolveCard } from "./targetDecision";
 import type { ActiveCardPick } from "./useTargetSelection";
 import { useTargetSelection } from "./useTargetSelection";
 import type { CameraTarget } from "./useTurnPlayback";
@@ -125,9 +126,11 @@ function App() {
   const state = playback.displayState ?? session.state;
   const interactionLocked = loading || playback.isPlaying;
 
+  // resolveCard covers the President's sentinel id too, alongside real
+  // cards — see targetDecision.ts.
   const viewedCard = playback.playbackViewerCardId
-    ? (state.cards.find((c) => c.id === playback.playbackViewerCardId) ?? null)
-    : ((viewedCardId ? state.cards.find((c) => c.id === viewedCardId) : undefined) ??
+    ? (resolveCard(state, playback.playbackViewerCardId) ?? null)
+    : ((viewedCardId ? resolveCard(state, viewedCardId) : undefined) ??
       state.cards.find((c) => c.kind === "leader" && c.controller === humanPlayerId) ??
       null);
   const controllerLabel = viewedCard?.controller
@@ -142,10 +145,13 @@ function App() {
   // (from the hand strip, an in-play MiniCard, or the Card Viewer once
   // selected — all three share this one check) only when it's actually
   // the human's own card and a real turn action is available right now.
-  // Motorcade is excluded — it's played via playMotorcade, not a location
-  // drop, so there's nothing for it to highlight. Suppressed entirely
-  // while a target pick is active or playback is narrating a bot turn.
+  // Suppressed entirely while a target pick is active or playback is
+  // narrating a bot turn. Motorcade is included — dragging it onto *any*
+  // location plays it (the drop location itself isn't used; see
+  // handleDropCard) — but only once it's legal to play at all (not the
+  // player's first turn).
   const canTakeTurnAction = state.resolutionStack.length === 0 && state.turn.phase === "action";
+  const hasTakenFirstTurn = state.players.find((p) => p.id === humanPlayerId)?.hasTakenFirstTurn ?? false;
   const canDrag = (card: FilteredCardInstance): boolean =>
     !interactionLocked &&
     !pickActive &&
@@ -153,15 +159,19 @@ function App() {
     state.turn.actionsRemaining > 0 &&
     card.controller === humanPlayerId &&
     card.defRef !== null &&
-    card.kind !== "motorcade" &&
+    (card.kind !== "motorcade" || hasTakenFirstTurn) &&
     (card.zone === "hand" || card.zone === "inPlay");
 
   // Highlighting is exact, not trial-and-error: a hand card's legal
   // locations come from its own printed deploy-location types; an in-play
   // card's legal locations are just board adjacency — both already
-  // computed by the engine, not re-derived here.
+  // computed by the engine, not re-derived here. A dragged Motorcade
+  // highlights every location, since the drop location is never actually
+  // used (only where you release the drag, as a "play it" gesture).
   const allowedDropLocationIds = new Set<string>();
-  if (draggedCard?.zone === "hand") {
+  if (draggedCard?.kind === "motorcade") {
+    for (const l of state.board) allowedDropLocationIds.add(l.id);
+  } else if (draggedCard?.zone === "hand") {
     const instance = asCardInstance(draggedCard);
     if (instance) {
       const allowedTypes = getAllowedLocationTypes(cardData, instance);
@@ -173,7 +183,9 @@ function App() {
 
   const handleDropCard = (locationId: string) => {
     if (draggedCard && allowedDropLocationIds.has(locationId)) {
-      if (draggedCard.zone === "hand") {
+      if (draggedCard.kind === "motorcade") {
+        act({ type: "playMotorcade", cardId: draggedCard.id });
+      } else if (draggedCard.zone === "hand") {
         act({ type: "playCard", cardId: draggedCard.id, locationId });
       } else if (draggedCard.zone === "inPlay") {
         act({ type: "moveCard", cardId: draggedCard.id, toLocationId: locationId });
@@ -222,6 +234,9 @@ function App() {
             allowedDropLocationIds={allowedDropLocationIds}
             onDropCard={handleDropCard}
             locationPick={selection.locationPick}
+            onSelectCard={interactionLocked ? undefined : selectCard}
+            cardPick={selection.cardPick}
+            pickModeActive={!!selection.cardPick && !selection.viewCardsMode}
           />
         )
       }

@@ -1,7 +1,9 @@
-import type { FilteredGameState } from "@rev-day/engine";
+import type { MouseEvent } from "react";
+import type { FilteredCardInstance, FilteredGameState } from "@rev-day/engine";
+import { PRESIDENT_TARGET_ID, presidentPseudoCard } from "@rev-day/engine";
 import { locationArtUrl } from "./art";
 import { playerColor, playersInSeatOrder } from "./players";
-import type { ActiveLocationPick } from "./useTargetSelection";
+import type { ActiveCardPick, ActiveLocationPick } from "./useTargetSelection";
 
 interface CityViewProps {
   readonly state: FilteredGameState;
@@ -18,15 +20,46 @@ interface CityViewProps {
   // normal navigation: a candidate tile submits the choice on click,
   // everything else is inert.
   readonly locationPick?: ActiveLocationPick | null;
+  // The President's marker is clickable — always to view him in the Card
+  // Viewer, and (only when he's on a tile and a card-pick is active with
+  // him as its one candidate, e.g. Wife's ability) to toggle him as the
+  // target instead. See LocationView's MiniCards for the same duality.
+  readonly onSelectCard?: (card: FilteredCardInstance) => void;
+  readonly cardPick?: ActiveCardPick | null;
+  readonly pickModeActive?: boolean;
 }
 
 // 3x2 grid in board (linear) order — DESIGN_NOTES.md: "Street / HQ /
 // Street (top row), Arena / Street / Palace (bottom row)" is just
 // state.board's own sequence chunked into two rows of 3, since the board
 // itself is already laid out in that linear order.
-export function CityView({ state, onSelectLocation, allowedDropLocationIds, onDropCard, locationPick }: CityViewProps) {
+export function CityView({
+  state,
+  onSelectLocation,
+  allowedDropLocationIds,
+  onDropCard,
+  locationPick,
+  onSelectCard,
+  cardPick,
+  pickModeActive,
+}: CityViewProps) {
   let streetIndex = 0;
   const president = state.president;
+  const isPresidentCandidate = cardPick?.candidates.some((c) => c.id === PRESIDENT_TARGET_ID) ?? false;
+  const isPresidentSelected = cardPick?.selectedIds.includes(PRESIDENT_TARGET_ID) ?? false;
+
+  const viewPresident = (e: MouseEvent) => {
+    e.stopPropagation();
+    onSelectCard?.(presidentPseudoCard(state));
+  };
+  const onPresidentMarkerClick = (e: MouseEvent) => {
+    if (pickModeActive && isPresidentCandidate) {
+      e.stopPropagation();
+      cardPick!.toggle(presidentPseudoCard(state));
+    } else {
+      viewPresident(e);
+    }
+  };
 
   return (
     <div className="city-view">
@@ -35,7 +68,12 @@ export function CityView({ state, onSelectLocation, allowedDropLocationIds, onDr
       <div className="city-grid">
         {president.status === "notEntered" && (
           <div className="city-offboard">
-            <img src="/cards/39_regime_president.png" alt="President" className="city-president-marker" />
+            <img
+              src="/cards/39_regime_president.png"
+              alt="President"
+              className={`city-president-marker${onSelectCard ? " city-president-clickable" : ""}`}
+              onClick={onSelectCard ? viewPresident : undefined}
+            />
             <span>OFF BOARD</span>
           </div>
         )}
@@ -79,7 +117,14 @@ export function CityView({ state, onSelectLocation, allowedDropLocationIds, onDr
                 <span className="city-tile-badge">{index + 1}</span>
                 <span className="city-tile-name">{location.name ?? location.type}</span>
                 {presidentHere && (
-                  <img src="/cards/39_regime_president.png" alt="President" className="city-president-marker city-president-on-tile" />
+                  <img
+                    src="/cards/39_regime_president.png"
+                    alt="President"
+                    className={`city-president-marker city-president-on-tile${onSelectCard ? " city-president-clickable" : ""}${
+                      pickModeActive && isPresidentCandidate ? " mini-card-targetable" : ""
+                    }${isPresidentSelected ? " mini-card-target-selected" : ""}`}
+                    onClick={onSelectCard ? onPresidentMarkerClick : undefined}
+                  />
                 )}
               </button>
               <div className="city-tile-chips">
@@ -100,7 +145,12 @@ export function CityView({ state, onSelectLocation, allowedDropLocationIds, onDr
         })}
         {president.status === "survived" && (
           <div className="city-offboard city-offboard-right">
-            <img src="/cards/39_regime_president.png" alt="President" className="city-president-marker" />
+            <img
+              src="/cards/39_regime_president.png"
+              alt="President"
+              className={`city-president-marker${onSelectCard ? " city-president-clickable" : ""}`}
+              onClick={onSelectCard ? viewPresident : undefined}
+            />
             <span>SURVIVED</span>
           </div>
         )}

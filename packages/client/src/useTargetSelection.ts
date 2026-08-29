@@ -126,7 +126,7 @@ export function useTargetSelection(
         ? getAbilityEffects(responseCard.defRef, respondingWith.abilityIndex)?.effects[0]
         : undefined;
       if (responseCard && responseEffect?.verb === "eliminate") {
-        const candidates = computeResponseCandidates(state, responseCard, responseEffect);
+        const candidates = computeResponseCandidates(state, responseCard, humanPlayerId, responseEffect);
         const responseScope = responseEffect.target.ref === "filter" ? responseEffect.target.location : undefined;
         const responseCount = responseEffect.target.ref === "filter" ? responseEffect.target.count : { mode: "exact" as const, value: 1 };
         cardPick = buildCardPick(candidates, responseCount, responseScope, responseCard.locationId, selectedTargetIds, toggle, (ids) => {

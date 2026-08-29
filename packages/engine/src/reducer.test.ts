@@ -919,6 +919,50 @@ describe("applyAction: President targeting (Wife)", () => {
   });
 });
 
+// Per card_data.json's additional_rulings ("The President's faction counts
+// as Regime for all faction-based counting and protection rules"), *any*
+// unfiltered or Regime-faction eliminate selector should admit him as a
+// candidate alongside real cards, subject to the normal location and
+// Protected-immunity rules — not just Wife's dedicated ability. Republican
+// Guard's plain "eliminate 1 target at this location" (no kind/faction
+// restriction) is the simplest case to prove this generically.
+describe("applyAction: President as a target for an ordinary (non-Wife) eliminate ability", () => {
+  it("lets an unrestricted eliminate ability target the co-located President", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const player = state.turn.currentPlayerId;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = { ...state, president: { status: "alive", locationId: loc } };
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: ["president"] });
+    expect(resolved.president.status).toBe("eliminated");
+  });
+
+  it("still applies normal Protected-immunity to the President for an ability that doesn't ignore it", () => {
+    // Unlike Wife, Republican Guard has no ignoreProtected — a Regime
+    // protector at the President's location should shield him exactly as
+    // it would shield any other Protected, Regime-faction card.
+    let state = freshGame(["a", "b", "c"]);
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    const protector = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen",
+    )!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, protector.id, loc, other);
+    state = { ...state, president: { status: "alive", locationId: loc } };
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+
+    expect(() => act(state, player, { type: "chooseTargets", targetIds: ["president"] })).toThrow();
+  });
+});
+
 // Once the President is eliminated, a player whose own leader is still
 // sitting in hand must play it before any other action that turn
 // (requireLeaderPlayedIfStuck) — a no-op once it's already in play.

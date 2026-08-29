@@ -115,7 +115,9 @@ describe("decideBotAction: eliminate targeting", () => {
     const loc = state.board[0]!.id;
     state = place(state, wife.id, loc, player);
     state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
-    state = { ...state, president: { status: "alive", locationId: state.board[2]!.id } };
+    // Wife's ability requires co-location (location: {mode: "self"} in
+    // abilityEffects.ts) — must match her location, not an arbitrary one.
+    state = { ...state, president: { status: "alive", locationId: loc } };
 
     const frame: AbilityResolutionFrame = {
       kind: "abilityResolution",

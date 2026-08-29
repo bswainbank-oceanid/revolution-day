@@ -16,17 +16,22 @@ import type { TargetSelector } from "./dsl";
 // reducer.ts's declareEliminateTarget instead. Only for *in-play* cards —
 // see resolveEligibleHandCards below for selecting from a hand instead.
 //
+// The President is deliberately excluded here — he isn't a CardInstance
+// (tracked separately via GameState.president), so a selector that could
+// legally include him is resolved separately by presidentMatchesSelector
+// below and merged in by the caller (reducer.ts's declareEliminateTargets)
+// alongside this function's real-card pool.
+//
 // Deliberately incomplete for now, a documented gap rather than an
 // oversight (see rev_day_engine_design memory): the base filters here
 // don't distinguish random vs. player-chosen selection — for `selection:
 // "random"` (Suicide Bomber), the candidates this returns still need
 // partitioning by partitionByProtection below before drawing, since that
 // pool/fallback split is a per-ability override of the standard Protected
-// check, not a reuse of it. `kind: "president"` is deliberately excluded
-// here too — the President
-// isn't a CardInstance, so ability targeting him is handled as a separate
-// path in applySingleEliminateEffect using isLegalPresidentTarget below,
-// not through this function.
+// check, not a reuse of it. The President is not yet included in that
+// random-draw pool — a known, narrower gap than the playerChoice case
+// below, flagged separately since touching the RNG-consumption sequence
+// needs more care.
 export function resolveEligibleTargets(
   state: GameState,
   cardData: CardData,
@@ -71,6 +76,45 @@ export function resolveEligibleTargets(
 
     return true;
   });
+}
+
+// Whether a filter-based selector's non-Protected-related conditions
+// (kind/faction/controller/location/blendState) admit the President as a
+// candidate — mirrors resolveEligibleTargets' own filter checks, since
+// per card_data.json's additional_rulings ("The President's faction
+// counts as Regime for all faction-based counting and protection rules")
+// he's meant to be targetable by *any* ability whose selector would
+// otherwise match an unfiltered or Regime-faction card at his location —
+// not just Wife's dedicated kind:"president" selector, which this also
+// still matches (a selector explicitly restricted to "president" admits
+// only him; one explicitly restricted to a real CardKind, or to Rebel
+// faction, never does). Protected-immunity itself is handled separately —
+// see isLegalPresidentTarget, applied at the call site alongside this.
+export function presidentMatchesSelector(
+  state: GameState,
+  selector: Extract<TargetSelector, { ref: "filter" }>,
+  sourceCard: CardInstance,
+): boolean {
+  if (state.president.status !== "alive" || state.president.locationId === null) return false;
+  if (selector.kind && selector.kind !== "president") return false;
+  if (selector.faction && selector.faction !== "Regime") return false;
+  if (selector.controller === "self") return false; // never "your own" — he has no controller
+
+  const presidentLocationId = state.president.locationId;
+  if (selector.location?.mode === "self" && presidentLocationId !== sourceCard.locationId) return false;
+  if (selector.location?.mode === "adjacent") {
+    const adjacent = adjacentLocationIds(state.board, sourceCard.locationId!);
+    if (!adjacent.includes(presidentLocationId)) return false;
+  }
+  if (selector.location?.mode === "selfOrAdjacent") {
+    const allowed = new Set([sourceCard.locationId, ...adjacentLocationIds(state.board, sourceCard.locationId!)]);
+    if (!allowed.has(presidentLocationId)) return false;
+  }
+
+  if (selector.blendState === "faceDown") return false; // he has no Blend attribute, never face-down
+  // blendState === "faceUp", and hasAttribute (only ever "Protected", which
+  // he always has) both admit him unconditionally — nothing left to check.
+  return true;
 }
 
 // Resolves which of `actingPlayerId`'s *hand* cards a filter-based

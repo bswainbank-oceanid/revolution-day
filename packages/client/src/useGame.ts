@@ -5,6 +5,16 @@ import { ApiError, applyAction, botTurn, createGame } from "./api";
 import { decider } from "./decider";
 import { computeTrivialChooseTargets } from "./targetDecision";
 
+// Fisher-Yates — used only to randomize starting seat order.
+function shuffle<T>(items: readonly T[]): T[] {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j]!, result[i]!];
+  }
+  return result;
+}
+
 export interface LogEntry {
   readonly actingPlayerId: PlayerId;
   readonly action: Action;
@@ -109,7 +119,11 @@ export function useGame(): UseGameResult {
     try {
       const humanPlayerId = "you";
       const botPlayerIds = ["bot-1", "bot-2"];
-      const row = await createGame([humanPlayerId, ...botPlayerIds], humanPlayerId);
+      // Seat order is exactly array order (setup.ts), so who goes first —
+      // and thus who the top ribbon starts with — would otherwise always
+      // be the human. Shuffle so any seat, human or bot, can lead.
+      const seatOrder = shuffle([humanPlayerId, ...botPlayerIds]);
+      const row = await createGame(seatOrder, humanPlayerId);
       const { state, gameOver, entries } = await runUntilHumanDecision(row.id, humanPlayerId, row.state);
       setSession({ gameId: row.id, humanPlayerId, botPlayerIds, state, gameOver, log: entries });
     } catch (err) {

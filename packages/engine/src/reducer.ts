@@ -8,6 +8,7 @@ import {
   isLegalPresidentTarget,
   isProtectedActive,
   partitionByProtection,
+  presidentMatchesSelector,
   resolveEligibleHandCards,
   resolveEligibleTargets,
 } from "./effects/targeting";
@@ -1245,39 +1246,40 @@ function declareEliminateTargets(
   }
   const bypassProtection = (effect.ignoreProtected ?? false) || bypassProtectionOverride;
 
-  if (effect.target.kind === "president") {
-    // Wife's "Eliminate the President" needs her co-located with him
-    // (location: {mode:"self"}) — the same co-location gate Traffic Cop's
-    // move effect already enforces (applyMoveEffect below), just checked
-    // here instead since isLegalPresidentTarget has no notion of a source
-    // card's own location.
-    const coLocated =
-      effect.target.location?.mode !== "self" || state.president.locationId === actingCard.locationId;
-    const legal = coLocated && isLegalPresidentTarget(state, cardData, actingPlayerId, bypassProtection);
-    validateTargets(effect.target.count, targetIds, legal ? [PRESIDENT_TARGET_ID] : []);
-    return {
-      targetIds: [...targetIds],
-      locationId: state.president.locationId!,
-      // The President has no Blend attribute, so his Protected status is
-      // always active while alive.
-      protectedActive: !bypassProtection && state.president.status === "alive",
-    };
-  }
-
-  const eligible = resolveEligibleTargets(state, cardData, effect.target, actingCard).filter(
+  // The President is folded into the same eligible-id pool as real cards
+  // rather than being a separate path — per card_data.json's
+  // additional_rulings ("The President's faction counts as Regime for all
+  // faction-based counting and protection rules"), *any* selector whose
+  // kind/faction/location conditions would admit an unfiltered or
+  // Regime-faction card at his location admits him too, not just Wife's
+  // dedicated kind:"president" selector (which presidentMatchesSelector
+  // also matches — a kind restricted to "president" excludes every real
+  // card via resolveEligibleTargets, so eligibleCards is empty there and
+  // he's the pool's only member, same net effect as the old special case).
+  const eligibleCards = resolveEligibleTargets(state, cardData, effect.target, actingCard).filter(
     (c) => bypassProtection || isLegalEliminationTarget(state, cardData, c, actingPlayerId),
   );
-  validateTargets(
-    effect.target.count,
-    targetIds,
-    eligible.map((c) => c.id),
-  );
-  const declaredCards = targetIds.map((id) => state.cards.find((c) => c.id === id)!);
-  return {
-    targetIds: [...targetIds],
-    locationId: declaredCards[0]!.locationId!,
-    protectedActive: !bypassProtection && declaredCards.some((c) => isProtectedActive(cardData, c)),
-  };
+  const presidentEligible =
+    presidentMatchesSelector(state, effect.target, actingCard) &&
+    isLegalPresidentTarget(state, cardData, actingPlayerId, bypassProtection);
+  const eligibleIds = eligibleCards.map((c) => c.id);
+  if (presidentEligible) eligibleIds.push(PRESIDENT_TARGET_ID);
+
+  validateTargets(effect.target.count, targetIds, eligibleIds);
+
+  const firstId = targetIds[0]!;
+  const locationId = (
+    firstId === PRESIDENT_TARGET_ID ? state.president.locationId : state.cards.find((c) => c.id === firstId)?.locationId
+  )!;
+  const protectedActive =
+    !bypassProtection &&
+    targetIds.some((id) =>
+      id === PRESIDENT_TARGET_ID
+        ? state.president.status === "alive" // no Blend attribute, so always active while alive
+        : isProtectedActive(cardData, state.cards.find((c) => c.id === id)!),
+    );
+
+  return { targetIds: [...targetIds], locationId, protectedActive };
 }
 
 // "Activate any [faction] card, controlled by any player, at any

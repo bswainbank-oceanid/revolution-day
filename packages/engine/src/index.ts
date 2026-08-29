@@ -38,6 +38,7 @@ export {
   partitionByProtection,
   isLegalEliminationTarget,
   isLegalPresidentTarget,
+  presidentMatchesSelector,
 } from "./effects/targeting";
 export type {
   AbilityDefinition,
@@ -66,6 +67,8 @@ export {
   candidateInPlayCards,
   candidateHandCards,
   presidentIsLegalTarget,
+  presidentMatchesSelectorFiltered,
+  presidentPseudoCard,
 } from "./effects/filteredTargeting";
 
 import { cardData } from "./data/cardData";

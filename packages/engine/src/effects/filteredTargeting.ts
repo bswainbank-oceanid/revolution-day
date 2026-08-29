@@ -2,8 +2,29 @@ import { getFaction, hasAttribute } from "../state/cardLookup";
 import { adjacentLocationIds } from "../state/board";
 import type { CardInstance } from "../state/cards";
 import type { Faction, CardData } from "../types";
+import { PRESIDENT_TARGET_ID } from "../reducer";
 import type { TargetSelector } from "./dsl";
 import type { FilteredCardInstance, FilteredGameState } from "./filterForPlayer";
+
+// The President isn't a FilteredCardInstance at all (he's tracked
+// separately via state.president, not state.cards) — this synthesizes one
+// so both the client and bots can treat him as just another candidate
+// through the exact same viewing/targeting machinery as every real card,
+// instead of needing a parallel code path in each consumer. `kind` is
+// arbitrary (never consulted by rendering or drag logic); `controller:
+// null` is what keeps him correctly outside "your own cards" bookkeeping
+// (and non-draggable, client-side).
+export function presidentPseudoCard(state: FilteredGameState): FilteredCardInstance {
+  return {
+    id: PRESIDENT_TARGET_ID,
+    defRef: "President",
+    kind: "leader",
+    zone: state.president.status === "eliminated" ? "eliminated" : "inPlay",
+    controller: null,
+    locationId: state.president.locationId ?? undefined,
+    faceUp: true,
+  };
+}
 
 // A filtered-state-aware mirror of the engine's own targeting/eligibility
 // logic (resolveEligibleTargets, resolveEligibleHandCards,
@@ -77,6 +98,41 @@ export function candidateInPlayCards(
 
     return true;
   });
+}
+
+// A filtered-state-aware mirror of the engine's own presidentMatchesSelector
+// (effects/targeting.ts) — whether a selector's non-Protected conditions
+// admit the President as a candidate at all (kind/faction/location; see
+// that function's own comment for the additional_rulings basis). No
+// hidden-identity concerns here, unlike candidateInPlayCards — the
+// President's own kind/faction/blend-state are always fully known
+// regardless of viewer, and sourceCard's location is always known to its
+// own controller (the only one who'd ever be resolving their own ability's
+// candidates).
+export function presidentMatchesSelectorFiltered(
+  state: FilteredGameState,
+  selector: Extract<TargetSelector, { ref: "filter" }>,
+  sourceCard: FilteredCardInstance,
+): boolean {
+  if (state.president.status !== "alive" || state.president.locationId === null) return false;
+  if (selector.kind && selector.kind !== "president") return false;
+  if (selector.faction && selector.faction !== "Regime") return false;
+  if (selector.controller === "self") return false;
+
+  const presidentLocationId = state.president.locationId;
+  if (selector.location?.mode === "self" && presidentLocationId !== sourceCard.locationId) return false;
+  if (selector.location?.mode === "adjacent") {
+    const adjacent = sourceCard.locationId ? adjacentLocationIds(state.board, sourceCard.locationId) : [];
+    if (!adjacent.includes(presidentLocationId)) return false;
+  }
+  if (selector.location?.mode === "selfOrAdjacent") {
+    const adjacent = sourceCard.locationId ? adjacentLocationIds(state.board, sourceCard.locationId) : [];
+    const allowed = new Set([sourceCard.locationId, ...adjacent]);
+    if (!allowed.has(presidentLocationId)) return false;
+  }
+
+  if (selector.blendState === "faceDown") return false;
+  return true;
 }
 
 function isProtectedActiveFiltered(cardData: CardData, card: FilteredCardInstance): boolean {

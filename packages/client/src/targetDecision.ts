@@ -24,6 +24,8 @@ import {
   getAbilities,
   getAbilityEffects,
   presidentIsLegalTarget,
+  presidentMatchesSelectorFiltered,
+  presidentPseudoCard,
   PRESIDENT_TARGET_ID,
 } from "@rev-day/engine";
 import type {
@@ -35,6 +37,37 @@ import type {
   PlayerId,
   TargetCount,
 } from "@rev-day/engine";
+
+// Resolves any card id that might appear in an action/log entry, including
+// the President's sentinel id — the one place that needs to know about
+// both "real" cards and the pseudo-card, so nothing else has to.
+export function resolveCard(state: FilteredGameState, cardId: string): FilteredCardInstance | undefined {
+  if (cardId === PRESIDENT_TARGET_ID) return presidentPseudoCard(state);
+  return state.cards.find((c) => c.id === cardId);
+}
+
+// The candidate pool for an eliminate effect — real matching cards, plus
+// the President when the selector's own conditions admit him (per
+// card_data.json's additional_rulings: "The President's faction counts as
+// Regime for all faction-based counting and protection rules" — *any*
+// unfiltered or Regime-faction eliminate selector can target him, subject
+// to the normal location and Protected-immunity rules, not just Wife's
+// dedicated kind:"president" selector). Mirrors reducer.ts's
+// declareEliminateTargets exactly, so the UI never shows/hides him
+// differently than what the server would actually accept.
+function eliminateCandidatePool(
+  state: FilteredGameState,
+  sourceCard: FilteredCardInstance,
+  actingPlayerId: PlayerId,
+  effect: Extract<EffectNode, { verb: "eliminate" }>,
+): FilteredCardInstance[] {
+  if (effect.target.ref !== "filter") return [];
+  const realCards = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+  const presidentEligible =
+    presidentMatchesSelectorFiltered(state, effect.target, sourceCard) &&
+    presidentIsLegalTarget(state, cardData, actingPlayerId, effect.ignoreProtected ?? false, true);
+  return presidentEligible ? [...realCards, presidentPseudoCard(state)] : realCards;
+}
 
 function requiredMin(count: TargetCount): number {
   if (count.mode === "exact") return count.value;
@@ -84,20 +117,24 @@ export function computeTrivialChooseTargets(
       // current data (Traffic Cop) — always a real location choice.
       return null;
     }
-    case "eliminate":
+    case "eliminate": {
+      if (effect.target.ref === "self" || effect.target.ref === "binding") return { targetIds: [] };
+      if (effect.target.ref !== "filter") return null;
+      if (effect.target.selection === "random") return { targetIds: [] };
+      const pool = eliminateCandidatePool(state, sourceCard, actingPlayerId, effect);
+      if (!isTrivialSelection(effect.target.count, pool.length)) return null;
+      return { targetIds: trivialSelectionIds(effect.target.count, pool) };
+    }
     case "reveal":
     case "peek":
     case "gainControl":
     case "returnToHand":
     case "blend": {
+      // These verbs never reach the President — every current selector
+      // using them requires blendState:"faceDown", which he can never
+      // satisfy (no Blend attribute), so there's nothing to merge in.
       if (effect.target.ref === "self" || effect.target.ref === "binding") return { targetIds: [] };
       if (effect.target.ref !== "filter") return null;
-      if (effect.verb === "eliminate" && effect.target.kind === "president") {
-        const coLocated = effect.target.location?.mode !== "self" || state.president.locationId === sourceCard.locationId;
-        const legal = presidentIsLegalTarget(state, cardData, actingPlayerId, effect.ignoreProtected ?? false, coLocated);
-        return { targetIds: legal ? [PRESIDENT_TARGET_ID] : [] };
-      }
-      if (effect.verb === "eliminate" && effect.target.selection === "random") return { targetIds: [] };
       const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard);
       if (!isTrivialSelection(effect.target.count, pool.length)) return null;
       return { targetIds: trivialSelectionIds(effect.target.count, pool) };
@@ -143,13 +180,17 @@ export function computePendingRealChoice(
   effect: EffectNode,
 ): PendingRealChoice | null {
   switch (effect.verb) {
-    case "eliminate":
+    case "eliminate": {
+      if (effect.target.ref !== "filter") return null;
+      const candidates = eliminateCandidatePool(state, sourceCard, actingPlayerId, effect);
+      return { kind: "cards", candidates, count: effect.target.count, locationScope: effect.target.location, poolSource: "inPlay" };
+    }
     case "reveal":
     case "peek":
     case "gainControl":
     case "returnToHand":
     case "blend": {
-      if (effect.target.ref !== "filter" || effect.target.kind === "president") return null;
+      if (effect.target.ref !== "filter") return null;
       const candidates = candidateInPlayCards(state, cardData, effect.target, sourceCard);
       return { kind: "cards", candidates, count: effect.target.count, locationScope: effect.target.location, poolSource: "inPlay" };
     }
@@ -185,14 +226,16 @@ function isAdjacent(state: FilteredGameState, fromId: string, toId: string): boo
 // Response abilities are always a single, simple eliminate-at-self effect
 // (the engine itself only interprets that shape — see applyAlarmAction),
 // so this mirrors eliminateOneAtSelf's structure directly rather than
-// going through getAbilityEffects's general EffectNode dispatch.
+// going through getAbilityEffects's general EffectNode dispatch. Folds in
+// the President the same way eliminateCandidatePool does, for the same
+// reason (a Response is still just an "eliminate" effect underneath).
 export function computeResponseCandidates(
   state: FilteredGameState,
   sourceCard: FilteredCardInstance,
+  actingPlayerId: PlayerId,
   effect: Extract<EffectNode, { verb: "eliminate" }>,
 ): readonly FilteredCardInstance[] {
-  if (effect.target.ref !== "filter") return [];
-  return candidateInPlayCards(state, cardData, effect.target, sourceCard);
+  return eliminateCandidatePool(state, sourceCard, actingPlayerId, effect);
 }
 
 // A conservative pre-check so Activate/Response ability buttons don't lead
@@ -225,11 +268,10 @@ export function abilityIsUsable(
   }
   if (effect.target.ref === "self" || effect.target.ref === "binding") return true;
   if (effect.target.ref !== "filter") return true;
-  if (effect.verb === "eliminate" && effect.target.kind === "president") {
-    const coLocated = effect.target.location?.mode !== "self" || state.president.locationId === sourceCard.locationId;
-    return presidentIsLegalTarget(state, cardData, actingPlayerId, effect.ignoreProtected ?? false, coLocated);
-  }
   if (effect.verb === "eliminate" && effect.target.selection === "random") return true;
+  if (effect.verb === "eliminate") {
+    return eliminateCandidatePool(state, sourceCard, actingPlayerId, effect).length >= requiredMin(effect.target.count);
+  }
   const pool =
     effect.verb === "play"
       ? candidateHandCards(state, cardData, effect.target, actingPlayerId)
@@ -269,9 +311,10 @@ export function usableResponseAbilities(
   state: FilteredGameState,
   card: FilteredCardInstance,
   triggeringCardId: string,
+  locationId: string,
   actingPlayerId: PlayerId,
 ): { readonly abilityIndex: number; readonly text: string }[] {
-  if (card.id === triggeringCardId) return [];
+  if (card.id === triggeringCardId || card.locationId !== locationId) return [];
   const instance = asCardInstance(card);
   if (!instance) return [];
   return getAbilities(cardData, instance)
