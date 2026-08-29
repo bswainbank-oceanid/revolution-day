@@ -6,6 +6,11 @@ interface ActionsBoxProps {
   readonly onAct: (action: Action) => void;
   readonly disabled: boolean;
   readonly selection: ReturnType<typeof useTargetSelection>;
+  // Step 7: while bot-turn playback is stepping, `state` here is the
+  // currently-narrated intermediate state, not the true pending decision
+  // — showing its resolutionStack-derived branches (Pass, Done, ...) would
+  // be misleading even though they're disabled, so this takes over first.
+  readonly isPlaying?: boolean;
 }
 
 // Step 6 (BUILD_PLAN.md): general, non-card-specific flow control — the
@@ -13,8 +18,16 @@ interface ActionsBoxProps {
 // the Done button for a variable-count target selection. The mandatory
 // draw/forced end-turn and every trivial target choice never reach here —
 // useGame's runUntilHumanDecision already auto-submits those.
-export function ActionsBox({ state, onAct, disabled, selection }: ActionsBoxProps) {
+export function ActionsBox({ state, onAct, disabled, selection, isPlaying }: ActionsBoxProps) {
   const topFrame = state.resolutionStack[state.resolutionStack.length - 1] ?? null;
+
+  if (isPlaying) {
+    return (
+      <div className="actions-box">
+        <p className="hint">Watching the turn play out…</p>
+      </div>
+    );
+  }
 
   if (topFrame?.kind === "alarmResolution" && !selection.respondingWith) {
     return (

@@ -15,6 +15,8 @@ import { playerLabel } from "./players";
 import { TurnRibbon } from "./TurnRibbon";
 import type { ActiveCardPick } from "./useTargetSelection";
 import { useTargetSelection } from "./useTargetSelection";
+import type { CameraTarget } from "./useTurnPlayback";
+import { useTurnPlayback } from "./useTurnPlayback";
 import { useGame } from "./useGame";
 import { useViewNavigation } from "./useViewNavigation";
 
@@ -38,15 +40,28 @@ function lockedLocationIds(state: FilteredGameState, pick: ActiveCardPick | null
 // where it is are the same action, not two separate concerns.
 //
 // Step 6 adds target selection (useTargetSelection) — while a real choice
-// is pending, navigation follows/locks to wherever the candidates are
-// (single-location locks auto-navigate there; a location-only pick like
-// Traffic Cop's or Anarchist's always shows in City View).
+// is pending, navigation follows/locks to wherever the candidates are.
+//
+// Step 7 adds bot-turn playback (useTurnPlayback) — while it's stepping,
+// it owns the camera and the Card Viewer's content; the target-selection
+// lock effect below explicitly defers to it (both would otherwise fight
+// over goToLocation/goToCity, since a pending human pick from the *true*
+// final state can already exist while playback is still narrating the
+// bot steps leading up to it).
 function App() {
   const { session, loading, error, startNewGame, act } = useGame();
   const { view, goToCity, goToLocation } = useViewNavigation();
   const [viewedCardId, setViewedCardId] = useState<string | null>(null);
   const [draggedCard, setDraggedCard] = useState<FilteredCardInstance | null>(null);
   const selection = useTargetSelection(session?.state ?? null, session?.humanPlayerId ?? null, act);
+  const handleCamera = useCallback(
+    (target: CameraTarget) => {
+      if (target.kind === "city") goToCity();
+      else if (target.kind === "location") goToLocation(target.locationId);
+    },
+    [goToCity, goToLocation],
+  );
+  const playback = useTurnPlayback(session?.log ?? null, session?.state ?? null, session?.humanPlayerId ?? null, handleCamera);
 
   const selectCard = useCallback(
     (card: FilteredCardInstance) => {
@@ -61,15 +76,17 @@ function App() {
   const lockSignature = locked ? [...locked].sort().join(",") : selection.locationPick ? "@city" : "";
 
   useEffect(() => {
+    if (playback.isPlaying) return; // playback owns the camera until it catches up
     if (locked && locked.size === 1) {
       const only = [...locked][0]!;
       goToLocation(only);
     } else if (selection.locationPick) {
       goToCity();
     }
-    // Only re-run when what's locked actually changes, not on every render.
+    // Only re-run when what's locked actually changes, or playback hands
+    // the camera back — not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lockSignature]);
+  }, [lockSignature, playback.isPlaying]);
 
   if (!session) {
     return (
@@ -84,11 +101,15 @@ function App() {
     );
   }
 
-  const { state, humanPlayerId, botPlayerIds, log } = session;
-  const viewedCard =
-    (viewedCardId ? state.cards.find((c) => c.id === viewedCardId) : undefined) ??
-    state.cards.find((c) => c.kind === "leader" && c.controller === humanPlayerId) ??
-    null;
+  const { humanPlayerId, botPlayerIds, log } = session;
+  const state = playback.displayState ?? session.state;
+  const interactionLocked = loading || playback.isPlaying;
+
+  const viewedCard = playback.playbackViewerCardId
+    ? (state.cards.find((c) => c.id === playback.playbackViewerCardId) ?? null)
+    : ((viewedCardId ? state.cards.find((c) => c.id === viewedCardId) : undefined) ??
+      state.cards.find((c) => c.kind === "leader" && c.controller === humanPlayerId) ??
+      null);
   const controllerLabel = viewedCard?.controller
     ? viewedCard.controller === humanPlayerId
       ? "You"
@@ -103,10 +124,10 @@ function App() {
   // the human's own card and a real turn action is available right now.
   // Motorcade is excluded — it's played via playMotorcade, not a location
   // drop, so there's nothing for it to highlight. Suppressed entirely
-  // while a target pick is active — dragging and picking don't mix.
+  // while a target pick is active or playback is narrating a bot turn.
   const canTakeTurnAction = state.resolutionStack.length === 0 && state.turn.phase === "action";
   const canDrag = (card: FilteredCardInstance): boolean =>
-    !loading &&
+    !interactionLocked &&
     !pickActive &&
     canTakeTurnAction &&
     state.turn.actionsRemaining > 0 &&
@@ -153,7 +174,7 @@ function App() {
             onDragStart={setDraggedCard}
             onDragEnd={stopDragging}
           />
-          <ActivateAbilityBox card={viewedCard} state={state} humanPlayerId={humanPlayerId} act={act} selection={selection} />
+          <ActivateAbilityBox card={viewedCard} state={state} humanPlayerId={humanPlayerId} act={act} selection={selection} isPlaying={playback.isPlaying} />
         </>
       }
       center={
@@ -163,8 +184,8 @@ function App() {
             locationId={view.locationId}
             humanPlayerId={humanPlayerId}
             botPlayerIds={botPlayerIds}
-            onBackgroundClick={goToCity}
-            onSelectCard={selectCard}
+            onBackgroundClick={interactionLocked ? undefined : goToCity}
+            onSelectCard={interactionLocked ? undefined : selectCard}
             canDrag={canDrag}
             onCardDragStart={setDraggedCard}
             onCardDragEnd={stopDragging}
@@ -176,7 +197,7 @@ function App() {
         ) : (
           <CityView
             state={state}
-            onSelectLocation={goToLocation}
+            onSelectLocation={interactionLocked ? undefined : goToLocation}
             allowedDropLocationIds={allowedDropLocationIds}
             onDropCard={handleDropCard}
             locationPick={selection.locationPick}
@@ -194,14 +215,14 @@ function App() {
           <HandStrip
             state={state}
             playerId={humanPlayerId}
-            onSelectCard={selectCard}
+            onSelectCard={interactionLocked ? undefined : selectCard}
             canDrag={canDrag}
             onDragStart={setDraggedCard}
             onDragEnd={stopDragging}
             cardPick={selection.cardPick}
             pickModeActive={!!selection.cardPick && !selection.viewCardsMode}
           />
-          <ActionsBox state={state} onAct={act} disabled={loading} selection={selection} />
+          <ActionsBox state={state} onAct={act} disabled={interactionLocked} selection={selection} isPlaying={playback.isPlaying} />
         </>
       }
     />

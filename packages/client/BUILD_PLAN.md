@@ -1,6 +1,6 @@
 # Revolution Day client — full UI rebuild against the locked mockups
 
-Status: **Steps 1-4 complete and verified.** Step 1: filtered-targeting logic
+Status: **Steps 1-7 complete and verified.** Step 1: filtered-targeting logic
 promoted into `packages/engine`, `packages/bots/src/targetPool.ts` deleted. Step 2:
 the fixed 1920x1080 scaling canvas (`GameCanvas.tsx`) with the 5 regions laid out
 exactly per `DESIGN_NOTES.md`'s pixel table. Step 3: every region rendering real
@@ -98,7 +98,49 @@ bots: multiple real ability activations resolving correctly end to end
 (including Suicide Bomber's full 3-step auto-advancing sequence with zero
 clicks), an alarm response, and a "choose 1 of 4 eligible" exact-count
 pick with correct highlighting and auto-submit. No console errors in any
-run. Steps 7-9 not yet started.
+run.
+
+Step 7: playback/choreography. New `useTurnPlayback.ts` replays the
+already-known sequence of `LogEntry.resultingState`s one at a time
+(there's no server-side streaming — a whole bot turn, or a whole batch of
+auto-advanced steps, always arrives in one go) rather than jumping
+straight to the final state. Only bot-attributed entries get this
+treatment — a human-attributed entry (the player's own click, or an
+auto-advanced mandatory draw/forced end-turn/trivial target choice)
+reveals instantly. For each bot-turn beat: the camera follows the locked
+priority order (explicit destination in the action → the President's
+location if it changed → a card the action names → the resolution frame
+active before the action → no signal at all; `endTurn` always goes to
+City View), and the Card Viewer shows a newly-played/drawn card, or steps
+through a multi-target action's targets individually before reverting to
+the acting/source card (only meaningful for `chooseTargets`/`useResponse`,
+which have an unambiguous source — a reveal/reactive window just shows
+its targets). Red-X-on-eliminated needed no new code — `CardViewer`'s
+existing eliminated check already applies to whatever card playback is
+showing. `ActivateAbilityBox`/`ActionsBox`/navigation all go read-only
+("Watching the turn play out…") for the window playback is stepping,
+and the pre-existing target-selection navigation-lock effect explicitly
+defers to it (both would otherwise fight over the camera).
+
+Prep work for this step: pacing itself is a client-only setting
+(`pacing.ts`'s `PACING_DELAY_MS`, not part of GameState), added before
+step 7 started at the user's request specifically so automated
+verification never has to sit through real per-beat waits. Committed at
+`0` (instant); bump it locally (600-1000ms) to actually watch the
+choreography.
+
+Verified live via Playwright at both `PACING_DELAY_MS=0` (fast functional
+runs across many turns, confirming playback always converges back to
+human control with zero dead ends, including a bot's Suicide-Bomber-style
+multi-step sequence and an alarm-triggering ability resolving cleanly) and
+a temporarily-raised delay (confirming the camera and Card Viewer
+choreography visually — caught a real mid-playback frame: a Motorcade's
+first move onto the board correctly followed via the "President's
+location changed" priority rule, with the Motorcade card shown in the
+Card Viewer and both boxes reading "Watching the turn play out…"). Zero
+console errors in every run.
+
+Steps 8-9 not yet started.
 
 ## Context
 

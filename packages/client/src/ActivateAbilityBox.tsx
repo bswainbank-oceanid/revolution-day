@@ -9,6 +9,10 @@ interface ActivateAbilityBoxProps {
   readonly humanPlayerId: PlayerId;
   readonly act: (action: Action) => void;
   readonly selection: ReturnType<typeof useTargetSelection>;
+  // Step 7: bot-turn playback owns the Card Viewer and camera while
+  // stepping — this box goes read-only for that window rather than
+  // showing (and reacting to) buttons for a card the human didn't select.
+  readonly isPlaying?: boolean;
 }
 
 // Step 6 (BUILD_PLAN.md): real Activate/Response buttons, plus the Choose
@@ -16,9 +20,18 @@ interface ActivateAbilityBoxProps {
 // While a pick is active the box shows *that*, regardless of which card
 // happens to be in the Card Viewer — per the locked design, viewing other
 // cards ("View Cards" mode) never changes what's being chosen.
-export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection }: ActivateAbilityBoxProps) {
+export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection, isPlaying }: ActivateAbilityBoxProps) {
   const { cardPick, locationPick, respondingWith, startResponse, viewCardsMode, setViewCardsMode, unsupportedAbility } = selection;
   const topFrame = state.resolutionStack[state.resolutionStack.length - 1] ?? null;
+
+  if (isPlaying) {
+    return (
+      <div className="activate-ability-box">
+        <h3>ACTIVATE ABILITY</h3>
+        <p className="hint">Watching the turn play out…</p>
+      </div>
+    );
+  }
 
   if (unsupportedAbility) {
     return (
