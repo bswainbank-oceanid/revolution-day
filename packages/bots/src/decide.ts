@@ -27,6 +27,7 @@ import type {
   PlayerId,
   ProtectedTargetingWindowFrame,
   ReactivePassiveWindowFrame,
+  RestrictedActionGrant,
   TargetCount,
 } from "@rev-day/engine";
 import type { PresidentObjective } from "./presidentObjective";
@@ -217,6 +218,54 @@ function requiredMinCount(count: TargetCount): number {
 
 // --- Top-level turn actions (resolution stack empty) ---
 
+// The currently-active restricted grant (Puppet-Master's "Play 2 cards",
+// Master Assassin's "return and play a card", Commander General's "any
+// number... at this location" — both play and activate abilities,
+// Opposition Leader's "place 2 rebels at any locations"), filtered to the
+// given kind and not yet exhausted — mirrors reducer.ts's own
+// activeRestrictedGrant exactly, so bots never consider a budget the
+// server would actually reject.
+function activeRestrictedGrant(state: FilteredGameState, kind: "play" | "activate"): RestrictedActionGrant | null {
+  const grant = state.turn.restrictedAction;
+  if (!grant || grant.kind !== kind) return null;
+  if (grant.amount !== "unbounded" && grant.amount <= 0) return null;
+  return grant;
+}
+
+// A hand card only actually qualifies for a "play" grant once its own
+// faction narrowing (if any) is satisfied — Commander General/Opposition
+// Leader restrict to one faction, Puppet-Master/Master Assassin don't
+// restrict at all, so those also cover a Motorcade (no faction of its
+// own) — the whole point of the redesign.
+function handCardQualifiesForPlayGrant(
+  cardData: CardData,
+  grant: RestrictedActionGrant,
+  card: FilteredCardInstance,
+): boolean {
+  return grant.faction === null || knownFaction(cardData, card) === grant.faction;
+}
+
+function inPlayCardQualifiesForActivateGrant(
+  cardData: CardData,
+  grant: RestrictedActionGrant,
+  card: FilteredCardInstance,
+): boolean {
+  return (
+    (grant.faction === null || knownFaction(cardData, card) === grant.faction) &&
+    (grant.locationId === null || card.locationId === grant.locationId)
+  );
+}
+
+// Whether the current budget (normal actionsRemaining, or a qualifying
+// restricted "play" grant) can actually pay for playing this specific
+// hand card — separate from isHandCardPlayable's own structural check
+// below (which doesn't know about budgets at all).
+function canAffordPlayingHandCard(state: FilteredGameState, cardData: CardData, card: FilteredCardInstance): boolean {
+  if (state.turn.actionsRemaining > 0) return true;
+  const grant = activeRestrictedGrant(state, "play");
+  return grant !== null && handCardQualifiesForPlayGrant(cardData, grant, card);
+}
+
 // Whether decidePlayCardOrMotorcade could actually play this specific hand
 // card right now — the one real dead end being a Motorcade once the
 // President is already eliminated, which additionally needs an own
@@ -234,9 +283,13 @@ function isHandCardPlayable(state: FilteredGameState, playerId: PlayerId, card: 
   return state.cards.some((c) => c.zone === "inPlay" && c.controller === playerId);
 }
 
-function hasPlayableHandCard(state: FilteredGameState, playerId: PlayerId): boolean {
+function hasPlayableHandCard(state: FilteredGameState, playerId: PlayerId, cardData: CardData): boolean {
   return state.cards.some(
-    (c) => c.zone === "hand" && c.controller === playerId && isHandCardPlayable(state, playerId, c),
+    (c) =>
+      c.zone === "hand" &&
+      c.controller === playerId &&
+      isHandCardPlayable(state, playerId, c) &&
+      canAffordPlayingHandCard(state, cardData, c),
   );
 }
 
@@ -254,6 +307,16 @@ function hasMovableOwnCard(state: FilteredGameState, playerId: PlayerId): boolea
   );
 }
 
+// Whether the current budget (normal actionsRemaining, or a qualifying
+// restricted "activate" grant) can actually pay for activating an
+// ability on this specific in-play card — mirrors
+// canAffordPlayingHandCard for the "play" side.
+function canAffordActivating(state: FilteredGameState, cardData: CardData, card: FilteredCardInstance): boolean {
+  if (state.turn.actionsRemaining > 0) return true;
+  const grant = activeRestrictedGrant(state, "activate");
+  return grant !== null && inPlayCardQualifiesForActivateGrant(cardData, grant, card);
+}
+
 // Every currently-usable Activate ability across ALL of this player's
 // in-play cards — shared between the viability check and the real
 // decision for the same reason as isHandCardPlayable above.
@@ -269,6 +332,7 @@ function usableActivateAbilities(
   const ownInPlay = state.cards.filter((c) => c.zone === "inPlay" && c.controller === playerId && c.defRef !== null);
   const result: { card: FilteredCardInstance; abilityIndex: number }[] = [];
   for (const card of ownInPlay) {
+    if (!canAffordActivating(state, cardData, card)) continue;
     const instance = asCardInstance(card)!;
     for (const [abilityIndex, ability] of getAbilities(cardData, instance).entries()) {
       if (ability.type !== "Activate") continue;
@@ -291,20 +355,28 @@ function decideTurnAction(
   rng: Rng,
 ): Action {
   if (state.turn.phase === "draw") return { type: "draw" };
-  if (state.turn.actionsRemaining <= 0 && state.turn.restrictedPlayActions <= 0) return { type: "endTurn" };
+  if (
+    state.turn.actionsRemaining <= 0 &&
+    activeRestrictedGrant(state, "play") === null &&
+    activeRestrictedGrant(state, "activate") === null
+  ) {
+    return { type: "endTurn" };
+  }
 
-  // Puppet-Master's "Play 2 cards" grants restrictedPlayActions, spendable
-  // only on playCard/playMotorcade (see TurnState's own doc comment) —
-  // draw/activateAbility/moveCard can only ever draw from the normal
-  // budget, so once actionsRemaining hits 0 they're gone even with
-  // restricted plays still available.
+  // A restricted grant (Puppet-Master, Master Assassin, Commander
+  // General, Opposition Leader — see RestrictedActionGrant) can leave
+  // actionsRemaining at 0 while playCard/activateAbility (whichever kind
+  // it names) is still viable — draw/moveCard can only ever draw from
+  // the normal budget, so once that's empty they're gone regardless.
+  // hasPlayableHandCard/usableActivateAbilities already account for
+  // their own grant internally, so no extra gating is needed for them
+  // here.
   const canSpendNormal = state.turn.actionsRemaining > 0;
-  const canSpendOnPlay = canSpendNormal || state.turn.restrictedPlayActions > 0;
 
   const categories: ["playCard" | "draw" | "activateAbility" | "moveCard", number][] = [];
-  if (canSpendOnPlay && hasPlayableHandCard(state, playerId)) categories.push(["playCard", 40]);
+  if (hasPlayableHandCard(state, playerId, cardData)) categories.push(["playCard", 40]);
   if (canSpendNormal && deckHasCards(state)) categories.push(["draw", 30]);
-  if (canSpendNormal && usableActivateAbilities(state, playerId, cardData, objective).length > 0) {
+  if (usableActivateAbilities(state, playerId, cardData, objective).length > 0) {
     categories.push(["activateAbility", 20]);
   }
   if (canSpendNormal && hasMovableOwnCard(state, playerId)) categories.push(["moveCard", 10]);
@@ -321,7 +393,7 @@ function decideTurnAction(
     case "draw":
       return { type: "draw" };
     case "playCard":
-      return decidePlayCardOrMotorcade(state, playerId, rng);
+      return decidePlayCardOrMotorcade(state, playerId, cardData, rng);
     case "activateAbility":
       return decideActivateAbility(state, playerId, cardData, objective, rng);
     case "moveCard":
@@ -329,9 +401,13 @@ function decideTurnAction(
   }
 }
 
-function decidePlayCardOrMotorcade(state: FilteredGameState, playerId: PlayerId, rng: Rng): Action {
+function decidePlayCardOrMotorcade(state: FilteredGameState, playerId: PlayerId, cardData: CardData, rng: Rng): Action {
   const hand = state.cards.filter(
-    (c) => c.zone === "hand" && c.controller === playerId && isHandCardPlayable(state, playerId, c),
+    (c) =>
+      c.zone === "hand" &&
+      c.controller === playerId &&
+      isHandCardPlayable(state, playerId, c) &&
+      canAffordPlayingHandCard(state, cardData, c),
   );
   const card = pickRandom(rng, hand);
   if (!card) return { type: "endTurn" };
@@ -346,7 +422,15 @@ function decidePlayCardOrMotorcade(state: FilteredGameState, playerId: PlayerId,
     return { type: "playMotorcade", cardId: card.id };
   }
 
-  const location = pickRandom(rng, state.board)!; // guaranteed non-empty by isHandCardPlayable
+  // If only a restricted grant with a forced location (Commander
+  // General's "at this location") can pay for this once the normal
+  // budget is exhausted, use its exact location rather than a blind
+  // random pick that would almost certainly be rejected.
+  const forcedLocationId =
+    state.turn.actionsRemaining > 0 ? undefined : activeRestrictedGrant(state, "play")?.locationId;
+  const location = forcedLocationId
+    ? state.board.find((l) => l.id === forcedLocationId)!
+    : pickRandom(rng, state.board)!; // guaranteed non-empty by isHandCardPlayable
   return { type: "playCard", cardId: card.id, locationId: location.id };
 }
 

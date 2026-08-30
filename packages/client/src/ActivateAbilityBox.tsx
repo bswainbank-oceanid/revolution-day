@@ -1,4 +1,4 @@
-import { getPassive } from "@rev-day/engine";
+import { cardData, getPassive, knownFaction } from "@rev-day/engine";
 import type { Action, FilteredCardInstance, FilteredGameState, PlayerId } from "@rev-day/engine";
 import { usableActivateAbilities, usableResponseAbilities } from "./targetDecision";
 import type { useTargetSelection } from "./useTargetSelection";
@@ -133,7 +133,21 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
     );
   }
 
-  const canAct = state.resolutionStack.length === 0 && state.turn.phase === "action" && state.turn.actionsRemaining > 0;
+  // A restricted "activate" grant (Commander General's "activate any
+  // number of your regime cards at this location") can leave
+  // actionsRemaining at 0 while this specific card still qualifies (own
+  // faction and location match) — same story as canDrag's play-side
+  // check in App.tsx.
+  const activateGrant = state.turn.restrictedAction?.kind === "activate" ? state.turn.restrictedAction : null;
+  const cardQualifiesForActivateGrant =
+    activateGrant !== null &&
+    (activateGrant.amount === "unbounded" || activateGrant.amount > 0) &&
+    (activateGrant.faction === null || knownFaction(cardData, card) === activateGrant.faction) &&
+    (activateGrant.locationId === null || card.locationId === activateGrant.locationId);
+  const canAct =
+    state.resolutionStack.length === 0 &&
+    state.turn.phase === "action" &&
+    (state.turn.actionsRemaining > 0 || cardQualifiesForActivateGrant);
   const isOwnCard = card.controller === humanPlayerId && card.zone === "inPlay";
   const abilities = isOwnCard && canAct ? usableActivateAbilities(state, card, state.turn.usedAbilities, humanPlayerId) : [];
 

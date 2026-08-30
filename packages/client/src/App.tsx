@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FilteredCardInstance, FilteredGameState } from "@rev-day/engine";
-import { adjacentLocationIds, asCardInstance, cardData, getAllowedLocationTypes } from "@rev-day/engine";
+import { adjacentLocationIds, asCardInstance, cardData, getAllowedLocationTypes, knownFaction } from "@rev-day/engine";
 import "./App.css";
 import { ActionsBox } from "./ActionsBox";
 import { ActivateAbilityBox } from "./ActivateAbilityBox";
@@ -153,15 +153,24 @@ function App() {
   const canTakeTurnAction = state.resolutionStack.length === 0 && state.turn.phase === "action";
   const hasTakenFirstTurn = state.players.find((p) => p.id === humanPlayerId)?.hasTakenFirstTurn ?? false;
   // A hand card (played via playCard/playMotorcade) can spend either the
-  // normal budget or Puppet-Master's restricted play-only actions; an
-  // in-play card (moved via moveCard) can only ever spend the normal
-  // budget — restrictedPlayActions never pays for a move.
-  const canPlayAction = state.turn.actionsRemaining > 0 || state.turn.restrictedPlayActions > 0;
+  // normal budget or a restricted "play" grant (Puppet-Master, Master
+  // Assassin, Commander General, Opposition Leader — see
+  // RestrictedActionGrant); an in-play card (moved via moveCard) can only
+  // ever spend the normal budget — no grant ever pays for a move. A grant
+  // only actually covers a given card once its own faction narrowing (if
+  // any) is satisfied — Commander General/Opposition Leader restrict to
+  // one faction, Puppet-Master/Master Assassin don't restrict at all.
+  const playGrant = state.turn.restrictedAction?.kind === "play" ? state.turn.restrictedAction : null;
+  const playGrantActive = playGrant !== null && (playGrant.amount === "unbounded" || playGrant.amount > 0);
+  const cardQualifiesForPlayGrant = (card: FilteredCardInstance): boolean =>
+    playGrantActive && (playGrant!.faction === null || knownFaction(cardData, card) === playGrant!.faction);
   const canDrag = (card: FilteredCardInstance): boolean =>
     !interactionLocked &&
     !pickActive &&
     canTakeTurnAction &&
-    (card.zone === "hand" ? canPlayAction : state.turn.actionsRemaining > 0) &&
+    (card.zone === "hand"
+      ? state.turn.actionsRemaining > 0 || cardQualifiesForPlayGrant(card)
+      : state.turn.actionsRemaining > 0) &&
     card.controller === humanPlayerId &&
     card.defRef !== null &&
     (card.kind !== "motorcade" || hasTakenFirstTurn) &&
@@ -172,15 +181,26 @@ function App() {
   // card's legal locations are just board adjacency — both already
   // computed by the engine, not re-derived here. A dragged Motorcade
   // highlights every location, since the drop location is never actually
-  // used (only where you release the drag, as a "play it" gesture).
+  // used (only where you release the drag, as a "play it" gesture) — a
+  // Motorcade never qualifies for a restricted play grant anyway (no
+  // faction of its own), same as under the old encoding.
   const allowedDropLocationIds = new Set<string>();
   if (draggedCard?.kind === "motorcade") {
     for (const l of state.board) allowedDropLocationIds.add(l.id);
   } else if (draggedCard?.zone === "hand") {
     const instance = asCardInstance(draggedCard);
-    if (instance) {
-      const allowedTypes = getAllowedLocationTypes(cardData, instance);
+    const allowedTypes = instance ? getAllowedLocationTypes(cardData, instance) : [];
+    if (state.turn.actionsRemaining > 0) {
       for (const l of state.board) if (allowedTypes.includes(l.type)) allowedDropLocationIds.add(l.id);
+    }
+    if (cardQualifiesForPlayGrant(draggedCard)) {
+      if (playGrant!.locationId) {
+        allowedDropLocationIds.add(playGrant!.locationId);
+      } else if (playGrant!.ignoreLocationRestrictions) {
+        for (const l of state.board) allowedDropLocationIds.add(l.id);
+      } else {
+        for (const l of state.board) if (allowedTypes.includes(l.type)) allowedDropLocationIds.add(l.id);
+      }
     }
   } else if (draggedCard?.zone === "inPlay" && draggedCard.locationId) {
     for (const id of adjacentLocationIds(state.board, draggedCard.locationId)) allowedDropLocationIds.add(id);

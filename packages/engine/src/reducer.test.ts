@@ -1441,8 +1441,14 @@ describe("applyAction: Commander General", () => {
     expect(() => act(activated, player, { type: "chooseTargets", targetIds: [someCard.id] })).toThrow();
   });
 
-  it("plays any number (including zero) of Regime cards from hand at its location", () => {
+  // Regression/redesign: same restricted-action template as Puppet-Master/
+  // Master Assassin (an unbounded grant instead of a single simultaneous
+  // chooseTargets declaration), but Commander General's own card text
+  // keeps a faction restriction and an "at THIS location" qualifier that
+  // those two don't have — the grant carries both.
+  it("grants unlimited restricted actions to play Regime cards at its own location only", () => {
     let { state, player, cg, loc } = freshCommanderGeneralGame();
+    const otherLoc = state.board[1]!.id;
     const regime1 = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
     const regime2 = state.cards.find(
       (c) => c.kind === "nonLeader" && c.defRef === "Secret Police" && c.id !== regime1.id,
@@ -1452,36 +1458,45 @@ describe("applyAction: Commander General", () => {
     state = placeInHand(state, regime2.id, player);
     state = placeInHand(state, rebelCard.id, player);
     state = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 0 });
-
-    // The Rebel card isn't a legal choice at all.
-    expect(() =>
-      act(state, player, { type: "chooseTargets", targetIds: [regime1.id, rebelCard.id] }),
-    ).toThrow();
-
-    const resolved = act(state, player, {
-      type: "chooseTargets",
-      targetIds: [regime1.id, regime2.id],
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // resolves gainActions
+    expect(state.resolutionStack).toHaveLength(0);
+    expect(state.turn.restrictedAction).toMatchObject({
+      kind: "play",
+      amount: "unbounded",
+      faction: "Regime",
+      locationId: loc,
     });
 
-    expect(resolved.resolutionStack).toHaveLength(0);
-    const played1 = resolved.cards.find((c) => c.id === regime1.id)!;
-    const played2 = resolved.cards.find((c) => c.id === regime2.id)!;
+    // Exhaust the normal budget so only the restricted grant remains —
+    // makes the rejections below unambiguous.
+    while (state.turn.actionsRemaining > 0) state = act(state, player, { type: "draw" });
+
+    // Wrong faction — rejected even though the grant is otherwise active.
+    expect(() => act(state, player, { type: "playCard", cardId: rebelCard.id, locationId: loc })).toThrow();
+    // Wrong location — rejected too; forced to Commander General's own.
+    expect(() => act(state, player, { type: "playCard", cardId: regime1.id, locationId: otherLoc })).toThrow();
+
+    state = act(state, player, { type: "playCard", cardId: regime1.id, locationId: loc });
+    state = act(state, player, { type: "playCard", cardId: regime2.id, locationId: loc });
+    // "unbounded" never depletes.
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "play", amount: "unbounded" });
+
+    const played1 = state.cards.find((c) => c.id === regime1.id)!;
+    const played2 = state.cards.find((c) => c.id === regime2.id)!;
     expect(played1.zone).toBe("inPlay");
     expect(played1.locationId).toBe(loc);
     expect(played1.faceUp).toBe(true); // Republican Guard has no Blend
     expect(played2.faceUp).toBe(false); // Secret Police has Blend — auto face-down
-    expect(resolved.cards.find((c) => c.id === rebelCard.id)!.zone).toBe("hand");
+    expect(state.cards.find((c) => c.id === rebelCard.id)!.zone).toBe("hand");
   });
 
-  it("allows choosing zero cards to play", () => {
-    const { state, player, cg } = freshCommanderGeneralGame();
-    const activated = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 0 });
-
-    const resolved = act(activated, player, { type: "chooseTargets", targetIds: [] });
-    expect(resolved.resolutionStack).toHaveLength(0);
-  });
-
-  it("remotely activates any number of your own Regime cards at its location, one at a time", () => {
+  // Regression/redesign: "activate any number of your regime cards at
+  // this location" used to recurse through a dedicated activateRemote
+  // loop frame. Re-encoded the same way as ability 0: an unbounded
+  // restricted grant (kind:"activate" this time) that ordinary
+  // activateAbility calls spend directly — already naturally restricted
+  // to the player's own cards, matching this ability's controller:"self".
+  it("grants unlimited restricted actions to activate your own Regime cards at its location", () => {
     let { state, player, cg, loc } = freshCommanderGeneralGame();
     const other = state.players.find((p) => p.id !== player)!.id;
     const [guard1, guard2] = state.cards.filter((c) => c.defRef === "Republican Guard");
@@ -1494,51 +1509,59 @@ describe("applyAction: Commander General", () => {
     state = placeInPlay(state, t1.id, loc, other);
     state = placeInPlay(state, t2.id, loc, other);
     state = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 1 });
-    expect(state.resolutionStack).toHaveLength(1);
-
-    // Round 1: activate guard1, resolve its own eliminate ability.
-    state = act(state, player, {
-      type: "chooseTargets",
-      targetIds: [guard1!.id],
-      remoteAbilityIndex: 0,
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // resolves gainActions
+    expect(state.resolutionStack).toHaveLength(0);
+    expect(state.turn.restrictedAction).toMatchObject({
+      kind: "activate",
+      amount: "unbounded",
+      faction: "Regime",
+      locationId: loc,
     });
-    expect(state.resolutionStack).toHaveLength(2); // [CG loop frame, guard1's frame]
+
+    while (state.turn.actionsRemaining > 0) state = act(state, player, { type: "draw" });
+
+    state = act(state, player, { type: "activateAbility", cardId: guard1!.id, abilityIndex: 0 });
     state = act(state, player, { type: "chooseTargets", targetIds: [t1.id] });
-    expect(state.resolutionStack).toHaveLength(1); // back to just the CG loop frame
     expect(state.cards.find((c) => c.id === t1.id)!.zone).toBe("eliminated");
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "activate", amount: "unbounded" }); // never depletes
 
-    // Round 2: activate guard2 the same way.
-    state = act(state, player, {
-      type: "chooseTargets",
-      targetIds: [guard2!.id],
-      remoteAbilityIndex: 0,
-    });
+    state = act(state, player, { type: "activateAbility", cardId: guard2!.id, abilityIndex: 0 });
     state = act(state, player, { type: "chooseTargets", targetIds: [t2.id] });
-    expect(state.resolutionStack).toHaveLength(1);
     expect(state.cards.find((c) => c.id === t2.id)!.zone).toBe("eliminated");
 
-    // Done — submit no more targets to close the queue for good.
-    const finished = act(state, player, { type: "chooseTargets", targetIds: [] });
-    expect(finished.resolutionStack).toHaveLength(0);
-    expect(finished.turn.usedAbilities).toContain(`${guard1!.id}#0`);
-    expect(finished.turn.usedAbilities).toContain(`${guard2!.id}#0`);
-    expect(finished.turn.usedAbilities).toContain(`${cg.id}#1`);
+    // Same card+ability still can't be activated twice — the normal
+    // usedAbilities rule is completely unaffected by the restricted grant.
+    expect(() => act(state, player, { type: "activateAbility", cardId: guard1!.id, abilityIndex: 0 })).toThrow();
   });
 
-  it("rejects remotely activating the same card+ability twice in the same queue", () => {
+  // Regression/redesign: under the old nested-loop encoding, Commander
+  // General dying mid-queue ended it. Under the new encoding the grant is
+  // a plain TurnState field, independent of the granting card's own
+  // continued survival — same as actionsRemaining itself isn't tied to
+  // any card once granted — so it deliberately keeps working.
+  it("keeps the restricted activate grant available even if Commander General is eliminated afterward", () => {
     let { state, player, cg, loc } = freshCommanderGeneralGame();
-    const other = state.players.find((p) => p.id !== player)!.id;
     const guard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
-    const t1 = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const target = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
     state = placeInPlay(state, guard.id, loc, player);
-    state = placeInPlay(state, t1.id, loc, other);
+    state = placeInPlay(state, target.id, loc, other);
     state = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 1 });
-    state = act(state, player, { type: "chooseTargets", targetIds: [guard.id], remoteAbilityIndex: 0 });
-    state = act(state, player, { type: "chooseTargets", targetIds: [t1.id] });
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "activate" });
 
-    expect(() =>
-      act(state, player, { type: "chooseTargets", targetIds: [guard.id], remoteAbilityIndex: 0 }),
-    ).toThrow();
+    state = {
+      ...state,
+      cards: state.cards.map((c) =>
+        c.id === cg.id ? { ...c, zone: "eliminated" as const, locationId: undefined, faceUp: undefined } : c,
+      ),
+    };
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "activate" });
+
+    while (state.turn.actionsRemaining > 0) state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [target.id] });
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
   });
 
   it("cancels a pending ability outright once its own source card is eliminated", () => {
@@ -1560,59 +1583,6 @@ describe("applyAction: Commander General", () => {
     expect(resolved.resolutionStack).toHaveLength(0);
   });
 
-  it("ends the 'activate any number' queue if Commander General dies during a nested alarm, without disturbing the in-flight activation", () => {
-    let { state, player, cg, loc } = freshCommanderGeneralGame();
-    const deathSquad = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Death Squad")!;
-    const assassin = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Assassin")!;
-    const deathSquadTarget = state.cards.find(
-      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen",
-    )!;
-    state = placeInPlay(state, deathSquad.id, loc, player);
-    state = placeInPlay(state, assassin.id, loc, player); // the activator's own responding card
-    state = placeInPlay(state, deathSquadTarget.id, loc, player);
-    state = act(state, player, { type: "activateAbility", cardId: cg.id, abilityIndex: 1 });
-
-    // Remotely activate Death Squad's alarm ability.
-    state = act(state, player, {
-      type: "chooseTargets",
-      targetIds: [deathSquad.id],
-      remoteAbilityIndex: 0,
-    });
-    expect(state.resolutionStack).toHaveLength(3); // [CG loop, Death Squad, alarm]
-
-    const alarmFrame = state.resolutionStack[2] as AlarmResolutionFrame;
-    expect(alarmFrame.triggeringPlayerId).toBe(player); // the activator, not Death Squad's controller (same here, but by rule)
-    expect(alarmFrame.order.at(-1)).toBe(player); // activator (triggering player) responds last
-
-    // Everyone else passes.
-    for (const responder of alarmFrame.order.slice(0, -1)) {
-      state = act(state, responder, { type: "passResponse" });
-    }
-
-    // The activator, responding last, uses their OWN Assassin (not Death
-    // Squad, and not controlled by anyone else, so it doesn't shield
-    // Commander General) to eliminate Commander General himself.
-    state = act(state, player, {
-      type: "useResponse",
-      cardId: assassin.id,
-      abilityIndex: 1,
-      targetIds: [cg.id],
-    });
-    expect(state.cards.find((c) => c.id === cg.id)!.zone).toBe("eliminated");
-
-    // Death Squad — the alarm's actual triggering character — survived,
-    // so its own ability still resolves normally: back to
-    // [CG loop, Death Squad], awaiting Death Squad's own targets.
-    expect(state.resolutionStack).toHaveLength(2);
-    state = act(state, player, { type: "chooseTargets", targetIds: [deathSquadTarget.id] });
-    expect(state.cards.find((c) => c.id === deathSquadTarget.id)!.zone).toBe("eliminated");
-
-    // Only now, with Commander General's own loop frame back on top, does
-    // the ability actually end — the queue does not re-offer another card.
-    expect(state.resolutionStack).toHaveLength(1);
-    const closed = act(state, player, { type: "chooseTargets", targetIds: [] });
-    expect(closed.resolutionStack).toHaveLength(0);
-  });
 });
 
 // Suicide Bomber's alarm ability requires everyone in the response order
@@ -2205,30 +2175,53 @@ describe("applyAction: remaining card content", () => {
     expect(resolved.cards.filter((c) => c.zone === "hand" && c.controller === player).length).toBe(before + 3);
   });
 
-  it("Opposition Leader places 2 rebels, each at its own chosen location", () => {
+  // Regression/redesign: same restricted-action template as Puppet-
+  // Master/Master Assassin — a grant of 2 (this ability is explicitly
+  // capped, not unbounded) instead of one simultaneous chooseTargets
+  // declaration with a parallel locationIds array. Keeps its own
+  // faction:"Rebel" restriction and ignoreLocationRestrictions, but no
+  // forced location — "at any locations" already means the player's free
+  // per-card choice, which the redesigned playCard flow gives for free.
+  it("grants 2 restricted actions to play Rebel cards at any locations, ignoring type restrictions", () => {
     let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
     const oppLeader = state.cards.find((c) => c.kind === "leader" && c.defRef === "Opposition Leader")!;
     const player = state.turn.currentPlayerId;
     state = placeInPlay(state, oppLeader.id, state.board[0]!.id, player);
     const [rebelA, rebelB] = state.cards.filter((c) => c.defRef === "Gunman");
+    const regimeCard = state.cards.find((c) => c.defRef === "Republican Guard")!;
     state = placeInHand(state, rebelA!.id, player);
     state = placeInHand(state, rebelB!.id, player);
+    state = placeInHand(state, regimeCard.id, player);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: oppLeader.id, abilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // resolves gainActions
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "play", amount: 2, faction: "Rebel", locationId: null });
+
+    while (state.turn.actionsRemaining > 0) state = act(state, player, { type: "draw" });
+
     const locX = state.board[1]!.id; // HQ (Secure) — Gunman is normally Street-only, ignored here
     const locY = state.board[3]!.id; // Arena (Public)
 
-    const resolved = act(state, player, {
-      type: "chooseTargets",
-      targetIds: [rebelA!.id, rebelB!.id],
-      locationIds: [locX, locY],
-    });
+    // Wrong faction — rejected even with the grant active.
+    expect(() => act(state, player, { type: "playCard", cardId: regimeCard.id, locationId: locX })).toThrow();
 
-    expect(resolved.cards.find((c) => c.id === rebelA!.id)!.locationId).toBe(locX);
-    expect(resolved.cards.find((c) => c.id === rebelB!.id)!.locationId).toBe(locY);
+    state = act(state, player, { type: "playCard", cardId: rebelA!.id, locationId: locX });
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "play", amount: 1 });
+    state = act(state, player, { type: "playCard", cardId: rebelB!.id, locationId: locY });
+    expect(state.turn.restrictedAction).toBeNull();
+
+    expect(state.cards.find((c) => c.id === rebelA!.id)!.locationId).toBe(locX);
+    expect(state.cards.find((c) => c.id === rebelB!.id)!.locationId).toBe(locY);
   });
 
-  it("Master Assassin returns to hand then plays a card, at its original location", () => {
+  // Regression/redesign: same change as Puppet-Master's "Play 2 cards" —
+  // "return this card and play a card" used to be a single chooseTargets
+  // declaration of exactly 1 hand card, played at Master Assassin's own
+  // (by-then-undefined) location. Re-encoded as a single restricted
+  // action (TurnState.restrictedPlayActions) so the played card goes
+  // through the normal turn-action flow instead, at its own normal
+  // location, and so a Motorcade can be played this way at all.
+  it("returns to hand then grants a restricted action to play any card at its own normal location", () => {
     let state = freshGame(["a", "b", "c"]);
     const assassin = state.cards.find((c) => c.kind === "leader" && c.defRef === "Master Assassin")!;
     const player = state.turn.currentPlayerId;
@@ -2237,15 +2230,43 @@ describe("applyAction: remaining card content", () => {
     const otherCard = state.cards.find((c) => c.defRef === "Gunman")!;
     state = placeInHand(state, otherCard.id, player);
     state = act(state, player, { type: "draw" });
+    const budgetBeforeActivate = state.turn.actionsRemaining;
     state = act(state, player, { type: "activateAbility", cardId: assassin.id, abilityIndex: 0 });
 
     const afterReturn = act(state, player, { type: "chooseTargets", targetIds: [] });
     expect(afterReturn.cards.find((c) => c.id === assassin.id)!.zone).toBe("hand");
 
-    const resolved = act(afterReturn, player, { type: "chooseTargets", targetIds: [otherCard.id] });
+    const afterGrant = act(afterReturn, player, { type: "chooseTargets", targetIds: [] });
+    expect(afterGrant.turn.restrictedAction).toMatchObject({ kind: "play", amount: 1 });
+    expect(afterGrant.turn.actionsRemaining).toBe(budgetBeforeActivate - 1);
+    expect(afterGrant.resolutionStack).toHaveLength(0);
+
+    const resolved = act(afterGrant, player, { type: "playCard", cardId: otherCard.id, locationId: loc });
     expect(resolved.cards.find((c) => c.id === otherCard.id)!.zone).toBe("inPlay");
     expect(resolved.cards.find((c) => c.id === otherCard.id)!.locationId).toBe(loc);
-    expect(resolved.resolutionStack).toHaveLength(0);
+    // Paid from the restricted pool, not the normal budget — and cleared
+    // entirely (not left at 0) once fully spent.
+    expect(resolved.turn.restrictedAction).toBeNull();
+    expect(resolved.turn.actionsRemaining).toBe(budgetBeforeActivate - 1);
+  });
+
+  it("lets the restricted action from returning pay for a Motorcade", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const assassin = state.cards.find((c) => c.kind === "leader" && c.defRef === "Master Assassin")!;
+    const player = state.turn.currentPlayerId;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, assassin.id, loc, player);
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    state = placeInHand(state, motorcade.id, player);
+    state = { ...state, players: state.players.map((p) => (p.id === player ? { ...p, hasTakenFirstTurn: true } : p)) };
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: assassin.id, abilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // returnToHand
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // gainActions
+
+    const resolved = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+    expect(resolved.turn.restrictedAction).toBeNull();
+    expect(resolved.cards.find((c) => c.id === motorcade.id)!.zone).toBe("discard");
   });
 
   it("Master Assassin eliminates a target then blends itself back down", () => {
@@ -2475,17 +2496,17 @@ describe("applyAction: remaining card content", () => {
     // Activating itself spent one normal action; the ability's own effect
     // then granted 2 restricted-play actions on top.
     expect(state.turn.actionsRemaining).toBe(budgetBeforeActivate - 1);
-    expect(state.turn.restrictedPlayActions).toBe(2);
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "play", amount: 2 });
 
     // Each card plays at its OWN normal location — Street, not
     // Puppet-Master's Secure — proving the old self-location forcing is
     // gone, and each play draws from the restricted pool, not the normal
     // budget.
     state = act(state, player, { type: "playCard", cardId: soldier.id, locationId: streetLoc });
-    expect(state.turn.restrictedPlayActions).toBe(1);
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "play", amount: 1 });
     expect(state.turn.actionsRemaining).toBe(budgetBeforeActivate - 1);
     state = act(state, player, { type: "playCard", cardId: guard.id, locationId: secureLoc });
-    expect(state.turn.restrictedPlayActions).toBe(0);
+    expect(state.turn.restrictedAction).toBeNull();
     expect(state.turn.actionsRemaining).toBe(budgetBeforeActivate - 1);
 
     expect(state.cards.find((c) => c.id === soldier.id)!.zone).toBe("inPlay");
@@ -2529,7 +2550,7 @@ describe("applyAction: remaining card content", () => {
     state = act(state, player, { type: "chooseTargets", targetIds: [] });
 
     const resolved = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
-    expect(resolved.turn.restrictedPlayActions).toBe(1);
+    expect(resolved.turn.restrictedAction).toMatchObject({ kind: "play", amount: 1 });
     expect(resolved.cards.find((c) => c.id === motorcade.id)!.zone).toBe("discard");
   });
 
@@ -2550,7 +2571,7 @@ describe("applyAction: remaining card content", () => {
       state = act(state, player, { type: "draw" });
     }
     expect(state.turn.actionsRemaining).toBe(0);
-    expect(state.turn.restrictedPlayActions).toBe(2);
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "play", amount: 2 });
 
     expect(() => act(state, player, { type: "draw" })).toThrow();
     expect(() => act(state, player, { type: "moveCard", cardId: pm.id, toLocationId: loc })).toThrow();
@@ -2570,10 +2591,10 @@ describe("applyAction: remaining card content", () => {
     // other trivial-effect ability) — activateAbility alone only pushes
     // the pending AbilityResolutionFrame.
     state = act(state, player, { type: "chooseTargets", targetIds: [] });
-    expect(state.turn.restrictedPlayActions).toBe(2);
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "play", amount: 2 });
 
     state = act(state, player, { type: "endTurn" });
-    expect(state.turn.restrictedPlayActions).toBe(0);
+    expect(state.turn.restrictedAction).toBeNull();
   });
 
   it("Journalist peeks without publicly revealing the card", () => {

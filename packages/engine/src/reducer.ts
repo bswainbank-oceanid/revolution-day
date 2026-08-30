@@ -16,7 +16,7 @@ import { adjacentLocationIds } from "./state/board";
 import type { BoardLayout } from "./state/board";
 import { getAbilities, getAllowedLocationTypes, getFaction, hasAttribute } from "./state/cardLookup";
 import type { CardInstance } from "./state/cards";
-import type { GameState, PlayerId, PresidentState, TurnState } from "./state/game";
+import type { GameState, PlayerId, PresidentState, RestrictedActionGrant, TurnState } from "./state/game";
 import { shuffle } from "./state/rng";
 import type { RngState } from "./state/rng";
 import type {
@@ -98,7 +98,7 @@ function applyActionInner(
     case "playCard":
       return applyPlayCard(state, cardData, action);
     case "playMotorcade":
-      return applyPlayMotorcade(state, action);
+      return applyPlayMotorcade(state, cardData, action);
     case "activateAbility":
       return applyActivateAbility(state, cardData, action);
     default:
@@ -231,26 +231,30 @@ function spendAction(state: GameState): GameState["turn"] {
   return { ...state.turn, actionsRemaining: state.turn.actionsRemaining - 1 };
 }
 
-// playCard/playMotorcade specifically can also be paid for out of
-// restrictedPlayActions (Puppet-Master's "Play 2 cards") on top of the
-// normal budget — requireBudgetedAction/spendAction alone would reject a
-// play once actionsRemaining hits 0 even with restricted plays still
-// available, or would silently spend a normal action instead of the
-// restricted one that's otherwise wasted at end of turn.
-function requirePlayAction(state: GameState): void {
-  if (state.turn.phase !== "action") {
-    throw new Error("Cannot take an action outside the action phase");
-  }
-  if (state.turn.restrictedPlayActions <= 0 && state.turn.actionsRemaining <= 0) {
-    throw new Error("No actions remaining this turn");
-  }
+// playCard/playMotorcade/activateAbility can each also be paid for out of
+// TurnState.restrictedAction (Puppet-Master's "Play 2 cards", Master
+// Assassin's "return and play a card", Commander General's "any
+// number... at this location" — both its play and activate abilities,
+// Opposition Leader's "place 2 rebels at any locations") on top of the
+// normal budget. Returns the grant only when it's the right kind and not
+// already exhausted — the caller still has to separately confirm the
+// SPECIFIC card/location it's about to pay for actually falls under the
+// grant's own faction/locationId narrowing before treating it as usable;
+// a grant that doesn't cover this particular use just isn't applicable,
+// falling back to the normal budget (or failing if that's empty too),
+// never a hard rejection on its own.
+function activeRestrictedGrant(state: GameState, kind: "play" | "activate"): RestrictedActionGrant | null {
+  const grant = state.turn.restrictedAction;
+  if (!grant || grant.kind !== kind) return null;
+  if (grant.amount !== "unbounded" && grant.amount <= 0) return null;
+  return grant;
 }
 
-function spendPlayAction(state: GameState): GameState["turn"] {
-  if (state.turn.restrictedPlayActions > 0) {
-    return { ...state.turn, restrictedPlayActions: state.turn.restrictedPlayActions - 1 };
-  }
-  return spendAction(state);
+function spendRestrictedAction(state: GameState): GameState["turn"] {
+  const grant = state.turn.restrictedAction!;
+  if (grant.amount === "unbounded") return state.turn;
+  const remaining = grant.amount - 1;
+  return { ...state.turn, restrictedAction: remaining > 0 ? { ...grant, amount: remaining } : null };
 }
 
 function applyDraw(state: GameState): GameState {
@@ -344,7 +348,7 @@ function applyEndTurn(state: GameState): GameState {
       currentPlayerId: nextPlayerId,
       phase: "draw",
       actionsRemaining: 2,
-      restrictedPlayActions: 0,
+      restrictedAction: null,
       endgameTurnsRemaining,
       usedAbilities: [],
     },
@@ -394,7 +398,9 @@ function applyPlayCard(
   cardData: CardData,
   action: Extract<Action, { type: "playCard" }>,
 ): GameState {
-  requirePlayAction(state);
+  if (state.turn.phase !== "action") {
+    throw new Error("Cannot take an action outside the action phase");
+  }
 
   const cardIndex = state.cards.findIndex((c) => c.id === action.cardId);
   if (cardIndex === -1) {
@@ -413,11 +419,29 @@ function applyPlayCard(
   if (!location) {
     throw new Error(`Unknown location: ${action.locationId}`);
   }
-  const allowedTypes = getAllowedLocationTypes(cardData, card);
-  if (!allowedTypes.includes(location.type)) {
-    throw new Error(
-      `${card.defRef} cannot be played at a ${location.type} location (allowed: ${allowedTypes.join(", ")})`,
-    );
+
+  // A restricted "play" grant (Puppet-Master, Master Assassin, Commander
+  // General, Opposition Leader) only actually covers THIS play once its
+  // own faction/locationId narrowing (if any) is satisfied — otherwise
+  // it just isn't applicable here and this falls back to the normal
+  // budget, same as if no grant existed at all.
+  const grant = activeRestrictedGrant(state, "play");
+  const grantCoversThis =
+    grant !== null &&
+    (grant.faction === null || getFaction(cardData, card) === grant.faction) &&
+    (grant.locationId === null || action.locationId === grant.locationId);
+
+  if (!grantCoversThis && state.turn.actionsRemaining <= 0) {
+    throw new Error("No actions remaining this turn");
+  }
+
+  if (!(grantCoversThis && grant!.ignoreLocationRestrictions)) {
+    const allowedTypes = getAllowedLocationTypes(cardData, card);
+    if (!allowedTypes.includes(location.type)) {
+      throw new Error(
+        `${card.defRef} cannot be played at a ${location.type} location (allowed: ${allowedTypes.join(", ")})`,
+      );
+    }
   }
 
   // Blend-attribute cards always enter play face-down automatically —
@@ -428,19 +452,38 @@ function applyPlayCard(
     i === cardIndex ? { ...c, zone: "inPlay" as const, locationId: action.locationId, faceUp } : c,
   );
 
-  return { ...state, cards, turn: spendPlayAction(state) };
+  const turn = grantCoversThis ? spendRestrictedAction(state) : spendAction(state);
+  return { ...state, cards, turn };
 }
 
 function applyPlayMotorcade(
   state: GameState,
+  cardData: CardData,
   action: Extract<Action, { type: "playMotorcade" }>,
 ): GameState {
-  requirePlayAction(state);
+  if (state.turn.phase !== "action") {
+    throw new Error("Cannot take an action outside the action phase");
+  }
 
   const currentPlayerId = state.turn.currentPlayerId;
   const player = state.players.find((p) => p.id === currentPlayerId)!;
   if (!player.hasTakenFirstTurn) {
     throw new Error("Motorcade cannot be played on a player's first turn");
+  }
+
+  // Motorcades have no destination location of their own, so a grant's
+  // locationId restriction (Commander General's "at this location") can
+  // never be satisfied by one — moot in practice anyway, since a
+  // Motorcade has no faction and so never matches a faction-restricted
+  // grant (Commander General, Opposition Leader) either, exactly as
+  // under the old encoding.
+  const card = state.cards.find((c) => c.id === action.cardId);
+  const grant = activeRestrictedGrant(state, "play");
+  const grantCoversThis =
+    grant !== null && card !== undefined && (grant.faction === null || getFaction(cardData, card) === grant.faction);
+
+  if (!grantCoversThis && state.turn.actionsRemaining <= 0) {
+    throw new Error("No actions remaining this turn");
   }
 
   const { cards, president, resolutionStack } = resolveMotorcadePlay(
@@ -450,7 +493,8 @@ function applyPlayMotorcade(
     action.moveOwnCardId,
     action.moveToLocationId,
   );
-  return { ...state, cards, president, resolutionStack, turn: spendPlayAction(state) };
+  const turn = grantCoversThis ? spendRestrictedAction(state) : spendAction(state);
+  return { ...state, cards, president, resolutionStack, turn };
 }
 
 // The actual "play a Motorcade" mechanic — discard it, then move the
@@ -712,7 +756,9 @@ function applyActivateAbility(
   cardData: CardData,
   action: Extract<Action, { type: "activateAbility" }>,
 ): GameState {
-  requireBudgetedAction(state);
+  if (state.turn.phase !== "action") {
+    throw new Error("Cannot take an action outside the action phase");
+  }
 
   const currentPlayerId = state.turn.currentPlayerId;
   const card = state.cards.find((c) => c.id === action.cardId);
@@ -723,6 +769,21 @@ function applyActivateAbility(
   // controller can activate it, on their own turn.
   if (card.zone !== "inPlay" || card.controller !== currentPlayerId || card.locationId === undefined) {
     throw new Error(`Card ${action.cardId} is not an in-play card controlled by ${currentPlayerId}`);
+  }
+
+  // A restricted "activate" grant (Commander General's "activate any
+  // number of your regime cards at this location") only actually covers
+  // THIS activation once its own faction/locationId narrowing is
+  // satisfied — otherwise it falls back to the normal budget, same as
+  // playCard/playMotorcade.
+  const grant = activeRestrictedGrant(state, "activate");
+  const grantCoversThis =
+    grant !== null &&
+    (grant.faction === null || getFaction(cardData, card) === grant.faction) &&
+    (grant.locationId === null || card.locationId === grant.locationId);
+
+  if (!grantCoversThis && state.turn.actionsRemaining <= 0) {
+    throw new Error("No actions remaining this turn");
   }
 
   const usageKey = `${card.id}#${action.abilityIndex}`;
@@ -763,7 +824,10 @@ function applyActivateAbility(
     ...state,
     cards,
     resolutionStack,
-    turn: { ...spendAction(state), usedAbilities: [...state.turn.usedAbilities, usageKey] },
+    turn: {
+      ...(grantCoversThis ? spendRestrictedAction(state) : spendAction(state)),
+      usedAbilities: [...state.turn.usedAbilities, usageKey],
+    },
   };
 }
 
@@ -1035,10 +1099,21 @@ function applyGainActionsEffect(
   if (targetIds.length > 0) {
     throw new Error("This effect has no targets to choose");
   }
-  const turn =
-    effect.restriction === "play"
-      ? { ...state.turn, restrictedPlayActions: state.turn.restrictedPlayActions + effect.amount }
-      : { ...state.turn, actionsRemaining: state.turn.actionsRemaining + effect.amount };
+  if (!effect.restriction) {
+    if (effect.amount === "unbounded") {
+      throw new Error("An unrestricted gainActions must have a numeric amount");
+    }
+    const turn = { ...state.turn, actionsRemaining: state.turn.actionsRemaining + effect.amount };
+    return finishEffectStep({ ...state, turn }, frame);
+  }
+  const restrictedAction: RestrictedActionGrant = {
+    kind: effect.restriction,
+    amount: effect.amount,
+    faction: effect.faction ?? null,
+    locationId: effect.location === "self" ? frame.locationId : null,
+    ignoreLocationRestrictions: effect.ignoreLocationRestrictions ?? false,
+  };
+  const turn = { ...state.turn, restrictedAction };
   return finishEffectStep({ ...state, turn }, frame);
 }
 

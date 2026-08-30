@@ -91,7 +91,7 @@ export function setupGame(options: SetupOptions): GameState {
       currentPlayerId: startingPlayerId,
       phase: "draw",
       actionsRemaining: 2,
-      restrictedPlayActions: 0,
+      restrictedAction: null,
       endgameTurnsRemaining: null,
       usedAbilities: [],
     },

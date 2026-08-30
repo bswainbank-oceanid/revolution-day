@@ -172,19 +172,20 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
     { type: "Response", effects: [eliminateOneOrTwoAtSelf()] },
   ],
   "Master Assassin": [
-    // "Return this card to its controller's hand and play a card" — the
-    // `play` step uses frame.locationId (not sourceCard.locationId, which
-    // is undefined right after returnToHand clears it), resolved by
-    // applyPlayEffect already; see its comment in reducer.ts.
+    // "Return this card to its controller's hand and play a card" —
+    // granted as a single restricted action (spendable only on
+    // playCard/playMotorcade — see TurnState.restrictedPlayActions), same
+    // redesign as Puppet-Master's "Play 2 cards": the played card goes
+    // through the normal turn-action flow at its own normal location
+    // (not forced to Master Assassin's former location, which is
+    // undefined anyway right after returnToHand clears it), and Motorcades
+    // become playable here too, unlike the old single chooseTargets
+    // declaration.
     {
       type: "Activate",
       effects: [
         { verb: "returnToHand", target: { ref: "self" } },
-        {
-          verb: "play",
-          location: { mode: "self" },
-          target: { ref: "filter", count: { mode: "exact", value: 1 }, selection: "playerChoice" },
-        },
+        { verb: "gainActions", amount: 1, restriction: "play" },
       ],
     },
     // "Eliminate a target and blend" — blends itself back down after
@@ -197,39 +198,27 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
     { type: "Response", effects: [eliminateOneAtSelf()] },
   ],
   "Commander General": [
+    // "Play any number of regime cards at this location" — same
+    // restricted-action template as Puppet-Master/Master Assassin (an
+    // unbounded grant instead of a single simultaneous chooseTargets
+    // declaration), but unlike those two, the card text keeps its own
+    // faction restriction and "at THIS location" qualifier, so the grant
+    // carries both: faction:"Regime" and location:"self" (forced to
+    // Commander General's own location, not the player's free choice).
     {
       type: "Activate",
       effects: [
-        {
-          verb: "play",
-          location: { mode: "self" },
-          ignoreLocationRestrictions: true,
-          target: {
-            ref: "filter",
-            faction: "Regime",
-            count: { mode: "unbounded" },
-            selection: "playerChoice",
-          },
-        },
+        { verb: "gainActions", amount: "unbounded", restriction: "play", faction: "Regime", location: "self", ignoreLocationRestrictions: true },
       ],
     },
+    // "Activate any number of your regime cards at this location" — the
+    // same template again, but restriction:"activate" instead of "play":
+    // each activation goes through the normal activateAbility action
+    // (already restricted to the player's own cards, matching this
+    // ability's controller:"self"), not a recursive activateRemote loop.
     {
       type: "Activate",
-      effects: [
-        {
-          verb: "activateRemote",
-          count: { mode: "unbounded" },
-          target: {
-            ref: "filter",
-            kind: "nonLeader",
-            faction: "Regime",
-            controller: "self",
-            location: { mode: "self" },
-            count: { mode: "unbounded" },
-            selection: "playerChoice",
-          },
-        },
-      ],
+      effects: [{ verb: "gainActions", amount: "unbounded", restriction: "activate", faction: "Regime", location: "self" }],
     },
     {
       type: "Activate",
@@ -284,19 +273,17 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
     { type: "Response", effects: [eliminateOneAtSelf("Rebel")] },
   ],
   "Opposition Leader": [
-    // "Place 2 rebels at any locations" — each of the 2 declared targets
-    // gets its own destination via `chooseTargets.locationIds` (parallel
-    // to targetIds), not both forced to the same location.
+    // "Place 2 rebels at any locations (ignore location restrictions)" —
+    // same restricted-action template as Puppet-Master/Master Assassin: a
+    // grant of 2 (not unbounded — this ability is explicitly capped),
+    // faction:"Rebel" (its own restriction, unlike Puppet-Master/Master
+    // Assassin which have none), ignoreLocationRestrictions:true, and no
+    // forced location — "any locations" already means the player's free
+    // per-card choice, exactly what the redesigned playCard flow gives
+    // for free, without needing the old chooseTargets.locationIds pairing.
     {
       type: "Activate",
-      effects: [
-        {
-          verb: "play",
-          location: { mode: "any" },
-          ignoreLocationRestrictions: true,
-          target: { ref: "filter", faction: "Rebel", count: { mode: "exact", value: 2 }, selection: "playerChoice" },
-        },
-      ],
+      effects: [{ verb: "gainActions", amount: 2, restriction: "play", faction: "Rebel", ignoreLocationRestrictions: true }],
     },
     { type: "Activate", effects: [{ verb: "draw", amount: 3 }] },
     {

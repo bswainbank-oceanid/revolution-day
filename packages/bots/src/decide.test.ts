@@ -62,7 +62,12 @@ describe("decideBotAction: top-level turn actions", () => {
     const player = state.turn.currentPlayerId;
     state = {
       ...state,
-      turn: { ...state.turn, phase: "action", actionsRemaining: 0, restrictedPlayActions: 2 },
+      turn: {
+        ...state.turn,
+        phase: "action",
+        actionsRemaining: 0,
+        restrictedAction: { kind: "play", amount: 2, faction: null, locationId: null, ignoreLocationRestrictions: false },
+      },
     };
     const filtered = filterForPlayer(state, player);
 
@@ -72,6 +77,58 @@ describe("decideBotAction: top-level turn actions", () => {
       expect(action.type).not.toBe("draw");
       expect(action.type).not.toBe("activateAbility");
       expect(action.type).not.toBe("moveCard");
+    }
+  });
+
+  // Regression: Commander General's "activate any number of your regime
+  // cards at this location" grants a restricted "activate" action
+  // narrowed by both faction and location (RestrictedActionGrant) — with
+  // the normal budget gone, only a card matching BOTH should ever be
+  // picked, never a same-controller card that's the wrong faction or at
+  // the wrong location, even when that card also has a legal target.
+  it("only activates own cards matching a restricted 'activate' grant's faction and location", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const otherLoc = state.board[1]!.id;
+    const guard = findByDefRef(state, "Republican Guard"); // Regime, at the grant's location
+    const soldier = state.cards.find((c) => c.defRef === "Rebel Soldier" && c.id !== guard.id)!; // Rebel, elsewhere
+    const guardTarget = state.cards.find((c) => c.defRef === "Prominent Citizen")!;
+    const soldierTarget = state.cards.find(
+      (c) => c.defRef === "Prominent Citizen" && c.id !== guardTarget.id,
+    )!;
+    state = place(state, guard.id, loc, player);
+    state = place(state, soldier.id, otherLoc, player);
+    state = place(state, guardTarget.id, loc, other);
+    state = place(state, soldierTarget.id, otherLoc, other); // gives soldier a legal target too
+    state = {
+      ...state,
+      turn: {
+        ...state.turn,
+        currentPlayerId: player,
+        phase: "action",
+        actionsRemaining: 0,
+        restrictedAction: {
+          kind: "activate",
+          amount: "unbounded",
+          faction: "Regime",
+          locationId: loc,
+          ignoreLocationRestrictions: false,
+        },
+      },
+    };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(["activateAbility", "endTurn"]).toContain(action.type);
+      if (action.type === "activateAbility") {
+        expect(action.cardId).toBe(guard.id);
+      }
+      expect(action.type).not.toBe("draw");
+      expect(action.type).not.toBe("moveCard");
+      expect(action.type).not.toBe("playCard");
     }
   });
 });

@@ -103,11 +103,26 @@ export type EffectNode =
   | { readonly verb: "peek"; readonly target: TargetSelector; readonly bind?: string } // private — acting player only
   | { readonly verb: "blend"; readonly target: TargetSelector }
   | { readonly verb: "gainControl"; readonly target: TargetSelector }
-  // `restriction: "play"` (Puppet-Master's "Play 2 cards") grants actions
-  // into TurnState.restrictedPlayActions instead of actionsRemaining — a
-  // separate pool only playCard/playMotorcade can spend, matching the
-  // card text's "can only be used to play cards (including Motorcades)".
-  | { readonly verb: "gainActions"; readonly amount: number; readonly restriction?: "play" }
+  // `restriction: "play" | "activate"` (Puppet-Master's "Play 2 cards",
+  // Master Assassin's "return and play a card", Commander General's "any
+  // number... at this location", Opposition Leader's "place 2 rebels at
+  // any locations") grants a RestrictedActionGrant (TurnState.
+  // restrictedAction) instead of actionsRemaining — a separate budget
+  // only playCard/playMotorcade ("play") or activateAbility ("activate")
+  // can spend. `amount: "unbounded"` never depletes ("any number").
+  // `faction` narrows which cards the grant covers (omitted = any).
+  // `location: "self"` forces every use to the granting card's own
+  // location (omitted = the player chooses freely, per-use).
+  // `ignoreLocationRestrictions` ("play" only) bypasses a card's own
+  // printed allowed-location-types while paying from this grant.
+  | {
+      readonly verb: "gainActions";
+      readonly amount: number | "unbounded";
+      readonly restriction?: "play" | "activate";
+      readonly faction?: Faction;
+      readonly location?: "self";
+      readonly ignoreLocationRestrictions?: boolean;
+    }
   | { readonly verb: "returnToHand"; readonly target: TargetSelector }
   | { readonly verb: "triggerAlarm"; readonly location: LocationScope }
   // Recurses into the same ability-resolution machinery for the chosen

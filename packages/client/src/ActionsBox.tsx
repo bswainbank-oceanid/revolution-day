@@ -1,5 +1,18 @@
-import type { Action, FilteredGameState } from "@rev-day/engine";
+import type { Action, FilteredGameState, RestrictedActionGrant } from "@rev-day/engine";
 import type { useTargetSelection } from "./useTargetSelection";
+
+// "+2 play-only (Rebel)", "Unlimited activate-only (Regime) here" —
+// summarizes whichever repeatable grant (Puppet-Master, Master Assassin,
+// Commander General, Opposition Leader — see RestrictedActionGrant) is
+// currently active, so the player knows it exists once actionsRemaining
+// alone no longer tells the whole story.
+function describeGrant(grant: RestrictedActionGrant): string {
+  const amount = grant.amount === "unbounded" ? "Unlimited" : `+${grant.amount}`;
+  const verb = grant.kind === "play" ? "play" : "activate";
+  const faction = grant.faction ? ` (${grant.faction})` : "";
+  const where = grant.locationId ? " here" : "";
+  return `${amount} ${verb}-only${faction}${where}`;
+}
 
 interface ActionsBoxProps {
   readonly state: FilteredGameState;
@@ -71,8 +84,8 @@ export function ActionsBox({ state, onAct, disabled, selection, isPlaying }: Act
     <div className="actions-box">
       <p className="actions-remaining-label">ACTIONS REMAINING</p>
       <p className="actions-remaining-count">{state.turn.actionsRemaining}</p>
-      {state.turn.restrictedPlayActions > 0 && (
-        <p className="hint restricted-play-actions">+{state.turn.restrictedPlayActions} play-only</p>
+      {state.turn.restrictedAction && (
+        <p className="hint restricted-play-actions">{describeGrant(state.turn.restrictedAction)}</p>
       )}
       <button type="button" disabled={disabled || !canDraw} onClick={() => onAct({ type: "draw" })}>
         Draw

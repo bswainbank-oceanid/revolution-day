@@ -2,6 +2,35 @@ import type { BoardLayout } from "./board";
 import type { CardInstance } from "./cards";
 import type { PendingPassiveTrigger, ResolutionFrame } from "./resolution";
 import type { RngState } from "./rng";
+import type { Faction } from "../types";
+
+// A single, currently-active repeatable-action grant — Puppet-Master's
+// "Play 2 cards", Master Assassin's "return and play a card", Commander
+// General's "any number... at this location" (both play and activate
+// variants), Opposition Leader's "place 2 rebels at any locations". Every
+// ability that grants one belongs to a single player's own leader, so at
+// most one is ever active for a given player at a time — a fresh grant
+// replaces whatever was there, never stacks.
+export interface RestrictedActionGrant {
+  // Which top-level action type this can pay for — playCard/playMotorcade
+  // for "play", activateAbility for "activate". Never draw/moveCard/
+  // anything else.
+  readonly kind: "play" | "activate";
+  // "unbounded" for "any number" (Commander General) — never depletes;
+  // a numeric amount decrements per use and the grant is cleared once it
+  // hits 0.
+  readonly amount: number | "unbounded";
+  // Restricts which cards this grant can pay for — null means any.
+  readonly faction: Faction | null;
+  // Forces every use of this grant to one specific location (the
+  // granting card's own, e.g. Commander General's "at this location") —
+  // null means the player chooses freely (Puppet-Master, Master
+  // Assassin, Opposition Leader's "at any locations").
+  readonly locationId: string | null;
+  // "play" only: whether the card's own printed allowed-location-types
+  // are bypassed when using this grant.
+  readonly ignoreLocationRestrictions: boolean;
+}
 
 export type PlayerId = string;
 
@@ -32,13 +61,11 @@ export interface TurnState {
   // Starts at 2 but is a mutable counter effects can increment (Heir
   // Apparent's "gain 2 actions"), not a fixed countdown.
   readonly actionsRemaining: number;
-  // Extra actions that can ONLY pay for playCard/playMotorcade (Puppet-
-  // Master's "Play 2 cards", encoded as gainActions with restriction:
-  // "play") — a separate pool from actionsRemaining so it can't be spent
-  // on draw/move/activateAbility. Spent before actionsRemaining (see
-  // spendPlayAction) since it's otherwise wasted at end of turn; reset to
-  // 0 every turn, same as actionsRemaining itself.
-  readonly restrictedPlayActions: number;
+  // See RestrictedActionGrant's own doc comment — spent before
+  // actionsRemaining (preferred whenever it applies, since it's
+  // otherwise wasted at end of turn); reset to null every turn, same as
+  // actionsRemaining resets to its own fresh value.
+  readonly restrictedAction: RestrictedActionGrant | null;
   // null until the President is eliminated, then counts down from 3.
   readonly endgameTurnsRemaining: number | null;
   // "cardId#abilityIndex" keys — backs "each Activate ability can only be

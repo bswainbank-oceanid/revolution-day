@@ -14,7 +14,7 @@ export type {
 export { boardLayoutFromCardData, adjacentLocationIds } from "./state/board";
 export type { BoardLayout, LocationInstance } from "./state/board";
 export type { CardInstance, Zone, CardKind } from "./state/cards";
-export type { GameState, Player, PlayerId, PresidentState, TurnState } from "./state/game";
+export type { GameState, Player, PlayerId, PresidentState, RestrictedActionGrant, TurnState } from "./state/game";
 export { createRng, nextFloat, nextInt, shuffle } from "./state/rng";
 export type { RngState } from "./state/rng";
 export type {

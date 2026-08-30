@@ -517,6 +517,12 @@ h3 {
 }
 .hand-strip {
   flex: 1;
+  /* Without this, a flex item's default min-width is auto (its content's
+     own intrinsic width) — with enough cards, .hand-strip-cards would
+     just keep growing past the available space instead of ever actually
+     shrinking to fit, silently clipping cards (and even the Actions
+     Remaining box next to it) against region-bottom's overflow:hidden. */
+  min-width: 0;
 }
 .hand-strip h3 {
   font-size: 0.85rem;
@@ -524,9 +530,13 @@ h3 {
 .hand-strip-cards {
   display: flex;
   gap: 0.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.4rem;
 }
 .hand-strip-card {
   width: 150px;
+  flex-shrink: 0;
   border-radius: 3px;
 }
 .hand-strip-card-clickable {
