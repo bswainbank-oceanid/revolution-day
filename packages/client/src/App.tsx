@@ -208,7 +208,15 @@ function App() {
             onDragStart={setDraggedCard}
             onDragEnd={stopDragging}
           />
-          <ActivateAbilityBox card={viewedCard} state={state} humanPlayerId={humanPlayerId} act={act} selection={selection} isPlaying={playback.isPlaying} />
+          <ActivateAbilityBox
+            card={viewedCard}
+            state={state}
+            humanPlayerId={humanPlayerId}
+            act={act}
+            selection={selection}
+            isPlaying={playback.isPlaying}
+            disabled={interactionLocked}
+          />
         </>
       }
       center={
@@ -226,7 +234,7 @@ function App() {
             isDropTarget={allowedDropLocationIds.has(view.locationId)}
             onDropCard={handleDropCard}
             cardPick={selection.cardPick}
-            pickModeActive={!!selection.cardPick && !selection.viewCardsMode}
+            pickModeActive={!interactionLocked && !!selection.cardPick && !selection.viewCardsMode}
           />
         ) : (
           <CityView
@@ -237,7 +245,7 @@ function App() {
             locationPick={selection.locationPick}
             onSelectCard={interactionLocked ? undefined : selectCard}
             cardPick={selection.cardPick}
-            pickModeActive={!!selection.cardPick && !selection.viewCardsMode}
+            pickModeActive={!interactionLocked && !!selection.cardPick && !selection.viewCardsMode}
           />
         )
       }
@@ -257,7 +265,7 @@ function App() {
             onDragStart={setDraggedCard}
             onDragEnd={stopDragging}
             cardPick={selection.cardPick}
-            pickModeActive={!!selection.cardPick && !selection.viewCardsMode}
+            pickModeActive={!interactionLocked && !!selection.cardPick && !selection.viewCardsMode}
           />
           <ActionsBox state={state} onAct={act} disabled={interactionLocked} selection={selection} isPlaying={playback.isPlaying} />
         </>

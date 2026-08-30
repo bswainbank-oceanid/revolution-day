@@ -127,6 +127,56 @@ describe("decideBotAction: eliminate targeting", () => {
     }
   });
 
+  // Regression: reducer.ts's declareEliminateTargets bypasses
+  // Protected-immunity entirely for a re-choice after a Protected-
+  // targeting reveal window (bypassProtectionOverride, driven by
+  // AbilityResolutionFrame.reselectingAfterReveal — "that re-choice is
+  // final by design, not a fresh declaration"), but eliminateCandidatePool
+  // had no idea that field existed and kept filtering by protection
+  // anyway. With a real protector still present, the previously-protected
+  // target stayed wrongly excluded from the pool even though the engine
+  // would accept it unconditionally — a real user hit this using
+  // Insurgent Sniper on the President after an unrelated reveal put the
+  // ability into reselectingAfterReveal.
+  it("bypasses Protected-immunity entirely when reselecting after a reveal window", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]); // 8 players — Head of Security guaranteed dealt
+    const guard = findByDefRef(state, "Republican Guard");
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const target = state.cards.find((c) => c.kind === "leader" && c.defRef === "Head of Security")!;
+    const protector = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen" && c.id !== guard.id,
+    )!;
+    state = place(state, guard.id, loc, player);
+    state = place(state, target.id, loc, other);
+    state = place(state, protector.id, loc, other); // would normally shield target
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: guard.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+      reselectingAfterReveal: true,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const seenTargetIds = new Set<string>();
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).toMatchObject({ type: "chooseTargets" });
+      for (const id of (action as { targetIds: readonly string[] }).targetIds) seenTargetIds.add(id);
+    }
+    // Without the fix, `target` stays wrongly excluded no matter the
+    // roll — every pick lands on `protector` instead, and target is
+    // never reachable at all.
+    expect(seenTargetIds.has(target.id)).toBe(true);
+  });
+
   // Regression: eliminate targeting used to fall back to the acting
   // player's own cards when no opposing candidate existed ("no opposing
   // candidate exists — fall back to whatever's legal") — the user

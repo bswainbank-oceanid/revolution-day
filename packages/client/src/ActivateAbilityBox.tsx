@@ -13,6 +13,13 @@ interface ActivateAbilityBoxProps {
   // stepping — this box goes read-only for that window rather than
   // showing (and reacting to) buttons for a card the human didn't select.
   readonly isPlaying?: boolean;
+  // True while a previous action is still in flight — every button here
+  // submits (or starts building toward) a real act() call, so without
+  // this a rapid double-click could fire a second submission before the
+  // first one's resulting state (and resolution-stack frame) has come
+  // back, sending a stale action type against whatever frame the server
+  // has since moved on to.
+  readonly disabled?: boolean;
 }
 
 // Step 6 (BUILD_PLAN.md): real Activate/Response buttons, plus the Choose
@@ -20,7 +27,7 @@ interface ActivateAbilityBoxProps {
 // While a pick is active the box shows *that*, regardless of which card
 // happens to be in the Card Viewer — per the locked design, viewing other
 // cards ("View Cards" mode) never changes what's being chosen.
-export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection, isPlaying }: ActivateAbilityBoxProps) {
+export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection, isPlaying, disabled }: ActivateAbilityBoxProps) {
   const { cardPick, locationPick, respondingWith, startResponse, viewCardsMode, setViewCardsMode, unsupportedAbility } = selection;
   const topFrame = state.resolutionStack[state.resolutionStack.length - 1] ?? null;
 
@@ -76,7 +83,13 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
           <p className="hint">No Response ability available on this card.</p>
         ) : (
           responses.map((r) => (
-            <button key={r.abilityIndex} type="button" className="ability-button" onClick={() => startResponse(card.id, r.abilityIndex)}>
+            <button
+              key={r.abilityIndex}
+              type="button"
+              className="ability-button"
+              disabled={disabled}
+              onClick={() => startResponse(card.id, r.abilityIndex)}
+            >
               {r.text}
             </button>
           ))
@@ -96,7 +109,12 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
       <div className="activate-ability-box">
         <h3>INTERCEPT MOTORCADE</h3>
         {eligible ? (
-          <button type="button" className="ability-button" onClick={() => act({ type: "interceptMotorcade", cardId: card.id })}>
+          <button
+            type="button"
+            className="ability-button"
+            disabled={disabled}
+            onClick={() => act({ type: "interceptMotorcade", cardId: card.id })}
+          >
             Intercept — eliminate {card.defRef}
           </button>
         ) : (
@@ -126,7 +144,13 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
         <p className="hint">No abilities{card.defRef === "President" ? " — Protected" : ""}</p>
       ) : (
         abilities.map((a) => (
-          <button key={a.abilityIndex} type="button" className="ability-button" onClick={() => act({ type: "activateAbility", cardId: card.id, abilityIndex: a.abilityIndex })}>
+          <button
+            key={a.abilityIndex}
+            type="button"
+            className="ability-button"
+            disabled={disabled}
+            onClick={() => act({ type: "activateAbility", cardId: card.id, abilityIndex: a.abilityIndex })}
+          >
             {a.text}
           </button>
         ))

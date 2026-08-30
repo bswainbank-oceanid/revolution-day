@@ -106,7 +106,14 @@ export function useTargetSelection(
         ? getAbilityEffects(sourceCard.defRef, topFrame.abilityIndex)?.effects[topFrame.effectIndex ?? 0]
         : undefined;
       if (sourceCard && effect) {
-        const pending = computePendingRealChoice(state, sourceCard, humanPlayerId, effect, selectedTargetIds);
+        const pending = computePendingRealChoice(
+          state,
+          sourceCard,
+          humanPlayerId,
+          effect,
+          selectedTargetIds,
+          topFrame.reselectingAfterReveal ?? false,
+        );
         if (!pending) {
           unsupportedAbility = true;
         } else if (pending.kind === "cards") {
