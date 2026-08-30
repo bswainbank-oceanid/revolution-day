@@ -961,6 +961,38 @@ describe("applyAction: President as a target for an ordinary (non-Wife) eliminat
 
     expect(() => act(state, player, { type: "chooseTargets", targetIds: ["president"] })).toThrow();
   });
+
+  it("lets a simultaneous eliminate-two batch include the President and his only protector together", () => {
+    // Regression: Protected-immunity used to be checked per-candidate
+    // against the *current* board, so the President — protected only by
+    // Traffic Cop, itself one of the two declared targets — was wrongly
+    // rejected even though eliminating both together in one action is
+    // exactly what "eliminate one or two targets" allows (Heir Apparent,
+    // Death Squad, Rebel Soldier). A real user hit this trying to
+    // simultaneously eliminate a Traffic Cop and the President it was
+    // shielding with Heir Apparent.
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]); // 8 players — Heir Apparent guaranteed dealt
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const heir = state.cards.find((c) => c.kind === "leader" && c.defRef === "Heir Apparent")!;
+    const trafficCop = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Traffic Cop")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, heir.id, loc, player);
+    state = placeInPlay(state, trafficCop.id, loc, other); // Regime, non-Protected — the President's only protector here
+    state = { ...state, president: { status: "alive", locationId: loc } };
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: heir.id, abilityIndex: 1 });
+
+    // Heir Apparent's ability is alarm:true — the alarm response window
+    // opens immediately, before targets are even declared; everyone must
+    // pass it first.
+    const alarmFrame = state.resolutionStack[state.resolutionStack.length - 1] as AlarmResolutionFrame;
+    state = passWholeAlarm(state, alarmFrame);
+
+    const resolved = act(state, player, { type: "chooseTargets", targetIds: [trafficCop.id, "president"] });
+    expect(resolved.president.status).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === trafficCop.id)!.zone).toBe("eliminated");
+  });
 });
 
 // Once the President is eliminated, a player whose own leader is still

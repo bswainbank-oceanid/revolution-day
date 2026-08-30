@@ -153,11 +153,17 @@ function isProtectedActiveFiltered(cardData: CardData, card: FilteredCardInstanc
 // apply this), leaving the picker stuck with no visible feedback (bots
 // don't hit this visibly since takeBotTurn retries on rejection; a human
 // has no such retry).
+// `additionalExcludedIds` — every OTHER id in the same simultaneously-
+// declared target set (e.g. Heir Apparent's "eliminate one or two
+// targets" naming both a protector and what it's shielding) also doesn't
+// count toward protection, on top of the acting player's own cards —
+// mirrors the engine's own isLegalEliminationTarget. Defaults to none.
 export function isLegalEliminationTargetFiltered(
   state: FilteredGameState,
   cardData: CardData,
   target: FilteredCardInstance,
   actingPlayerId: string | null,
+  additionalExcludedIds: readonly string[] = [],
 ): boolean {
   if (!isProtectedActiveFiltered(cardData, target)) return true;
   const targetFaction = knownFaction(cardData, target);
@@ -165,6 +171,7 @@ export function isLegalEliminationTargetFiltered(
   return !state.cards.some(
     (c) =>
       c.id !== target.id &&
+      !additionalExcludedIds.includes(c.id) &&
       c.zone === "inPlay" &&
       c.locationId === target.locationId &&
       c.controller !== actingPlayerId &&
@@ -183,12 +190,16 @@ export function isLegalEliminationTargetFiltered(
 // actually be with the President; isLegalPresidentTarget itself has no
 // notion of a source card) — the caller computes it since only it knows
 // the effect's target.location mode and the source card's own location.
+// `additionalExcludedIds` — see isLegalEliminationTargetFiltered's
+// comment; same simultaneous-batch exclusion, since the President can be
+// one of several targets in the same declaration. Defaults to none.
 export function presidentIsLegalTarget(
   state: FilteredGameState,
   cardData: CardData,
   actingPlayerId: string | null,
   ignoreProtection: boolean,
   coLocated: boolean,
+  additionalExcludedIds: readonly string[] = [],
 ): boolean {
   if (!coLocated) return false;
   if (state.president.status !== "alive" || state.president.locationId === null) return false;
@@ -202,6 +213,7 @@ export function presidentIsLegalTarget(
 
   return !state.cards.some(
     (c) =>
+      !additionalExcludedIds.includes(c.id) &&
       c.zone === "inPlay" &&
       c.locationId === state.president.locationId &&
       c.controller !== actingPlayerId &&

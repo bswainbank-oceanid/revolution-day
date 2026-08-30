@@ -171,11 +171,11 @@ export function findProtectorCards(
   locationId: string,
   faction: Faction,
   excludedControllerId: string | null,
-  excludedCardId?: string,
+  excludedCardIds: readonly string[] = [],
 ): CardInstance[] {
   return state.cards.filter(
     (c) =>
-      c.id !== excludedCardId &&
+      !excludedCardIds.includes(c.id) &&
       c.zone === "inPlay" &&
       c.locationId === locationId &&
       c.controller !== excludedControllerId &&
@@ -214,18 +214,28 @@ export function hasRevealOpportunity(
 // *visible* information — see the protected-targeting reveal window
 // (ProtectedTargetingWindowFrame, dispatched in reducer.ts) for what
 // happens when a hidden card could still change the outcome.
+// `additionalExcludedIds` — every OTHER id in the same simultaneously-
+// declared targetIds batch (Heir Apparent/Death Squad/Rebel Soldier's
+// "eliminate one or two targets" et al.) — also doesn't count toward
+// protection, on top of the acting player's own cards: a card being
+// eliminated in the very same action can't still be shielding another
+// target in it. Defaults to none, so every existing single-target call
+// site is unaffected.
 export function isLegalEliminationTarget(
   state: GameState,
   cardData: CardData,
   target: CardInstance,
   actingPlayerId: string | null,
+  additionalExcludedIds: readonly string[] = [],
 ): boolean {
   if (!isProtectedActive(cardData, target)) return true;
   const targetFaction = getFaction(cardData, target);
   if (!targetFaction) return true;
   return (
-    findProtectorCards(state, cardData, target.locationId!, targetFaction, actingPlayerId, target.id)
-      .length === 0
+    findProtectorCards(state, cardData, target.locationId!, targetFaction, actingPlayerId, [
+      target.id,
+      ...additionalExcludedIds,
+    ]).length === 0
   );
 }
 
@@ -261,11 +271,15 @@ export function partitionByProtection(
   return { primary, fallback };
 }
 
+// `additionalExcludedIds` — see isLegalEliminationTarget's comment; same
+// simultaneous-batch exclusion, since the President can be one of several
+// targets in the same "eliminate one or two targets" declaration.
 export function isLegalPresidentTarget(
   state: GameState,
   cardData: CardData,
   actingPlayerId: string | null,
   ignoreProtection: boolean,
+  additionalExcludedIds: readonly string[] = [],
 ): boolean {
   if (state.president.status !== "alive" || state.president.locationId === null) return false;
 
@@ -277,6 +291,7 @@ export function isLegalPresidentTarget(
   if (ignoreProtection) return true;
 
   return (
-    findProtectorCards(state, cardData, state.president.locationId, "Regime", actingPlayerId).length === 0
+    findProtectorCards(state, cardData, state.president.locationId, "Regime", actingPlayerId, additionalExcludedIds)
+      .length === 0
   );
 }

@@ -56,20 +56,32 @@ export function resolveCard(state: FilteredGameState, cardId: string): FilteredC
 // dedicated kind:"president" selector). Mirrors reducer.ts's
 // declareEliminateTargets exactly, so the UI never shows/hides him
 // differently than what the server would actually accept.
+//
+// `alreadySelectedIds` — whatever the human has already picked so far in
+// this same multi-target declaration (Heir Apparent's "eliminate one or
+// two targets" et al.) — is treated as additionally excluded from
+// protection, same as the acting player's own cards: a card already
+// selected for elimination in this batch can't still be shielding another
+// candidate. Without this, picking a protector first wouldn't make the
+// card it was shielding show up as selectable next — the live picker has
+// to re-derive candidates as the partial selection grows, since
+// declareEliminateTargets validates protection against the *whole*
+// declared batch, not per-candidate in isolation (see its own comment).
 function eliminateCandidatePool(
   state: FilteredGameState,
   sourceCard: FilteredCardInstance,
   actingPlayerId: PlayerId,
   effect: Extract<EffectNode, { verb: "eliminate" }>,
+  alreadySelectedIds: readonly string[] = [],
 ): FilteredCardInstance[] {
   if (effect.target.ref !== "filter") return [];
   const bypassProtection = effect.ignoreProtected ?? false;
   const realCards = candidateInPlayCards(state, cardData, effect.target, sourceCard).filter(
-    (c) => bypassProtection || isLegalEliminationTargetFiltered(state, cardData, c, actingPlayerId),
+    (c) => bypassProtection || isLegalEliminationTargetFiltered(state, cardData, c, actingPlayerId, alreadySelectedIds),
   );
   const presidentEligible =
     presidentMatchesSelectorFiltered(state, effect.target, sourceCard) &&
-    presidentIsLegalTarget(state, cardData, actingPlayerId, bypassProtection, true);
+    presidentIsLegalTarget(state, cardData, actingPlayerId, bypassProtection, true, alreadySelectedIds);
   return presidentEligible ? [...realCards, presidentPseudoCard(state)] : realCards;
 }
 
@@ -177,16 +189,21 @@ export type PendingRealChoice = PendingCardPick | PendingLocationPick;
 // i.e. this effect genuinely needs player input. Returns null for the
 // (rare, gated-off) unsupported cases so the caller can fall back to a
 // clear "not supported" message instead of a broken picker.
+//
+// `selectedIds` — the human's current partial selection within this same
+// pick, if any (see eliminateCandidatePool's comment) — only meaningful
+// for "eliminate"; every other verb ignores it.
 export function computePendingRealChoice(
   state: FilteredGameState,
   sourceCard: FilteredCardInstance,
   actingPlayerId: PlayerId,
   effect: EffectNode,
+  selectedIds: readonly string[] = [],
 ): PendingRealChoice | null {
   switch (effect.verb) {
     case "eliminate": {
       if (effect.target.ref !== "filter") return null;
-      const candidates = eliminateCandidatePool(state, sourceCard, actingPlayerId, effect);
+      const candidates = eliminateCandidatePool(state, sourceCard, actingPlayerId, effect, selectedIds);
       return { kind: "cards", candidates, count: effect.target.count, locationScope: effect.target.location, poolSource: "inPlay" };
     }
     case "reveal":
@@ -238,8 +255,9 @@ export function computeResponseCandidates(
   sourceCard: FilteredCardInstance,
   actingPlayerId: PlayerId,
   effect: Extract<EffectNode, { verb: "eliminate" }>,
+  selectedIds: readonly string[] = [],
 ): readonly FilteredCardInstance[] {
-  return eliminateCandidatePool(state, sourceCard, actingPlayerId, effect);
+  return eliminateCandidatePool(state, sourceCard, actingPlayerId, effect, selectedIds);
 }
 
 // A conservative pre-check so Activate/Response ability buttons don't lead

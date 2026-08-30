@@ -1256,16 +1256,35 @@ function declareEliminateTargets(
   // also matches — a kind restricted to "president" excludes every real
   // card via resolveEligibleTargets, so eligibleCards is empty there and
   // he's the pool's only member, same net effect as the old special case).
-  const eligibleCards = resolveEligibleTargets(state, cardData, effect.target, actingCard).filter(
-    (c) => bypassProtection || isLegalEliminationTarget(state, cardData, c, actingPlayerId),
-  );
-  const presidentEligible =
-    presidentMatchesSelector(state, effect.target, actingCard) &&
-    isLegalPresidentTarget(state, cardData, actingPlayerId, bypassProtection);
+  //
+  // Selector-match (kind/faction/controller/location/blendState) is
+  // validated separately from Protected-immunity here — count/membership
+  // first against the *selector's* pool, protection second against the
+  // full declared batch (below). Otherwise a target that's only protected
+  // by another card in this same simultaneous declaration (e.g. Heir
+  // Apparent's "eliminate one or two targets" naming both a protector and
+  // what it's shielding) would wrongly appear ineligible: protection must
+  // be evaluated treating every other id in this batch as already gone,
+  // not just the acting player's own cards.
+  const eligibleCards = resolveEligibleTargets(state, cardData, effect.target, actingCard);
+  const presidentMatches = presidentMatchesSelector(state, effect.target, actingCard);
   const eligibleIds = eligibleCards.map((c) => c.id);
-  if (presidentEligible) eligibleIds.push(PRESIDENT_TARGET_ID);
+  if (presidentMatches) eligibleIds.push(PRESIDENT_TARGET_ID);
 
   validateTargets(effect.target.count, targetIds, eligibleIds);
+
+  if (!bypassProtection) {
+    for (const id of targetIds) {
+      const batchExcluded = targetIds.filter((otherId) => otherId !== id);
+      const legal =
+        id === PRESIDENT_TARGET_ID
+          ? isLegalPresidentTarget(state, cardData, actingPlayerId, false, batchExcluded)
+          : isLegalEliminationTarget(state, cardData, state.cards.find((c) => c.id === id)!, actingPlayerId, batchExcluded);
+      if (!legal) {
+        throw new Error(`${id} is Protected and cannot be targeted for elimination while a protector remains`);
+      }
+    }
+  }
 
   const firstId = targetIds[0]!;
   const locationId = (
