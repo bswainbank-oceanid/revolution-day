@@ -291,13 +291,23 @@ function decideTurnAction(
   rng: Rng,
 ): Action {
   if (state.turn.phase === "draw") return { type: "draw" };
-  if (state.turn.actionsRemaining <= 0) return { type: "endTurn" };
+  if (state.turn.actionsRemaining <= 0 && state.turn.restrictedPlayActions <= 0) return { type: "endTurn" };
+
+  // Puppet-Master's "Play 2 cards" grants restrictedPlayActions, spendable
+  // only on playCard/playMotorcade (see TurnState's own doc comment) —
+  // draw/activateAbility/moveCard can only ever draw from the normal
+  // budget, so once actionsRemaining hits 0 they're gone even with
+  // restricted plays still available.
+  const canSpendNormal = state.turn.actionsRemaining > 0;
+  const canSpendOnPlay = canSpendNormal || state.turn.restrictedPlayActions > 0;
 
   const categories: ["playCard" | "draw" | "activateAbility" | "moveCard", number][] = [];
-  if (hasPlayableHandCard(state, playerId)) categories.push(["playCard", 40]);
-  if (deckHasCards(state)) categories.push(["draw", 30]);
-  if (usableActivateAbilities(state, playerId, cardData, objective).length > 0) categories.push(["activateAbility", 20]);
-  if (hasMovableOwnCard(state, playerId)) categories.push(["moveCard", 10]);
+  if (canSpendOnPlay && hasPlayableHandCard(state, playerId)) categories.push(["playCard", 40]);
+  if (canSpendNormal && deckHasCards(state)) categories.push(["draw", 30]);
+  if (canSpendNormal && usableActivateAbilities(state, playerId, cardData, objective).length > 0) {
+    categories.push(["activateAbility", 20]);
+  }
+  if (canSpendNormal && hasMovableOwnCard(state, playerId)) categories.push(["moveCard", 10]);
 
   // Every category above is gated on the exact same viability check its
   // own decide* function uses, so once offered here it's guaranteed not

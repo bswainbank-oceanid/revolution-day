@@ -103,7 +103,11 @@ export type EffectNode =
   | { readonly verb: "peek"; readonly target: TargetSelector; readonly bind?: string } // private — acting player only
   | { readonly verb: "blend"; readonly target: TargetSelector }
   | { readonly verb: "gainControl"; readonly target: TargetSelector }
-  | { readonly verb: "gainActions"; readonly amount: number }
+  // `restriction: "play"` (Puppet-Master's "Play 2 cards") grants actions
+  // into TurnState.restrictedPlayActions instead of actionsRemaining — a
+  // separate pool only playCard/playMotorcade can spend, matching the
+  // card text's "can only be used to play cards (including Motorcades)".
+  | { readonly verb: "gainActions"; readonly amount: number; readonly restriction?: "play" }
   | { readonly verb: "returnToHand"; readonly target: TargetSelector }
   | { readonly verb: "triggerAlarm"; readonly location: LocationScope }
   // Recurses into the same ability-resolution machinery for the chosen

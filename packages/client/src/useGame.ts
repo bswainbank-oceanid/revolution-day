@@ -52,7 +52,13 @@ interface UseGameResult {
 function computeAutoAction(state: FilteredGameState, humanPlayerId: PlayerId): Action | null {
   if (state.resolutionStack.length === 0) {
     if (state.turn.phase === "draw") return { type: "draw" };
-    if (state.turn.actionsRemaining === 0) return { type: "endTurn" };
+    // Puppet-Master's restricted play-only actions (see TurnState.
+    // restrictedPlayActions) can leave actionsRemaining at 0 while the
+    // player still has real plays available — forcing endTurn here would
+    // silently discard them. The voluntary End Turn button stays
+    // available either way, so a player with nothing left to play (or
+    // who just doesn't want to) isn't stuck — they just click it.
+    if (state.turn.actionsRemaining === 0 && state.turn.restrictedPlayActions === 0) return { type: "endTurn" };
     return null;
   }
   const frame = state.resolutionStack[state.resolutionStack.length - 1]!;

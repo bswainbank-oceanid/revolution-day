@@ -32,6 +32,13 @@ export interface TurnState {
   // Starts at 2 but is a mutable counter effects can increment (Heir
   // Apparent's "gain 2 actions"), not a fixed countdown.
   readonly actionsRemaining: number;
+  // Extra actions that can ONLY pay for playCard/playMotorcade (Puppet-
+  // Master's "Play 2 cards", encoded as gainActions with restriction:
+  // "play") — a separate pool from actionsRemaining so it can't be spent
+  // on draw/move/activateAbility. Spent before actionsRemaining (see
+  // spendPlayAction) since it's otherwise wasted at end of turn; reset to
+  // 0 every turn, same as actionsRemaining itself.
+  readonly restrictedPlayActions: number;
   // null until the President is eliminated, then counts down from 3.
   readonly endgameTurnsRemaining: number | null;
   // "cardId#abilityIndex" keys — backs "each Activate ability can only be

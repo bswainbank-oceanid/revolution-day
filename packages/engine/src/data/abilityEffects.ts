@@ -153,22 +153,17 @@ export const abilityEffects: Record<string, readonly (AbilityDefinition | undefi
     },
   ],
   "Puppet-Master": [
-    // "Play 2 cards" — no faction restriction and, unlike Commander
-    // General/Opposition Leader's explicit "(ignore location
-    // restrictions)", no location override stated either — a judgment
-    // call that normal location-type restrictions apply here (per the
-    // general ruling that only an effect which *specifies* a placement
-    // location gets to ignore them), played at Puppet-Master's own
-    // location like every other unqualified single-location ability.
+    // "Play 2 cards" — granted as two restricted actions (spendable only
+    // on playCard/playMotorcade — see TurnState.restrictedPlayActions)
+    // rather than a single "choose 2 hand cards" declaration: each card
+    // is played individually through the normal turn-action flow, at its
+    // own normal allowed location, the same as any other play — which is
+    // also what makes Motorcades playable here at all (playMotorcade is a
+    // distinct top-level action, not something a `play` effect's
+    // chooseTargets step could ever invoke).
     {
       type: "Activate",
-      effects: [
-        {
-          verb: "play",
-          location: { mode: "self" },
-          target: { ref: "filter", count: { mode: "exact", value: 2 }, selection: "playerChoice" },
-        },
-      ],
+      effects: [{ verb: "gainActions", amount: 2, restriction: "play" }],
     },
     { type: "Activate", effects: [activateRemoteNonLeader()] },
   ],

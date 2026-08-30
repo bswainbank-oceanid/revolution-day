@@ -2442,38 +2442,138 @@ describe("applyAction: remaining card content", () => {
     expect(alarmFrame.locationId).toBe(chosen);
   });
 
-  it("Puppet-Master's 'Play 2 cards' respects normal location-type restrictions", () => {
+  // Regression/redesign: "Play 2 cards" used to be a single chooseTargets
+  // declaration of exactly 2 hand cards, forced to Puppet-Master's own
+  // location — which could never express playing a Motorcade (a distinct
+  // top-level action, not something chooseTargets can invoke) and forced
+  // a location neither the card text nor the general "only an effect
+  // that specifies a placement location ignores normal restrictions"
+  // ruling actually supports. Re-encoded as two restricted actions
+  // (TurnState.restrictedPlayActions) that only playCard/playMotorcade
+  // can spend — each card plays individually, at its own normal location,
+  // through the ordinary turn-action flow.
+  it("grants two restricted actions that pay for playCard without touching the normal budget", () => {
     let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
     const pm = state.cards.find((c) => c.kind === "leader" && c.defRef === "Puppet-Master")!;
     const player = state.turn.currentPlayerId;
     const secureLoc = state.board.find((l) => l.type === "Secure")!.id;
+    const streetLoc = state.board.find((l) => l.type === "Street")!.id;
     state = placeInPlay(state, pm.id, secureLoc, player);
-    const [guard1, guard2] = state.cards.filter((c) => c.defRef === "Republican Guard"); // Secure-only, legal here
-    state = placeInHand(state, guard1!.id, player);
-    state = placeInHand(state, guard2!.id, player);
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!; // Secure-only
+    const soldier = state.cards.find((c) => c.defRef === "Rebel Soldier")!; // Street-only
+    state = placeInHand(state, guard.id, player);
+    state = placeInHand(state, soldier.id, player);
     state = act(state, player, { type: "draw" });
+    const budgetBeforeActivate = state.turn.actionsRemaining;
     state = act(state, player, { type: "activateAbility", cardId: pm.id, abilityIndex: 0 });
+    // gainActions has no targets to choose but still needs the explicit
+    // follow-up submission that actually runs the effect (matching every
+    // other trivial-effect ability) — activateAbility alone only pushes
+    // the pending AbilityResolutionFrame.
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
 
-    const resolved = act(state, player, { type: "chooseTargets", targetIds: [guard1!.id, guard2!.id] });
+    // Activating itself spent one normal action; the ability's own effect
+    // then granted 2 restricted-play actions on top.
+    expect(state.turn.actionsRemaining).toBe(budgetBeforeActivate - 1);
+    expect(state.turn.restrictedPlayActions).toBe(2);
 
-    expect(resolved.cards.find((c) => c.id === guard1!.id)!.zone).toBe("inPlay");
-    expect(resolved.cards.find((c) => c.id === guard2!.id)!.zone).toBe("inPlay");
+    // Each card plays at its OWN normal location — Street, not
+    // Puppet-Master's Secure — proving the old self-location forcing is
+    // gone, and each play draws from the restricted pool, not the normal
+    // budget.
+    state = act(state, player, { type: "playCard", cardId: soldier.id, locationId: streetLoc });
+    expect(state.turn.restrictedPlayActions).toBe(1);
+    expect(state.turn.actionsRemaining).toBe(budgetBeforeActivate - 1);
+    state = act(state, player, { type: "playCard", cardId: guard.id, locationId: secureLoc });
+    expect(state.turn.restrictedPlayActions).toBe(0);
+    expect(state.turn.actionsRemaining).toBe(budgetBeforeActivate - 1);
+
+    expect(state.cards.find((c) => c.id === soldier.id)!.zone).toBe("inPlay");
+    expect(state.cards.find((c) => c.id === guard.id)!.zone).toBe("inPlay");
   });
 
-  it("rejects a Puppet-Master play whose location type doesn't allow the destination", () => {
+  it("still rejects playing a card at a location type it doesn't allow", () => {
     let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
     const pm = state.cards.find((c) => c.kind === "leader" && c.defRef === "Puppet-Master")!;
     const player = state.turn.currentPlayerId;
     const publicLoc = state.board.find((l) => l.type === "Public")!.id;
     state = placeInPlay(state, pm.id, publicLoc, player);
     const guard = state.cards.find((c) => c.defRef === "Republican Guard")!; // Secure-only
-    const soldier = state.cards.find((c) => c.defRef === "Rebel Soldier")!; // Street-only
     state = placeInHand(state, guard.id, player);
-    state = placeInHand(state, soldier.id, player);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: pm.id, abilityIndex: 0 });
+    // gainActions has no targets to choose but still needs the explicit
+    // follow-up submission that actually runs the effect (matching every
+    // other trivial-effect ability) — activateAbility alone only pushes
+    // the pending AbilityResolutionFrame.
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
 
-    expect(() => act(state, player, { type: "chooseTargets", targetIds: [guard.id, soldier.id] })).toThrow();
+    expect(() => act(state, player, { type: "playCard", cardId: guard.id, locationId: publicLoc })).toThrow();
+  });
+
+  it("lets a restricted play action pay for a Motorcade — the whole point of the redesign", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const pm = state.cards.find((c) => c.kind === "leader" && c.defRef === "Puppet-Master")!;
+    const player = state.turn.currentPlayerId;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, pm.id, loc, player);
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    state = placeInHand(state, motorcade.id, player);
+    state = { ...state, players: state.players.map((p) => (p.id === player ? { ...p, hasTakenFirstTurn: true } : p)) };
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: pm.id, abilityIndex: 0 });
+    // gainActions has no targets to choose but still needs the explicit
+    // follow-up submission that actually runs the effect (matching every
+    // other trivial-effect ability) — activateAbility alone only pushes
+    // the pending AbilityResolutionFrame.
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+
+    const resolved = act(state, player, { type: "playMotorcade", cardId: motorcade.id });
+    expect(resolved.turn.restrictedPlayActions).toBe(1);
+    expect(resolved.cards.find((c) => c.id === motorcade.id)!.zone).toBe("discard");
+  });
+
+  it("never lets a restricted play action pay for draw, moveCard, or activateAbility", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const pm = state.cards.find((c) => c.kind === "leader" && c.defRef === "Puppet-Master")!;
+    const player = state.turn.currentPlayerId;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, pm.id, loc, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: pm.id, abilityIndex: 0 });
+    // gainActions has no targets to choose but still needs the explicit
+    // follow-up submission that actually runs the effect (matching every
+    // other trivial-effect ability) — activateAbility alone only pushes
+    // the pending AbilityResolutionFrame.
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+    while (state.turn.actionsRemaining > 0) {
+      state = act(state, player, { type: "draw" });
+    }
+    expect(state.turn.actionsRemaining).toBe(0);
+    expect(state.turn.restrictedPlayActions).toBe(2);
+
+    expect(() => act(state, player, { type: "draw" })).toThrow();
+    expect(() => act(state, player, { type: "moveCard", cardId: pm.id, toLocationId: loc })).toThrow();
+    expect(() => act(state, player, { type: "activateAbility", cardId: pm.id, abilityIndex: 1 })).toThrow();
+  });
+
+  it("discards unused restricted play actions once the turn ends", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const pm = state.cards.find((c) => c.kind === "leader" && c.defRef === "Puppet-Master")!;
+    const player = state.turn.currentPlayerId;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, pm.id, loc, player);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: pm.id, abilityIndex: 0 });
+    // gainActions has no targets to choose but still needs the explicit
+    // follow-up submission that actually runs the effect (matching every
+    // other trivial-effect ability) — activateAbility alone only pushes
+    // the pending AbilityResolutionFrame.
+    state = act(state, player, { type: "chooseTargets", targetIds: [] });
+    expect(state.turn.restrictedPlayActions).toBe(2);
+
+    state = act(state, player, { type: "endTurn" });
+    expect(state.turn.restrictedPlayActions).toBe(0);
   });
 
   it("Journalist peeks without publicly revealing the card", () => {

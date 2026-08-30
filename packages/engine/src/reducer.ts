@@ -231,6 +231,28 @@ function spendAction(state: GameState): GameState["turn"] {
   return { ...state.turn, actionsRemaining: state.turn.actionsRemaining - 1 };
 }
 
+// playCard/playMotorcade specifically can also be paid for out of
+// restrictedPlayActions (Puppet-Master's "Play 2 cards") on top of the
+// normal budget — requireBudgetedAction/spendAction alone would reject a
+// play once actionsRemaining hits 0 even with restricted plays still
+// available, or would silently spend a normal action instead of the
+// restricted one that's otherwise wasted at end of turn.
+function requirePlayAction(state: GameState): void {
+  if (state.turn.phase !== "action") {
+    throw new Error("Cannot take an action outside the action phase");
+  }
+  if (state.turn.restrictedPlayActions <= 0 && state.turn.actionsRemaining <= 0) {
+    throw new Error("No actions remaining this turn");
+  }
+}
+
+function spendPlayAction(state: GameState): GameState["turn"] {
+  if (state.turn.restrictedPlayActions > 0) {
+    return { ...state.turn, restrictedPlayActions: state.turn.restrictedPlayActions - 1 };
+  }
+  return spendAction(state);
+}
+
 function applyDraw(state: GameState): GameState {
   const deckIndex = state.cards.findIndex((c) => c.zone === "deck");
   if (deckIndex === -1) {
@@ -322,6 +344,7 @@ function applyEndTurn(state: GameState): GameState {
       currentPlayerId: nextPlayerId,
       phase: "draw",
       actionsRemaining: 2,
+      restrictedPlayActions: 0,
       endgameTurnsRemaining,
       usedAbilities: [],
     },
@@ -371,7 +394,7 @@ function applyPlayCard(
   cardData: CardData,
   action: Extract<Action, { type: "playCard" }>,
 ): GameState {
-  requireBudgetedAction(state);
+  requirePlayAction(state);
 
   const cardIndex = state.cards.findIndex((c) => c.id === action.cardId);
   if (cardIndex === -1) {
@@ -405,14 +428,14 @@ function applyPlayCard(
     i === cardIndex ? { ...c, zone: "inPlay" as const, locationId: action.locationId, faceUp } : c,
   );
 
-  return { ...state, cards, turn: spendAction(state) };
+  return { ...state, cards, turn: spendPlayAction(state) };
 }
 
 function applyPlayMotorcade(
   state: GameState,
   action: Extract<Action, { type: "playMotorcade" }>,
 ): GameState {
-  requireBudgetedAction(state);
+  requirePlayAction(state);
 
   const currentPlayerId = state.turn.currentPlayerId;
   const player = state.players.find((p) => p.id === currentPlayerId)!;
@@ -427,7 +450,7 @@ function applyPlayMotorcade(
     action.moveOwnCardId,
     action.moveToLocationId,
   );
-  return { ...state, cards, president, resolutionStack, turn: spendAction(state) };
+  return { ...state, cards, president, resolutionStack, turn: spendPlayAction(state) };
 }
 
 // The actual "play a Motorcade" mechanic — discard it, then move the
@@ -1012,7 +1035,10 @@ function applyGainActionsEffect(
   if (targetIds.length > 0) {
     throw new Error("This effect has no targets to choose");
   }
-  const turn = { ...state.turn, actionsRemaining: state.turn.actionsRemaining + effect.amount };
+  const turn =
+    effect.restriction === "play"
+      ? { ...state.turn, restrictedPlayActions: state.turn.restrictedPlayActions + effect.amount }
+      : { ...state.turn, actionsRemaining: state.turn.actionsRemaining + effect.amount };
   return finishEffectStep({ ...state, turn }, frame);
 }
 

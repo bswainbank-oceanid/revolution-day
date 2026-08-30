@@ -295,7 +295,7 @@ h3 {
 }
 .city-tile-image img {
   width: 100%;
-  max-height: 200px;
+  max-height: 190px;
   object-fit: cover;
   border-radius: 4px;
   display: block;
@@ -326,7 +326,7 @@ h3 {
   border-radius: 3px;
 }
 .city-president-marker {
-  width: 18px;
+  width: 72px;
   border-radius: 2px;
 }
 /* .city-tile-image img's own width/max-height rule has higher
@@ -336,9 +336,10 @@ h3 {
    it wins. */
 .city-tile-image .city-president-on-tile {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 12px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
   max-height: none;
 }
 .city-president-clickable {
@@ -364,25 +365,31 @@ h3 {
 }
 .city-offboard {
   position: absolute;
-  left: -58px;
-  top: 40%;
+  left: -76px;
+  top: 95px;
+  transform: translateY(-50%);
   text-align: center;
   font-size: 0.6rem;
-  width: 50px;
+  width: 72px;
 }
 .city-offboard-right {
   left: auto;
-  right: -58px;
+  right: -76px;
 }
 
 .location-view-bg {
   cursor: pointer;
+  /* Safety net, not the normal case: if a location ever has enough
+     stacked player clusters that the grid's content genuinely needs more
+     than the 85% height below the heading, this pane scrolls instead of
+     silently clipping cards against region-center's own overflow:hidden. */
+  overflow-y: auto;
 }
 .location-view-grid {
   display: grid;
   grid-template-columns: 1fr 2fr 1fr;
   grid-template-rows: auto auto auto;
-  gap: 0.5rem;
+  gap: 0;
   height: 85%;
   cursor: default;
 }
@@ -398,7 +405,7 @@ h3 {
 }
 .location-image-wrap img {
   max-width: 100%;
-  max-height: 260px;
+  max-height: 416px;
   border-radius: 6px;
 }
 .location-image-drop-target img {
@@ -442,7 +449,7 @@ h3 {
   display: inline-block;
 }
 .mini-card {
-  width: 46px;
+  width: 92px;
   border: 2px solid;
   border-radius: 3px;
   display: block;
@@ -519,7 +526,7 @@ h3 {
   gap: 0.5rem;
 }
 .hand-strip-card {
-  width: 60px;
+  width: 150px;
   border-radius: 3px;
 }
 .hand-strip-card-clickable {
@@ -548,6 +555,10 @@ h3 {
   font-size: 1.8rem;
   font-weight: 700;
   margin: 0;
+  color: var(--gold);
+}
+.restricted-play-actions {
+  margin: 0.2rem 0 0;
   color: var(--gold);
 }
 .actions-box button {

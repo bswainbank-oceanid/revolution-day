@@ -1,5 +1,6 @@
 import type { FilteredCardInstance, FilteredGameState, PlayerId } from "@rev-day/engine";
 import { cardArtUrl } from "./art";
+import { playerColor } from "./players";
 import type { ActiveCardPick } from "./useTargetSelection";
 
 interface HandStripProps {
@@ -17,9 +18,10 @@ interface HandStripProps {
 
 export function HandStrip({ state, playerId, onSelectCard, canDrag, onDragStart, onDragEnd, cardPick, pickModeActive }: HandStripProps) {
   const hand = state.cards.filter((c) => c.zone === "hand" && c.controller === playerId);
+  const seatIndex = state.players.find((p) => p.id === playerId)?.seatIndex ?? 0;
   return (
     <div className="hand-strip">
-      <h3 style={{ color: "var(--marker-crimson)" }}>YOUR HAND</h3>
+      <h3 style={{ color: playerColor(seatIndex) }}>YOUR HAND</h3>
       <div className="hand-strip-cards">
         {hand.length === 0 && <p className="hint">Empty</p>}
         {hand.map((card) => {

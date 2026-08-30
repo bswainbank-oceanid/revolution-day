@@ -152,11 +152,16 @@ function App() {
   // player's first turn).
   const canTakeTurnAction = state.resolutionStack.length === 0 && state.turn.phase === "action";
   const hasTakenFirstTurn = state.players.find((p) => p.id === humanPlayerId)?.hasTakenFirstTurn ?? false;
+  // A hand card (played via playCard/playMotorcade) can spend either the
+  // normal budget or Puppet-Master's restricted play-only actions; an
+  // in-play card (moved via moveCard) can only ever spend the normal
+  // budget — restrictedPlayActions never pays for a move.
+  const canPlayAction = state.turn.actionsRemaining > 0 || state.turn.restrictedPlayActions > 0;
   const canDrag = (card: FilteredCardInstance): boolean =>
     !interactionLocked &&
     !pickActive &&
     canTakeTurnAction &&
-    state.turn.actionsRemaining > 0 &&
+    (card.zone === "hand" ? canPlayAction : state.turn.actionsRemaining > 0) &&
     card.controller === humanPlayerId &&
     card.defRef !== null &&
     (card.kind !== "motorcade" || hasTakenFirstTurn) &&

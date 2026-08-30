@@ -71,6 +71,9 @@ export function ActionsBox({ state, onAct, disabled, selection, isPlaying }: Act
     <div className="actions-box">
       <p className="actions-remaining-label">ACTIONS REMAINING</p>
       <p className="actions-remaining-count">{state.turn.actionsRemaining}</p>
+      {state.turn.restrictedPlayActions > 0 && (
+        <p className="hint restricted-play-actions">+{state.turn.restrictedPlayActions} play-only</p>
+      )}
       <button type="button" disabled={disabled || !canDraw} onClick={() => onAct({ type: "draw" })}>
         Draw
       </button>

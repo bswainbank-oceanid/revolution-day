@@ -15,7 +15,7 @@
   transform-origin: center center;
   display: grid;
   grid-template-columns: 480px 1180px 260px;
-  grid-template-rows: 175px 715px 190px;
+  grid-template-rows: 175px 655px 250px;
   grid-template-areas:
     "ribbon ribbon ribbon"
     "left center right"
@@ -47,4 +47,5 @@
 .region-bottom {
   overflow: hidden;
   box-sizing: border-box;
+  border: 2px solid var(--border-white);
 }

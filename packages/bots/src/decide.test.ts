@@ -49,6 +49,31 @@ describe("decideBotAction: top-level turn actions", () => {
     const action = decideBotAction(filtered, player, cardData, zero);
     expect(["playCard", "playMotorcade", "endTurn"]).toContain(action.type); // depends on what's in hand
   });
+
+  // Regression: Puppet-Master's "Play 2 cards" grants restrictedPlayActions
+  // (TurnState), spendable only on playCard/playMotorcade — the top-level
+  // category selection needs to know actionsRemaining and
+  // restrictedPlayActions gate different things, or a bot with 0 normal
+  // actions left would either end its turn early (discarding real plays
+  // still available) or try to draw/activate/move with a budget that
+  // can't pay for any of those.
+  it("keeps playing hand cards from restricted actions even with no normal actions left", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const player = state.turn.currentPlayerId;
+    state = {
+      ...state,
+      turn: { ...state.turn, phase: "action", actionsRemaining: 0, restrictedPlayActions: 2 },
+    };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(["playCard", "playMotorcade", "endTurn"]).toContain(action.type); // depends on what's in hand
+      expect(action.type).not.toBe("draw");
+      expect(action.type).not.toBe("activateAbility");
+      expect(action.type).not.toBe("moveCard");
+    }
+  });
 });
 
 describe("decideBotAction: eliminate targeting", () => {

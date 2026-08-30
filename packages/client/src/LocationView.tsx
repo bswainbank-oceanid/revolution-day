@@ -131,9 +131,13 @@ export function LocationView({
         <Seat {...seatProps} seat="bl" playerIds={seats.get("bl") ?? []} />
         <div />
         <Seat {...seatProps} seat="br" playerIds={seats.get("br") ?? []} />
-        <div />
+        {/* bottomCenter's own grid-column:1/4 spans the whole row on its
+            own — no filler cells needed here, and adding any would push
+            it into a phantom extra row (auto-placement fills row 3's
+            first cell before reaching this spanning item), adding dead
+            vertical space between the location image and the cards
+            below it. */}
         <Seat {...seatProps} seat="bottomCenter" playerIds={seats.get("bottomCenter") ?? []} />
-        <div />
       </div>
     </div>
   );
