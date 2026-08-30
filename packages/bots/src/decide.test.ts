@@ -84,6 +84,49 @@ describe("decideBotAction: eliminate targeting", () => {
     }
   });
 
+  // Regression: eliminateCandidatePool (shared by bots and the client)
+  // only applied the selector's own kind/faction/location/etc. filters via
+  // candidateInPlayCards, never Protected-immunity — so a genuinely
+  // shielded card would still show up as a legal candidate here, and a
+  // real submission targeting it would be rejected by the engine's own
+  // declareEliminateTargets (which does apply it). Bots silently retried
+  // past this (takeBotTurn.ts), masking it — a human client submitting
+  // the same choice would get permanently stuck with no legal way to
+  // recover. isLegalEliminationTargetFiltered closes this gap.
+  it("excludes a Protected card from the eliminate candidate pool while a same-faction protector shields it", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]); // 8 players — Head of Security guaranteed dealt
+    const guard = findByDefRef(state, "Republican Guard");
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const target = state.cards.find((c) => c.kind === "leader" && c.defRef === "Head of Security")!;
+    const protector = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen" && c.id !== guard.id,
+    )!;
+    state = place(state, guard.id, loc, player);
+    state = place(state, target.id, loc, other);
+    state = place(state, protector.id, loc, other); // Regime, non-Protected — shields target
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: guard.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).toMatchObject({ type: "chooseTargets" });
+      const targetIds = (action as { targetIds: readonly string[] }).targetIds;
+      expect(targetIds).not.toContain(target.id);
+    }
+  });
+
   // Regression: eliminate targeting used to fall back to the acting
   // player's own cards when no opposing candidate existed ("no opposing
   // candidate exists — fall back to whatever's legal") — the user
@@ -103,9 +146,13 @@ describe("decideBotAction: eliminate targeting", () => {
     state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
     const filtered = filterForPlayer(state, player);
 
-    const forceActivateAbility: Rng = () => 0.8; // see the Traffic Cop/Wife tests below for why
-    const action = decideBotAction(filtered, player, cardData, forceActivateAbility);
-    expect(action).toEqual({ type: "endTurn" });
+    // Guard's ability has no legal target here, so it's excluded from the
+    // usable-ability pool entirely — decideTurnAction never even offers
+    // "activateAbility" as a category, regardless of the random roll.
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).not.toMatchObject({ type: "activateAbility", cardId: guard.id });
+    }
   });
 
   it("Wife always targets the President (the only candidate her ability offers)", () => {
@@ -141,7 +188,14 @@ describe("decideBotAction: prefers eliminate-capable options", () => {
     const assassin = findByDefRef(state, "Master Assassin");
     const player = assassin.controller ?? state.turn.currentPlayerId;
     const loc = state.board[0]!.id;
+    // An eliminate-capable target must actually be present, or ability
+    // index 1 (eliminate+blend) is correctly excluded as unusable and
+    // index 0 (returnToHand+play) becomes the only real option — this
+    // needs a genuine choice between the two to test the preference.
+    const target = state.cards.filter((c) => c.defRef === "Prominent Citizen")[0]!;
+    const other = state.players.find((p) => p.id !== player)!.id;
     state = place(state, assassin.id, loc, player);
+    state = place(state, target.id, loc, other);
     state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
     const filtered = filterForPlayer(state, player);
 
@@ -189,10 +243,16 @@ describe("decideBotAction: avoids abilities with no legal way to complete", () =
   // cause as Head of Security's activateRemote with an empty candidate
   // pool — abilityHasAvailableFirstTarget must catch both.
   //
-  // pickWeighted's ["activateAbility", 20] band sits at roll 70-90 out of
-  // 100 (after playCard 0-40 and draw 40-70) — rng()=0.8 lands there
-  // deterministically; with only Traffic Cop in play, every subsequent
-  // pickRandom/pickN call also resolves deterministically off a pool of 1.
+  // decideTurnAction only ever offers "activateAbility" as a category when
+  // some own in-play card actually has a usable ability (see
+  // usableActivateAbilities) — with only one card in play and its sole
+  // ability excluded, "activateAbility" is never offered at all, so
+  // rng()=0.8 reliably lands on whichever categories remain (draw, etc.),
+  // never on the excluded ability. When it IS legally usable, all four
+  // categories are back to the original 40/30/20/10 split (playCard 0-40,
+  // draw 40-70, activateAbility 70-90, moveCard 90-100), so 0.8 still
+  // deterministically lands on "activateAbility" for the "does activate"
+  // tests below.
   const forceActivateAbility: Rng = () => 0.8;
 
   it("never activates Traffic Cop's move ability when the President isn't at its location", () => {
@@ -206,10 +266,10 @@ describe("decideBotAction: avoids abilities with no legal way to complete", () =
     // Cop's "move him from this location" can never be legally completed.
     const filtered = filterForPlayer(state, player);
 
-    const action = decideBotAction(filtered, player, cardData, forceActivateAbility);
-    // Traffic Cop is the only card in play, so if its ability were wrongly
-    // deemed usable it would be the one chosen; excluded, nothing is left.
-    expect(action).toEqual({ type: "endTurn" });
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).not.toMatchObject({ type: "activateAbility", cardId: trafficCop.id });
+    }
   });
 
   it("does activate Traffic Cop when the President is actually at its location", () => {
@@ -242,8 +302,10 @@ describe("decideBotAction: avoids abilities with no legal way to complete", () =
     state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
     const filtered = filterForPlayer(state, player);
 
-    const action = decideBotAction(filtered, player, cardData, forceActivateAbility);
-    expect(action).toEqual({ type: "endTurn" });
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).not.toMatchObject({ type: "activateAbility", cardId: wife.id });
+    }
   });
 
   it("does activate Wife's ability while she's at the President's location", () => {
@@ -349,7 +411,9 @@ describe("decideBotAction: avoids abilities with no legal way to complete", () =
     state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
     const filtered = filterForPlayer(state, player);
 
-    const action = decideBotAction(filtered, player, cardData, forceActivateAbility);
-    expect(action).toEqual({ type: "endTurn" });
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).not.toMatchObject({ type: "activateAbility", cardId: wife.id });
+    }
   });
 });

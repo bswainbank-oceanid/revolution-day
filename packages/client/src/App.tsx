@@ -199,6 +199,7 @@ function App() {
       ribbon={<TurnRibbon state={state} humanPlayerId={humanPlayerId} botPlayerIds={botPlayerIds} log={log} />}
       left={
         <>
+          {error && <p className="error in-game-error">{error}</p>}
           <CardViewer
             card={viewedCard}
             controllerLabel={controllerLabel}

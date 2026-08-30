@@ -23,6 +23,7 @@ import {
   cardData,
   getAbilities,
   getAbilityEffects,
+  isLegalEliminationTargetFiltered,
   presidentIsLegalTarget,
   presidentMatchesSelectorFiltered,
   presidentPseudoCard,
@@ -62,10 +63,13 @@ function eliminateCandidatePool(
   effect: Extract<EffectNode, { verb: "eliminate" }>,
 ): FilteredCardInstance[] {
   if (effect.target.ref !== "filter") return [];
-  const realCards = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+  const bypassProtection = effect.ignoreProtected ?? false;
+  const realCards = candidateInPlayCards(state, cardData, effect.target, sourceCard).filter(
+    (c) => bypassProtection || isLegalEliminationTargetFiltered(state, cardData, c, actingPlayerId),
+  );
   const presidentEligible =
     presidentMatchesSelectorFiltered(state, effect.target, sourceCard) &&
-    presidentIsLegalTarget(state, cardData, actingPlayerId, effect.ignoreProtected ?? false, true);
+    presidentIsLegalTarget(state, cardData, actingPlayerId, bypassProtection, true);
   return presidentEligible ? [...realCards, presidentPseudoCard(state)] : realCards;
 }
 

@@ -141,6 +141,38 @@ function isProtectedActiveFiltered(cardData: CardData, card: FilteredCardInstanc
   return !hasAttribute(cardData, instance, "Blend") || card.faceUp === true;
 }
 
+// A filtered-state-aware mirror of the engine's own isLegalEliminationTarget
+// (effects/targeting.ts) — "cannot be targeted for elimination while there
+// are other cards in the same faction at the location" (cards the acting
+// player controls never count; a Protected character isn't protected by
+// another Protected character). candidateInPlayCards only applies a
+// selector's own kind/faction/location/etc. filters, not this — without
+// it, a genuinely-shielded card would still render as a clickable/
+// highlighted candidate client-side, and a real submission targeting it
+// would be silently rejected by the server (declareEliminateTargets does
+// apply this), leaving the picker stuck with no visible feedback (bots
+// don't hit this visibly since takeBotTurn retries on rejection; a human
+// has no such retry).
+export function isLegalEliminationTargetFiltered(
+  state: FilteredGameState,
+  cardData: CardData,
+  target: FilteredCardInstance,
+  actingPlayerId: string | null,
+): boolean {
+  if (!isProtectedActiveFiltered(cardData, target)) return true;
+  const targetFaction = knownFaction(cardData, target);
+  if (!targetFaction) return true;
+  return !state.cards.some(
+    (c) =>
+      c.id !== target.id &&
+      c.zone === "inPlay" &&
+      c.locationId === target.locationId &&
+      c.controller !== actingPlayerId &&
+      knownFaction(cardData, c) === targetFaction &&
+      !isProtectedActiveFiltered(cardData, c),
+  );
+}
+
 // A filtered-state-aware mirror of the engine's own isLegalPresidentTarget
 // (effects/targeting.ts) — needed because a naive "the President sentinel
 // is always a legal candidate" assumption is wrong whenever his status

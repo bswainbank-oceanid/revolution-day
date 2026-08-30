@@ -6,6 +6,7 @@ import {
   getAbilities,
   getAbilityEffects,
   getPassive,
+  isLegalEliminationTargetFiltered,
   knownFaction,
   presidentIsLegalTarget,
   presidentMatchesSelectorFiltered,
@@ -99,10 +100,13 @@ function eliminateCandidatePool(
   effect: Extract<EffectNode, { verb: "eliminate" }>,
 ): FilteredCardInstance[] {
   if (effect.target.ref !== "filter") return [];
-  const realCards = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+  const bypassProtection = effect.ignoreProtected ?? false;
+  const realCards = candidateInPlayCards(state, cardData, effect.target, sourceCard).filter(
+    (c) => bypassProtection || isLegalEliminationTargetFiltered(state, cardData, c, actingPlayerId),
+  );
   const presidentEligible =
     presidentMatchesSelectorFiltered(state, effect.target, sourceCard) &&
-    presidentIsLegalTarget(state, cardData, actingPlayerId, effect.ignoreProtected ?? false, true);
+    presidentIsLegalTarget(state, cardData, actingPlayerId, bypassProtection, true);
   return presidentEligible ? [...realCards, presidentPseudoCard(state)] : realCards;
 }
 
@@ -204,6 +208,72 @@ function requiredMinCount(count: TargetCount): number {
 
 // --- Top-level turn actions (resolution stack empty) ---
 
+// Whether decidePlayCardOrMotorcade could actually play this specific hand
+// card right now — the one real dead end being a Motorcade once the
+// President is already eliminated, which additionally needs an own
+// in-play card to relocate. Shared between the viability check below and
+// the real decision so the two can never drift apart (a mismatch there
+// previously caused bots to end their turn early: decideTurnAction would
+// weight-pick "playCard" whenever the hand was non-empty, but
+// decidePlayCardOrMotorcade could still independently bail to endTurn on
+// an unplayable card it happened to randomly land on, even with other
+// actions still available and other, playable cards still in hand).
+function isHandCardPlayable(state: FilteredGameState, playerId: PlayerId, card: FilteredCardInstance): boolean {
+  if (state.board.length === 0) return false;
+  if (card.kind !== "motorcade") return true;
+  if (state.president.status !== "eliminated") return true;
+  return state.cards.some((c) => c.zone === "inPlay" && c.controller === playerId);
+}
+
+function hasPlayableHandCard(state: FilteredGameState, playerId: PlayerId): boolean {
+  return state.cards.some(
+    (c) => c.zone === "hand" && c.controller === playerId && isHandCardPlayable(state, playerId, c),
+  );
+}
+
+function deckHasCards(state: FilteredGameState): boolean {
+  return state.cards.some((c) => c.zone === "deck");
+}
+
+function hasMovableOwnCard(state: FilteredGameState, playerId: PlayerId): boolean {
+  return state.cards.some(
+    (c) =>
+      c.zone === "inPlay" &&
+      c.controller === playerId &&
+      c.locationId &&
+      adjacentLocationIds(state.board, c.locationId).length > 0,
+  );
+}
+
+// Every currently-usable Activate ability across ALL of this player's
+// in-play cards — shared between the viability check and the real
+// decision for the same reason as isHandCardPlayable above.
+// decideActivateAbility previously picked one random own card and gave up
+// entirely if *that* card had nothing usable, even when a different own
+// card did.
+function usableActivateAbilities(
+  state: FilteredGameState,
+  playerId: PlayerId,
+  cardData: CardData,
+  objective: PresidentObjective,
+): { card: FilteredCardInstance; abilityIndex: number }[] {
+  const ownInPlay = state.cards.filter((c) => c.zone === "inPlay" && c.controller === playerId && c.defRef !== null);
+  const result: { card: FilteredCardInstance; abilityIndex: number }[] = [];
+  for (const card of ownInPlay) {
+    const instance = asCardInstance(card)!;
+    for (const [abilityIndex, ability] of getAbilities(cardData, instance).entries()) {
+      if (ability.type !== "Activate") continue;
+      if (state.turn.usedAbilities.includes(`${card.id}#${abilityIndex}`)) continue;
+      const def = getAbilityEffects(instance.defRef, abilityIndex);
+      if (!def) continue;
+      if (objective === "protect" && abilityTargetsPresident(def)) continue;
+      if (!abilityHasAvailableFirstTarget(state, cardData, card, def, playerId)) continue;
+      result.push({ card, abilityIndex });
+    }
+  }
+  return result;
+}
+
 function decideTurnAction(
   state: FilteredGameState,
   playerId: PlayerId,
@@ -214,13 +284,20 @@ function decideTurnAction(
   if (state.turn.phase === "draw") return { type: "draw" };
   if (state.turn.actionsRemaining <= 0) return { type: "endTurn" };
 
-  const category = pickWeighted(rng, [
-    ["playCard", 40],
-    ["draw", 30],
-    ["activateAbility", 20],
-    ["moveCard", 10],
-  ] as const);
+  const categories: ["playCard" | "draw" | "activateAbility" | "moveCard", number][] = [];
+  if (hasPlayableHandCard(state, playerId)) categories.push(["playCard", 40]);
+  if (deckHasCards(state)) categories.push(["draw", 30]);
+  if (usableActivateAbilities(state, playerId, cardData, objective).length > 0) categories.push(["activateAbility", 20]);
+  if (hasMovableOwnCard(state, playerId)) categories.push(["moveCard", 10]);
 
+  // Every category above is gated on the exact same viability check its
+  // own decide* function uses, so once offered here it's guaranteed not
+  // to bail to endTurn on its own — nothing viable at all (empty hand,
+  // empty deck, no usable ability, no movable card) is the only real
+  // reason left to end the turn early.
+  if (categories.length === 0) return { type: "endTurn" };
+
+  const category = pickWeighted(rng, categories);
   switch (category) {
     case "draw":
       return { type: "draw" };
@@ -234,33 +311,37 @@ function decideTurnAction(
 }
 
 function decidePlayCardOrMotorcade(state: FilteredGameState, playerId: PlayerId, rng: Rng): Action {
-  const hand = state.cards.filter((c) => c.zone === "hand" && c.controller === playerId);
+  const hand = state.cards.filter(
+    (c) => c.zone === "hand" && c.controller === playerId && isHandCardPlayable(state, playerId, c),
+  );
   const card = pickRandom(rng, hand);
   if (!card) return { type: "endTurn" };
 
   if (card.kind === "motorcade") {
     if (state.president.status === "eliminated") {
       const ownInPlay = state.cards.filter((c) => c.zone === "inPlay" && c.controller === playerId);
-      const moving = pickRandom(rng, ownInPlay);
-      const location = pickRandom(rng, state.board);
-      if (!moving || !location) return { type: "endTurn" };
+      const moving = pickRandom(rng, ownInPlay)!; // guaranteed non-empty by isHandCardPlayable
+      const location = pickRandom(rng, state.board)!; // guaranteed non-empty by isHandCardPlayable
       return { type: "playMotorcade", cardId: card.id, moveOwnCardId: moving.id, moveToLocationId: location.id };
     }
     return { type: "playMotorcade", cardId: card.id };
   }
 
-  const location = pickRandom(rng, state.board);
-  if (!location) return { type: "endTurn" };
+  const location = pickRandom(rng, state.board)!; // guaranteed non-empty by isHandCardPlayable
   return { type: "playCard", cardId: card.id, locationId: location.id };
 }
 
 function decideMoveCard(state: FilteredGameState, playerId: PlayerId, rng: Rng): Action {
-  const ownInPlay = state.cards.filter((c) => c.zone === "inPlay" && c.controller === playerId);
-  const card = pickRandom(rng, ownInPlay);
+  const movable = state.cards.filter(
+    (c) =>
+      c.zone === "inPlay" &&
+      c.controller === playerId &&
+      c.locationId &&
+      adjacentLocationIds(state.board, c.locationId).length > 0,
+  );
+  const card = pickRandom(rng, movable);
   if (!card?.locationId) return { type: "endTurn" };
-  const adjacent = adjacentLocationIds(state.board, card.locationId);
-  const toLocationId = pickRandom(rng, adjacent);
-  if (!toLocationId) return { type: "endTurn" };
+  const toLocationId = pickRandom(rng, adjacentLocationIds(state.board, card.locationId))!;
   return { type: "moveCard", cardId: card.id, toLocationId };
 }
 
@@ -271,29 +352,14 @@ function decideActivateAbility(
   objective: PresidentObjective,
   rng: Rng,
 ): Action {
-  const ownInPlay = state.cards.filter((c) => c.zone === "inPlay" && c.controller === playerId && c.defRef !== null);
-  const card = pickRandom(rng, ownInPlay);
-  if (!card) return { type: "endTurn" };
-  const instance = asCardInstance(card)!;
-
-  const usable = getAbilities(cardData, instance)
-    .map((ability, abilityIndex) => ({ ability, abilityIndex }))
-    .filter(({ ability, abilityIndex }) => {
-      if (ability.type !== "Activate") return false;
-      if (state.turn.usedAbilities.includes(`${card.id}#${abilityIndex}`)) return false;
-      const def = getAbilityEffects(instance.defRef, abilityIndex);
-      if (!def) return false;
-      if (objective === "protect" && abilityTargetsPresident(def)) return false;
-      if (!abilityHasAvailableFirstTarget(state, cardData, card, def, playerId)) return false;
-      return true;
-    });
+  const usable = usableActivateAbilities(state, playerId, cardData, objective);
   if (usable.length === 0) return { type: "endTurn" };
 
-  const eliminateCapable = usable.filter(
-    ({ abilityIndex }) => abilityHasEliminateEffect(getAbilityEffects(instance.defRef, abilityIndex)!),
+  const eliminateCapable = usable.filter(({ card, abilityIndex }) =>
+    abilityHasEliminateEffect(getAbilityEffects(card.defRef!, abilityIndex)!),
   );
   const chosen = pickRandom(rng, eliminateCapable.length > 0 ? eliminateCapable : usable)!;
-  return { type: "activateAbility", cardId: card.id, abilityIndex: chosen.abilityIndex };
+  return { type: "activateAbility", cardId: chosen.card.id, abilityIndex: chosen.abilityIndex };
 }
 
 // --- AbilityResolutionFrame: chooseTargets ---

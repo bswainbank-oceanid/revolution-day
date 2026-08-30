@@ -69,6 +69,7 @@ export {
   presidentIsLegalTarget,
   presidentMatchesSelectorFiltered,
   presidentPseudoCard,
+  isLegalEliminationTargetFiltered,
 } from "./effects/filteredTargeting";
 
 import { cardData } from "./data/cardData";
