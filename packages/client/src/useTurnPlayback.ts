@@ -211,16 +211,19 @@ function buildBeats(
       chainStack.push({ baseline: priorLen, initiatorCardId: entryInitiatorCardId });
     }
 
-    // A fresh turn boundary into the human's own turn: reset the Card
-    // Viewer to their Leader and the camera to City View, as the very last
-    // beat for this entry so it structurally wins over everything
-    // narrated before it. Skipped for i === 0 — the very first log entry
-    // never synthesizes this; initial load already starts here anyway.
+    // A fresh turn boundary into the human's own turn: reset the camera to
+    // City View, as the very last beat for this entry so it structurally
+    // wins over everything narrated before it. The Card Viewer itself is
+    // deliberately left alone here — it keeps showing whatever was most
+    // recently played/acting (viewerCardId: null means "no override", see
+    // playbackViewerCardId below), not reset back to the Leader. Skipped
+    // for i === 0 — the very first log entry never synthesizes this;
+    // initial load already starts on the Leader anyway (App.tsx's own
+    // fallback, before anything has ever been shown).
     const priorCurrentPlayerId = i > 0 ? log[i - 1]!.resultingState.turn.currentPlayerId : null;
     const newCurrentPlayerId = entry.resultingState.turn.currentPlayerId;
     if (i > 0 && priorCurrentPlayerId !== humanPlayerId && newCurrentPlayerId === humanPlayerId) {
-      const leaderCard = entry.resultingState.cards.find((c) => c.kind === "leader" && c.controller === humanPlayerId);
-      beats.push({ entryIndex: i, viewerCardId: leaderCard?.id ?? null, cameraTarget: { kind: "city" }, caption: null });
+      beats.push({ entryIndex: i, viewerCardId: null, cameraTarget: { kind: "city" }, caption: null });
       turnStartCount++;
     }
   }

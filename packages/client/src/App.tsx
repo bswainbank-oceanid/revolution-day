@@ -71,19 +71,26 @@ function App() {
   );
 
   // A fresh turn boundary into the human's own turn (see useTurnPlayback's
-  // own detection): reset the resting view state — Card Viewer selection
-  // and camera — to match what the last playback beat for that boundary
-  // already showed (Leader + City View), so nothing flickers back to
-  // whatever was being browsed before once playback settles.
+  // own detection): reset the camera to City View. The Card Viewer is
+  // deliberately left alone — it keeps showing whatever was most recently
+  // played/acting (see the sync effect below), not the Leader.
   useEffect(() => {
     if (playback.turnStartSignal === 0) return;
-    setViewedCardId(null);
     goToCity();
     // Fire only when a new turn-start boundary is detected, not on every
     // render — goToCity's identity is stable (useCallback) but included
     // for clarity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playback.turnStartSignal]);
+
+  // Keep the Card Viewer's resting selection in sync with whatever
+  // playback is currently narrating, so that once a beat sequence finishes
+  // (playbackViewerCardId reverts to null, deferring back to viewedCardId)
+  // it lands on the most recently played/acting card instead of falling
+  // through to the Leader default.
+  useEffect(() => {
+    if (playback.playbackViewerCardId) setViewedCardId(playback.playbackViewerCardId);
+  }, [playback.playbackViewerCardId]);
 
   const selectCard = useCallback(
     (card: FilteredCardInstance) => {
