@@ -497,6 +497,60 @@ describe("applyAction: forced leader play", () => {
 
     expect(() => act(state, player, { type: "endTurn" })).not.toThrow();
   });
+
+  // Redesign: the obligation only forces play *when there's an action to
+  // spend on it* — once you're out, you're free to end your turn like
+  // normal, and the leader just carries over, stuck, into your next turn.
+  it("allows ending the turn once out of actions, leaving the leader stuck for next turn", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    state = { ...state, president: { status: "eliminated", locationId: null } };
+    state = act(state, player, { type: "draw" });
+    // Spend down to 0 actions on something other than the leader.
+    while (state.turn.actionsRemaining > 0) state = act(state, player, { type: "draw" });
+    expect(state.turn.actionsRemaining).toBe(0);
+
+    const leader = state.cards.find((c) => c.kind === "leader" && c.controller === player)!;
+    expect(leader.zone).toBe("hand"); // still stuck
+
+    expect(() => act(state, player, { type: "endTurn" })).not.toThrow();
+  });
+
+  // Master Assassin's own ability ("Return this card to its controller's
+  // hand and play a card") can put a leader back in hand *mid-turn* — the
+  // check has to be re-derived from current state on every action, not
+  // just once at turn start, or this slips through unnoticed.
+  it("re-detects a leader returned to hand mid-turn by its own ability (Master Assassin)", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const ma = state.cards.find((c) => c.defRef === "Master Assassin")!;
+    const loc = state.board[0]!.id;
+    // Whatever leader was actually dealt to `player` would otherwise also
+    // count as a stuck leader in their hand once the President dies —
+    // reassign it away so Master Assassin is unambiguously the only one.
+    const dealtLeader = state.cards.find((c) => c.kind === "leader" && c.controller === player && c.id !== ma.id)!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInHand(state, dealtLeader.id, other);
+    state = placeInPlay(state, ma.id, loc, player);
+    state = { ...state, president: { status: "eliminated", locationId: null } };
+    state = act(state, player, { type: "draw" }); // mandatory draw, actionsRemaining: 2
+
+    // Spend the first action on something else, then Master Assassin's
+    // return-and-play ability as the *second* (last) action.
+    state = act(state, player, { type: "draw" }); // actionsRemaining: 1
+    state = act(state, player, { type: "activateAbility", cardId: ma.id, abilityIndex: 0 }); // actionsRemaining: 0
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // returnToHand resolves
+    state = act(state, player, { type: "chooseTargets", targetIds: [] }); // gainActions(play) resolves
+
+    expect(state.turn.actionsRemaining).toBe(0);
+    expect(state.cards.find((c) => c.id === ma.id)!.zone).toBe("hand"); // stuck again, mid-turn
+    expect(state.turn.restrictedAction).toMatchObject({ kind: "play" });
+
+    // Out of normal actions — allowed to end the turn even with a
+    // restricted "play" grant sitting unused; the grant doesn't count as
+    // "having an action" for this rule, only actionsRemaining does.
+    expect(() => act(state, player, { type: "endTurn" })).not.toThrow();
+  });
 });
 
 // Test-only helper: finds an allowed location type for a card, so
@@ -741,7 +795,10 @@ describe("applyAction: alarm resolution", () => {
     const target = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
     const loc = state.board[0]!.id;
     state = placeInPlay(state, gunman.id, loc, player, false); // starts face-down
-    state = placeInPlay(state, target.id, loc, other);
+    // Blended (face-down), so `other` has a real chance to respond and gets
+    // included in the alarm's order — an all-face-up board with no Response
+    // abilities would have nobody eligible and skip the alarm frame entirely.
+    state = placeInPlay(state, target.id, loc, other, false);
     state = act(state, player, { type: "draw" });
 
     const activated = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
@@ -787,24 +844,33 @@ describe("applyAction: alarm resolution", () => {
     expect(s.cards.find((c) => c.id === gunman.id)!.zone).toBe("eliminated");
     expect(s.cards.find((c) => c.id === bodyguard.id)!.faceUp).toBe(true); // forced to reveal to respond
 
-    const frame = s.resolutionStack[1] as AlarmResolutionFrame;
-    for (let i = frame.nextIndex; i < frame.order.length; i++) {
-      s = act(s, frame.order[i]!, { type: "passResponse" });
-    }
-
+    // firstResponder (blended Bodyguard) is the only player with anything to
+    // respond with at this location, so their response is the whole alarm
+    // pass — it completes, and cancels the ability, in the same step.
     expect(s.resolutionStack).toHaveLength(0);
   });
 
   it("rejects a response from anyone other than whoever's turn it is in the pass", () => {
     let state = freshGame();
     const player = state.turn.currentPlayerId;
+    const [otherA, otherB] = state.players.filter((p) => p.id !== player).map((p) => p.id);
     const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
-    state = placeInPlay(state, gunman.id, state.board[0]!.id, player);
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, gunman.id, loc, player);
+    // Both other players get a blended card here so both land in the alarm's
+    // order — otherwise, with nothing of theirs at this location, they'd be
+    // skipped entirely and there'd be no second player to test "out of turn" with.
+    const decoyA = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
+    const decoyB = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen" && c.id !== decoyA.id,
+    )!;
+    state = placeInPlay(state, decoyA.id, loc, otherA!, false);
+    state = placeInPlay(state, decoyB.id, loc, otherB!, false);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
 
     const frame = state.resolutionStack[1] as AlarmResolutionFrame;
-    const outOfTurnPlayer = frame.order[frame.order.length - 1]!; // triggering player goes last, not first
+    const outOfTurnPlayer = frame.order[frame.order.length - 1]!; // it's order[0]'s turn first, not the last entry's
     expect(() => act(state, outOfTurnPlayer, { type: "passResponse" })).toThrow();
   });
 
@@ -812,7 +878,13 @@ describe("applyAction: alarm resolution", () => {
     let state = freshGame();
     const player = state.turn.currentPlayerId;
     const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
-    state = placeInPlay(state, gunman.id, state.board[0]!.id, player);
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, gunman.id, loc, player);
+    // A second, blended card of their own keeps the triggering player
+    // eligible for the alarm's order (via buildAlarmFrame's own-controlled
+    // blended-card check) despite having no other cards there to respond with.
+    const decoy = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
+    state = placeInPlay(state, decoy.id, loc, player, false);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
 
@@ -984,10 +1056,9 @@ describe("applyAction: President as a target for an ordinary (non-Wife) eliminat
     state = act(state, player, { type: "activateAbility", cardId: heir.id, abilityIndex: 1 });
 
     // Heir Apparent's ability is alarm:true — the alarm response window
-    // opens immediately, before targets are even declared; everyone must
-    // pass it first.
-    const alarmFrame = state.resolutionStack[state.resolutionStack.length - 1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    // opens immediately (when anyone could actually respond), before
+    // targets are even declared; pass it first if so.
+    state = passWholeAlarm(state);
 
     const resolved = act(state, player, { type: "chooseTargets", targetIds: [trafficCop.id, "president"] });
     expect(resolved.president.status).toBe("eliminated");
@@ -1136,6 +1207,12 @@ describe("applyAction: remote activation", () => {
     const loc = state.board[0]!.id;
     state = placeInPlay(state, guerrillaCommander.id, loc, player);
     state = placeInPlay(state, gunman.id, loc, other);
+    // A blended card of the acting player's own keeps them eligible in the
+    // alarm's order even though the remotely-activated Gunman belongs to `other`.
+    const decoy = state.cards.find(
+      (c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen" && c.id !== guerrillaCommander.id,
+    )!;
+    state = placeInPlay(state, decoy.id, loc, player, false);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: guerrillaCommander.id, abilityIndex: 0 });
     state = act(state, player, { type: "chooseTargets", targetIds: [gunman.id], remoteAbilityIndex: 0 });
@@ -1305,15 +1382,27 @@ describe("applyAction: nested reveal window during an alarm response", () => {
   function setupNestedScenario() {
     let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
     const activator = state.turn.currentPlayerId;
+    const activatorSeat = state.players.find((p) => p.id === activator)!.seatIndex;
+    const n = state.players.length;
+    const responder = state.players.find((p) => p.seatIndex === (activatorSeat + 1) % n)!.id;
+    const otherPlayer = state.players.find((p) => p.seatIndex === (activatorSeat + 2) % n)!.id;
     const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
     const loc = state.board[0]!.id;
     state = placeInPlay(state, gunman.id, loc, activator);
+
+    // responder and otherPlayer each need a blended decoy here up front so
+    // the alarm's order includes both of them (and stays open past
+    // responder's own response) — responder's decoy is replaced by their
+    // real response card (Assassin) below once the frame exists.
+    const [decoyA, decoyB] = state.cards.filter((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen");
+    state = placeInPlay(state, decoyA!.id, loc, responder, false);
+    state = placeInPlay(state, decoyB!.id, loc, otherPlayer, false);
+
     state = act(state, activator, { type: "draw" });
     state = act(state, activator, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
 
     const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    const responder = alarmFrame.order[0]!;
-    const otherPlayer = state.players.find((p) => p.id !== activator && p.id !== responder)!.id;
+    expect(alarmFrame.order).toEqual([responder, otherPlayer]);
 
     const assassin = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Assassin")!;
     const target = state.cards.find((c) => c.defRef === "Head of Security")!;
@@ -1588,8 +1677,15 @@ describe("applyAction: Commander General", () => {
 // Suicide Bomber's alarm ability requires everyone in the response order
 // to explicitly pass (unlike the reveal window, the alarm pass doesn't
 // skip anyone) before chooseTargets can resolve the random draw.
-function passWholeAlarm(state: GameState, alarmFrame: AlarmResolutionFrame) {
-  for (const responder of alarmFrame.order) {
+// Looks up the current top frame itself rather than taking one as an
+// argument — an alarm frame is only ever pushed at all when at least one
+// player might actually respond (see reducer.ts's buildAlarmFrame), so
+// "no frame" here just means the alarm already resolved with nobody able
+// to respond; nothing further to do.
+function passWholeAlarm(state: GameState): GameState {
+  const top = state.resolutionStack[state.resolutionStack.length - 1];
+  if (top?.kind !== "alarmResolution") return state;
+  for (const responder of top.order) {
     state = act(state, responder, { type: "passResponse" });
   }
   return state;
@@ -1608,8 +1704,7 @@ describe("applyAction: multi-target eliminate", () => {
     state = placeInPlay(state, targetB!.id, loc, other);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: deathSquad.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
 
     const resolved = act(state, player, { type: "chooseTargets", targetIds: [targetA!.id, targetB!.id] });
 
@@ -1624,14 +1719,18 @@ describe("applyAction: multi-target eliminate", () => {
     const deathSquad = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Death Squad")!;
     const loc = state.board[0]!.id;
     const player = state.turn.currentPlayerId;
+    // Whoever ends up as the alarm's sole responder needs a blended decoy
+    // here up front so the alarm frame actually forms — replaced by their
+    // real response card (Death Squad) below.
+    const responder = state.players.find((p) => p.id !== player)!.id;
+    const decoy = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
     state = placeInPlay(state, gunman.id, loc, player, false);
+    state = placeInPlay(state, decoy.id, loc, responder, false);
     state = act(state, player, { type: "draw" });
     const activated = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
 
-    // Death Squad responds first in the alarm order, controlled by
-    // whoever that turns out to be, so this doesn't assume table order.
     const alarmFrame = activated.resolutionStack[1] as AlarmResolutionFrame;
-    const responder = alarmFrame.order[0]!;
+    expect(alarmFrame.order).toEqual([responder]);
     let s = placeInPlay(activated, deathSquad.id, loc, responder);
     const [targetA, targetB] = s.cards.filter((c) => c.defRef === "Republican Guard");
     s = placeInPlay(s, targetA!.id, loc, responder);
@@ -1673,8 +1772,7 @@ describe("applyAction: random target selection (Suicide Bomber)", () => {
     for (const t of targetsA) stateA = placeInPlay(stateA, t.id, loc, other);
     stateA = act(stateA, player, { type: "draw" });
     stateA = act(stateA, player, { type: "activateAbility", cardId: bomberA.id, abilityIndex: 0 });
-    let alarmFrame = stateA.resolutionStack[1] as AlarmResolutionFrame;
-    stateA = passWholeAlarm(stateA, alarmFrame);
+    stateA = passWholeAlarm(stateA);
     const resolvedA = resolveSuicideBomberAbility(stateA, player);
     const eliminatedA = resolvedA.cards.filter((c) => c.zone === "eliminated").map((c) => c.id).sort();
 
@@ -1688,8 +1786,7 @@ describe("applyAction: random target selection (Suicide Bomber)", () => {
     for (const t of targetsB) stateB = placeInPlay(stateB, t.id, loc, other);
     stateB = act(stateB, player, { type: "draw" });
     stateB = act(stateB, player, { type: "activateAbility", cardId: bomberB.id, abilityIndex: 0 });
-    alarmFrame = stateB.resolutionStack[1] as AlarmResolutionFrame;
-    stateB = passWholeAlarm(stateB, alarmFrame);
+    stateB = passWholeAlarm(stateB);
     const resolvedB = resolveSuicideBomberAbility(stateB, player);
     const eliminatedB = resolvedB.cards.filter((c) => c.zone === "eliminated").map((c) => c.id).sort();
 
@@ -1712,8 +1809,7 @@ describe("applyAction: random target selection (Suicide Bomber)", () => {
     if (protectedLeader) state = placeInPlay(state, protectedLeader.id, loc, other);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
 
     const resolved = resolveSuicideBomberAbility(state, player);
 
@@ -1741,8 +1837,7 @@ describe("applyAction: random target selection (Suicide Bomber)", () => {
     for (const t of [...primary, ...fallback]) state = placeInPlay(state, t.id, loc, other);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
 
     const resolved = resolveSuicideBomberAbility(state, player);
 
@@ -1765,8 +1860,7 @@ describe("applyAction: random target selection (Suicide Bomber)", () => {
     state = placeInPlay(state, someCard.id, loc, other);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
     state = act(state, player, { type: "chooseTargets", targetIds: [] }); // forced reveal step
 
     expect(() =>
@@ -1789,8 +1883,7 @@ describe("applyAction: random target selection (Suicide Bomber)", () => {
     if (hiddenWife) state = placeInPlay(state, hiddenWife.id, loc, other, false); // face-down
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
 
     // Step 1: forced reveal — the hidden Protected+Blend character gets
     // flipped face-up automatically, no player choice.
@@ -2073,8 +2166,7 @@ describe("applyAction: passives", () => {
     // of shuffle order, so both reactive triggers fire deterministically.
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
     state = act(state, player, { type: "chooseTargets", targetIds: [] }); // forced reveal
     state = act(state, player, { type: "chooseTargets", targetIds: [] }); // random eliminate
     state = act(state, player, { type: "chooseTargets", targetIds: [] }); // eliminate self
@@ -2135,11 +2227,17 @@ describe("applyAction: remaining card content", () => {
     const hos = state.cards.find((c) => c.kind === "leader" && c.defRef === "Head of Security")!;
     const loc = state.board[0]!.id;
     const player = state.turn.currentPlayerId;
+    // Whoever ends up as the alarm's sole responder needs a blended decoy
+    // here up front so the alarm frame actually forms — replaced by their
+    // real response card (Head of Security) below.
+    const responder = state.players.find((p) => p.id !== player)!.id;
+    const decoy = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
     state = placeInPlay(state, gunman.id, loc, player, false);
+    state = placeInPlay(state, decoy.id, loc, responder, false);
     state = act(state, player, { type: "draw" });
     const activated = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
     const alarmFrame = activated.resolutionStack[1] as AlarmResolutionFrame;
-    const responder = alarmFrame.order[0]!;
+    expect(alarmFrame.order).toEqual([responder]);
     let s = placeInPlay(activated, hos.id, loc, responder);
     const target = s.cards.find((c) => c.defRef === "Republican Guard")!;
     s = placeInPlay(s, target.id, loc, responder);
@@ -2301,8 +2399,7 @@ describe("applyAction: remaining card content", () => {
     state = placeInPlay(state, targetB!.id, loc, other);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: assassin.id, abilityIndex: 2 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
 
     const resolved = act(state, player, { type: "chooseTargets", targetIds: [targetA!.id, targetB!.id] });
 
@@ -2365,8 +2462,7 @@ describe("applyAction: remaining card content", () => {
     state = placeInPlay(state, adjTarget.id, state.board[0]!.id, other);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: sniper.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
 
     const resolved = act(state, player, { type: "chooseTargets", targetIds: [adjTarget.id] });
 
@@ -2384,8 +2480,7 @@ describe("applyAction: remaining card content", () => {
     state = placeInPlay(state, farTarget.id, state.board[3]!.id, other); // not adjacent to loc-1
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: sniper.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
 
     expect(() => act(state, player, { type: "chooseTargets", targetIds: [farTarget.id] })).toThrow();
   });
@@ -2401,8 +2496,7 @@ describe("applyAction: remaining card content", () => {
     state = placeInPlay(state, selfTarget.id, loc, other); // at the sniper's OWN location — ineligible
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: sniper.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
 
     expect(() => act(state, player, { type: "chooseTargets", targetIds: [selfTarget.id] })).toThrow();
   });
@@ -2418,8 +2512,7 @@ describe("applyAction: remaining card content", () => {
     state = placeInPlay(state, target.id, loc, other);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: soldier.id, abilityIndex: 0 });
-    const alarmFrame = state.resolutionStack[1] as AlarmResolutionFrame;
-    state = passWholeAlarm(state, alarmFrame);
+    state = passWholeAlarm(state);
 
     const resolved = act(state, player, { type: "chooseTargets", targetIds: [target.id] });
 
@@ -2430,8 +2523,13 @@ describe("applyAction: remaining card content", () => {
     let state = freshGame(["a", "b", "c"]);
     const mob = state.cards.find((c) => c.defRef === "Angry Mob")!;
     const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
     const loc = state.board[0]!.id;
+    // A blended decoy for someone else at this location, so the alarm the
+    // ability triggers actually has an eligible responder and pushes a frame.
+    const decoy = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
     state = placeInPlay(state, mob.id, loc, player);
+    state = placeInPlay(state, decoy.id, loc, other, false);
     state = act(state, player, { type: "draw" });
 
     const activated = act(state, player, { type: "activateAbility", cardId: mob.id, abilityIndex: 0 });
@@ -2443,7 +2541,7 @@ describe("applyAction: remaining card content", () => {
     expect(alarmFrame.kind).toBe("alarmResolution");
     expect(alarmFrame.locationId).toBe(loc);
 
-    const done = passWholeAlarm(resolved, alarmFrame);
+    const done = passWholeAlarm(resolved);
     expect(done.resolutionStack).toHaveLength(0);
   });
 
@@ -2451,9 +2549,14 @@ describe("applyAction: remaining card content", () => {
     let state = freshGame(["a", "b", "c"]);
     const anarchist = state.cards.find((c) => c.defRef === "Anarchist")!;
     const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
     const loc = state.board[0]!.id;
     const chosen = state.board[3]!.id;
+    // A blended decoy for someone else at the chosen (not the Anarchist's
+    // own) location, so the triggered alarm there has an eligible responder.
+    const decoy = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Prominent Citizen")!;
     state = placeInPlay(state, anarchist.id, loc, player);
+    state = placeInPlay(state, decoy.id, chosen, other, false);
     state = act(state, player, { type: "draw" });
     state = act(state, player, { type: "activateAbility", cardId: anarchist.id, abilityIndex: 0 });
 

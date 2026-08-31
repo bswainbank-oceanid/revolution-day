@@ -214,16 +214,31 @@ function requireBudgetedAction(state: GameState): void {
 // one specific playCard that plays the leader itself, until it's played;
 // the mandatory draw is exempt, matching "first ACTION" and the same
 // draw-doesn't-count-as-an-action framing used elsewhere.
-function requireLeaderPlayedIfStuck(state: GameState, action: Action): void {
-  if (state.president.status !== "eliminated") return;
-  const currentPlayerId = state.turn.currentPlayerId;
-  const stuckLeader = state.cards.find(
-    (c) => c.kind === "leader" && c.zone === "hand" && c.controller === currentPlayerId,
+// The current player's own leader, if the President is eliminated and it's
+// still stuck in their hand — see requireLeaderPlayedIfStuck. Re-derived
+// fresh from current state on every call (never cached), which matters:
+// an ability can put a leader back in hand mid-turn (Master Assassin's own
+// "return this card to its controller's hand and play a card"), and the
+// very next top-level action must immediately see it as stuck, not just
+// however things looked when the turn started.
+function stuckLeaderCard(state: GameState): CardInstance | undefined {
+  if (state.president.status !== "eliminated") return undefined;
+  return state.cards.find(
+    (c) => c.kind === "leader" && c.zone === "hand" && c.controller === state.turn.currentPlayerId,
   );
+}
+
+function requireLeaderPlayedIfStuck(state: GameState, action: Action): void {
+  const stuckLeader = stuckLeaderCard(state);
   if (!stuckLeader) return;
   if (action.type === "playCard" && action.cardId === stuckLeader.id) return;
+  // Whenever you have an action to spend, it must go toward playing your
+  // leader — but once you're out, you're free to end your turn like
+  // normal rather than being stranded; the obligation simply carries over
+  // to your next turn's first action.
+  if (action.type === "endTurn" && state.turn.actionsRemaining <= 0) return;
   throw new Error(
-    `${currentPlayerId} must play their leader (${stuckLeader.defRef}) before taking any other action`,
+    `${state.turn.currentPlayerId} must play their leader (${stuckLeader.defRef}) before taking any other action`,
   );
 }
 
@@ -816,9 +831,8 @@ function applyActivateAbility(
     locationId: card.locationId,
     targetIds: null,
   };
-  const resolutionStack: ResolutionFrame[] = effects.alarm
-    ? [abilityFrame, buildAlarmFrame(state, card.id, currentPlayerId, card.locationId)]
-    : [abilityFrame];
+  const alarmFrame = effects.alarm ? buildAlarmFrame(state, cardData, card.id, currentPlayerId, card.locationId) : null;
+  const resolutionStack: ResolutionFrame[] = alarmFrame ? [abilityFrame, alarmFrame] : [abilityFrame];
 
   return {
     ...state,
@@ -831,23 +845,56 @@ function applyActivateAbility(
   };
 }
 
+// Whether `playerId` has any reason to be asked to respond to this
+// alarm, scoped to their own cards at the alarm's own location (never
+// anywhere else) and excluding the triggering card itself (it can't
+// respond to its own alarm — applyAlarmAction enforces the same rule):
+// either a face-up card with a real Response ability ("visible
+// responses"), or a blended card there at all. A blended card counts
+// unconditionally, whether or not it happens to have a Response ability
+// — the point isn't that it CAN respond, it's that whether it can is
+// itself hidden information; skipping only when a blended card's own
+// ability rules it out would leak that ability through the skip/no-skip
+// signal alone. Only a player with neither kind of card here — nothing
+// visible, nothing hidden — contributes nothing to the decision and can
+// be safely skipped.
+function playerMightRespondToAlarm(
+  state: GameState,
+  cardData: CardData,
+  playerId: PlayerId,
+  locationId: string,
+  triggeringCardId: string,
+): boolean {
+  const ownCardsHere = state.cards.filter(
+    (c) => c.zone === "inPlay" && c.controller === playerId && c.locationId === locationId && c.id !== triggeringCardId,
+  );
+  return ownCardsHere.some((c) => c.faceUp === false || getAbilities(cardData, c).some((a) => a.type === "Response"));
+}
+
 // Seating order for an alarm's response pass: starts with the player after
 // the triggering (acting) player, wraps around, ends with the triggering
-// player — everyone gets a turn, no skipping (contrast the
-// protected-targeting reveal window, not built yet, which does skip).
+// player — filtered to only players who might actually respond (see
+// playerMightRespondToAlarm); a player with nothing possible at this
+// specific location is skipped rather than given an empty formality.
+// Returns null when nobody at all qualifies (including the triggering
+// player) — callers should skip pushing an alarm frame entirely in that
+// case, the same as if the ability weren't alarm-tagged.
 function buildAlarmFrame(
   state: GameState,
+  cardData: CardData,
   triggeringCardId: string,
   triggeringPlayerId: PlayerId,
   locationId: string,
-): AlarmResolutionFrame {
+): AlarmResolutionFrame | null {
   const seats = state.players.slice().sort((a, b) => a.seatIndex - b.seatIndex);
   const triggerSeat = seats.find((p) => p.id === triggeringPlayerId)!.seatIndex;
   const n = seats.length;
-  const order = Array.from({ length: n }, (_, i) => {
+  const fullOrder = Array.from({ length: n }, (_, i) => {
     const seat = (triggerSeat + i + 1) % n;
     return seats.find((p) => p.seatIndex === seat)!.id;
   });
+  const order = fullOrder.filter((playerId) => playerMightRespondToAlarm(state, cardData, playerId, locationId, triggeringCardId));
+  if (order.length === 0) return null;
   return { kind: "alarmResolution", triggeringCardId, triggeringPlayerId, locationId, order, nextIndex: 0 };
 }
 
@@ -928,7 +975,7 @@ function applyEffect(
     return applyMoveEffect(state, frame, effect, targetIds, locationIds);
   }
   if (effect.verb === "triggerAlarm") {
-    return applyTriggerAlarmEffect(state, frame, sourceCard, actingPlayerId, effect, targetIds, locationIds);
+    return applyTriggerAlarmEffect(state, cardData, frame, sourceCard, actingPlayerId, effect, targetIds, locationIds);
   }
   if (effect.verb === "if") {
     return applyIfEffect(state, cardData, frame, sourceCard, actingPlayerId, effect, targetIds);
@@ -1251,6 +1298,7 @@ function applyMoveEffect(
 // card is eliminated during the pass, with no special-casing needed here.
 function applyTriggerAlarmEffect(
   state: GameState,
+  cardData: CardData,
   frame: AbilityResolutionFrame,
   sourceCard: CardInstance,
   actingPlayerId: PlayerId,
@@ -1275,7 +1323,8 @@ function applyTriggerAlarmEffect(
   }
 
   const afterEffect = finishEffectStep(state, frame);
-  const alarmFrame = buildAlarmFrame(afterEffect, sourceCard.id, actingPlayerId, locationId);
+  const alarmFrame = buildAlarmFrame(afterEffect, cardData, sourceCard.id, actingPlayerId, locationId);
+  if (!alarmFrame) return afterEffect; // nobody at this location could possibly respond
   return { ...afterEffect, resolutionStack: [...afterEffect.resolutionStack, alarmFrame] };
 }
 
@@ -1487,9 +1536,10 @@ function applyActivateRemote(
     locationId: remoteCard.locationId,
     targetIds: null,
   };
-  const newFrames: ResolutionFrame[] = remoteEffects.alarm
-    ? [newAbilityFrame, buildAlarmFrame(state, remoteCard.id, actingPlayerId, remoteCard.locationId)]
-    : [newAbilityFrame];
+  const remoteAlarmFrame = remoteEffects.alarm
+    ? buildAlarmFrame(state, cardData, remoteCard.id, actingPlayerId, remoteCard.locationId)
+    : null;
+  const newFrames: ResolutionFrame[] = remoteAlarmFrame ? [newAbilityFrame, remoteAlarmFrame] : [newAbilityFrame];
   const loopFrame: ResolutionFrame[] = isUnbounded ? [{ ...frame, targetIds: null }] : [];
 
   return {
@@ -1941,13 +1991,33 @@ function applyProtectedTargetingWindowAction(
   return { ...withCards, resolutionStack: [...withCards.resolutionStack.slice(0, -2), reselectFrame] };
 }
 
+// "exact"/"range" counts are clamped to however many candidates are
+// *actually* eligible right now, not the card text's nominal number —
+// matching countToPick (bots/decide.ts) and isTrivialSelection
+// (client/targetDecision.ts), which already assume this leniency. Without
+// it, an alarm-tagged multi-target ability (Master Assassin's "eliminate
+// exactly 2", say) has a real gap: abilityHasAvailableFirstTarget can only
+// verify the pool size *at activation*, but the actual chooseTargets
+// submission happens only after the alarm-response window fully resolves
+// — and a Response during that window can eliminate one of the very
+// candidates being counted on, shrinking the pool by the time targets are
+// finally chosen. A bot's own countToPick already degrades gracefully to
+// whatever's left; the engine's own validation should accept that, not
+// reject it as if the original (now-impossible) count were still owed.
 function validateTargets(count: TargetCount, targetIds: readonly string[], eligibleIds: readonly string[]): void {
   const eligibleSet = new Set(eligibleIds);
-  if (count.mode === "exact" && targetIds.length !== count.value) {
-    throw new Error(`This ability requires exactly ${count.value} target(s)`);
+  if (count.mode === "exact") {
+    const required = Math.min(count.value, eligibleIds.length);
+    if (targetIds.length !== required) {
+      throw new Error(`This ability requires exactly ${required} target(s)`);
+    }
   }
-  if (count.mode === "range" && (targetIds.length < count.min || targetIds.length > count.max)) {
-    throw new Error(`This ability requires between ${count.min} and ${count.max} target(s)`);
+  if (count.mode === "range") {
+    const max = Math.min(count.max, eligibleIds.length);
+    const min = Math.min(count.min, max);
+    if (targetIds.length < min || targetIds.length > max) {
+      throw new Error(`This ability requires between ${min} and ${max} target(s)`);
+    }
   }
   if (count.mode === "all" && targetIds.length !== eligibleIds.length) {
     throw new Error("This ability requires selecting every eligible target");

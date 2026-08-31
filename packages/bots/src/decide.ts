@@ -5,6 +5,7 @@ import {
   candidateInPlayCards,
   getAbilities,
   getAbilityEffects,
+  getAllowedLocationTypes,
   getPassive,
   isLegalEliminationTargetFiltered,
   knownFaction,
@@ -391,6 +392,10 @@ function usableActivateAbilities(
   return result;
 }
 
+function findOwnLeaderInHand(state: FilteredGameState, playerId: PlayerId): FilteredCardInstance | undefined {
+  return state.cards.find((c) => c.kind === "leader" && c.zone === "hand" && c.controller === playerId);
+}
+
 function decideTurnAction(
   state: FilteredGameState,
   playerId: PlayerId,
@@ -399,6 +404,36 @@ function decideTurnAction(
   rng: Rng,
 ): Action {
   if (state.turn.phase === "draw") return { type: "draw" };
+
+  // "Once the President is eliminated, the current player's own leader,
+  // if still in hand, must be played before anything else once you have
+  // an action to spend on it — but once you're out of actions, you're
+  // free to end your turn like normal, and the obligation just carries
+  // over to your next turn" (see reducer.ts's requireLeaderPlayedIfStuck).
+  // Re-checked fresh every call, not just once at turn start: an ability
+  // can put a leader back in hand mid-turn (Master Assassin's own
+  // "return this card to its controller's hand and play a card"), so if
+  // that happens to be the bot's last action, this correctly finds the
+  // leader stuck again immediately and — since actionsRemaining is now
+  // 0 — falls through to ending the turn, leaving it stuck until next
+  // turn, exactly as the rule intends.
+  const stuckLeader = state.president.status === "eliminated" ? findOwnLeaderInHand(state, playerId) : undefined;
+  if (stuckLeader) {
+    if (state.turn.actionsRemaining > 0) {
+      const instance = asCardInstance(stuckLeader)!;
+      const allowedTypes = getAllowedLocationTypes(cardData, instance);
+      const location = pickRandom(
+        rng,
+        state.board.filter((l) => allowedTypes.includes(l.type)),
+      );
+      if (location) return { type: "playCard", cardId: stuckLeader.id, locationId: location.id };
+    }
+    // Out of actions (or, in a scenario the real card data shouldn't ever
+    // produce, nowhere legal to play it) — requireLeaderPlayedIfStuck
+    // allows nothing else right now, so this is the only move left.
+    return { type: "endTurn" };
+  }
+
   if (
     state.turn.actionsRemaining <= 0 &&
     activeRestrictedGrant(state, "play") === null &&
@@ -568,15 +603,24 @@ function decideEliminateTargetIds(
 
   const pool = eliminateCandidatePool(state, cardData, sourceCard, playerId, effect, forceBypassProtection);
   // "Targets are randomly chosen from opposing cards. Don't target your
-  // own cards" — a hard exclusion, not a preference with an own-card
-  // fallback: abilityHasAvailableFirstTarget already refuses to activate
-  // an eliminate ability with no opposing candidate, so this should never
-  // actually need to fall back to `pool`. The President (controller: null)
-  // always passes this filter on his own.
-  let finalPool =
+  // own cards" — normally a hard exclusion, not just a preference:
+  // abilityHasAvailableFirstTarget already refuses to activate an eliminate
+  // ability with no opposing candidate, so this shouldn't usually need to
+  // fall back to `pool`. But that pre-check only runs once, at activation
+  // time — an alarm response in between (a Response ability that eliminates,
+  // moves, or defects the pre-checked candidate; see gainControl effects)
+  // can leave `pool` non-empty but entirely self-controlled by the time
+  // this actually runs. The selector itself doesn't forbid self-targeting
+  // in that case (only this heuristic does), so falling back to it here is
+  // strictly better than the alternative: an exact/range-min effect has no
+  // legal decline once committed (the same real, pre-existing engine gap
+  // abilityHasAvailableFirstTarget's own comment describes), so an empty
+  // submission would just throw and strand the bot.
+  const opposingOnly =
     effect.target.controller === "self" || effect.target.controller === "other"
       ? pool // already hard-constrained by the selector itself
       : pool.filter((c) => c.controller !== playerId);
+  let finalPool = opposingOnly.length > 0 ? opposingOnly : pool;
 
   // A "protect" leader never targets the President, even incidentally via
   // a generic ability that happens to include him as one of several
