@@ -1,7 +1,20 @@
 import { cardData, getPassive, knownFaction } from "@rev-day/engine";
-import type { Action, FilteredCardInstance, FilteredGameState, PlayerId } from "@rev-day/engine";
+import type { Action, FilteredCardInstance, FilteredGameState, PlayerId, RestrictedActionGrant } from "@rev-day/engine";
 import { usableActivateAbilities, usableResponseAbilities } from "./targetDecision";
 import type { useTargetSelection } from "./useTargetSelection";
+
+// "+2 play-only (Rebel)", "Unlimited activate-only (Regime) here" —
+// summarizes whichever repeatable grant (Puppet-Master, Master Assassin,
+// Commander General, Opposition Leader — see RestrictedActionGrant) is
+// currently active, so the player knows it exists once actionsRemaining
+// alone no longer tells the whole story.
+function describeGrant(grant: RestrictedActionGrant): string {
+  const amount = grant.amount === "unbounded" ? "Unlimited" : `+${grant.amount}`;
+  const verb = grant.kind === "play" ? "play" : "activate";
+  const faction = grant.faction ? ` (${grant.faction})` : "";
+  const where = grant.locationId ? " here" : "";
+  return `${amount} ${verb}-only${faction}${where}`;
+}
 
 interface ActivateAbilityBoxProps {
   readonly card: FilteredCardInstance | null;
@@ -9,10 +22,14 @@ interface ActivateAbilityBoxProps {
   readonly humanPlayerId: PlayerId;
   readonly act: (action: Action) => void;
   readonly selection: ReturnType<typeof useTargetSelection>;
-  // Step 7: bot-turn playback owns the Card Viewer and camera while
-  // stepping — this box goes read-only for that window rather than
-  // showing (and reacting to) buttons for a card the human didn't select.
+  // While bot-turn playback is stepping, `state` here is the currently-
+  // narrated intermediate state, not the true pending decision — showing
+  // its resolutionStack-derived branches (Pass, Done, ...) would be
+  // misleading even though they're disabled, so this takes over first.
+  // While playing, `playbackCaption` carries the "who/how targeted" text
+  // for whatever the Card Viewer is currently showing.
   readonly isPlaying?: boolean;
+  readonly playbackCaption?: string | null;
   // True while a previous action is still in flight — every button here
   // submits (or starts building toward) a real act() call, so without
   // this a rapid double-click could fire a second submission before the
@@ -22,18 +39,47 @@ interface ActivateAbilityBoxProps {
   readonly disabled?: boolean;
 }
 
-// Step 6 (BUILD_PLAN.md): real Activate/Response buttons, plus the Choose
-// Targets/View Cards toggle once a real target choice is on the table.
-// While a pick is active the box shows *that*, regardless of which card
-// happens to be in the Card Viewer — per the locked design, viewing other
-// cards ("View Cards" mode) never changes what's being chosen.
-export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection, isPlaying, disabled }: ActivateAbilityBoxProps) {
+// Merged box: houses every button/selection previously split between this
+// box (card-specific activate/response/intercept) and the old ActionsBox
+// (turn-level draw/end-turn/pass/Done) — and, via the persistent status
+// header below, always shows the player's current status/choice rather
+// than only reacting once a decision is pending.
+export function ActivateAbilityBox({
+  card,
+  state,
+  humanPlayerId,
+  act,
+  selection,
+  isPlaying,
+  playbackCaption,
+  disabled,
+}: ActivateAbilityBoxProps) {
   const { cardPick, locationPick, respondingWith, startResponse, viewCardsMode, setViewCardsMode, unsupportedAbility } = selection;
   const topFrame = state.resolutionStack[state.resolutionStack.length - 1] ?? null;
+
+  const canTakeTurnAction = state.resolutionStack.length === 0 && state.turn.phase === "action";
+  const deckCount = state.cards.filter((c) => c.zone === "deck").length;
+  const canDraw = canTakeTurnAction && state.turn.actionsRemaining > 0 && deckCount > 0;
+  const canEndTurn = canTakeTurnAction;
+
+  // Always visible, regardless of which branch below is active — actions-
+  // remaining context doesn't disappear just because a pick/alarm/
+  // intercept window opened on top of it.
+  const statusHeader = (
+    <div className="activate-ability-status">
+      <p className="actions-remaining-label">ACTIONS REMAINING</p>
+      <p className="actions-remaining-count">{state.turn.actionsRemaining}</p>
+      {state.turn.restrictedAction && (
+        <p className="hint restricted-play-actions">{describeGrant(state.turn.restrictedAction)}</p>
+      )}
+      {isPlaying && playbackCaption && <p className="hint playback-caption">{playbackCaption}</p>}
+    </div>
+  );
 
   if (isPlaying) {
     return (
       <div className="activate-ability-box">
+        {statusHeader}
         <h3>ACTIVATE ABILITY</h3>
         <p className="hint">Watching the turn play out…</p>
       </div>
@@ -43,6 +89,7 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
   if (unsupportedAbility) {
     return (
       <div className="activate-ability-box">
+        {statusHeader}
         <h3>ACTIVATE ABILITY</h3>
         <p className="hint">This ability isn't supported by the client yet.</p>
       </div>
@@ -53,6 +100,7 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
     const selectedCount = cardPick?.selectedIds.length ?? 0;
     return (
       <div className="activate-ability-box">
+        {statusHeader}
         <h3>{respondingWith ? "RESPOND" : "CHOOSE TARGETS"}</h3>
         {cardPick && (
           <>
@@ -67,6 +115,11 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
                 View Cards
               </button>
             </div>
+            {cardPick.done && (
+              <button type="button" className="flow-button" disabled={disabled} onClick={cardPick.done}>
+                Done
+              </button>
+            )}
           </>
         )}
         {locationPick && <p className="hint">Click a highlighted location.</p>}
@@ -74,32 +127,42 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
     );
   }
 
-  if (topFrame?.kind === "alarmResolution" && card && card.controller === humanPlayerId) {
-    const responses = usableResponseAbilities(state, card, topFrame.triggeringCardId, topFrame.locationId, humanPlayerId);
+  if (topFrame?.kind === "alarmResolution" && !respondingWith) {
+    const responses = card && card.controller === humanPlayerId ? usableResponseAbilities(state, card, topFrame.triggeringCardId, topFrame.locationId, humanPlayerId) : [];
     return (
       <div className="activate-ability-box">
+        {statusHeader}
         <h3>RESPOND</h3>
-        {responses.length === 0 ? (
-          <p className="hint">No Response ability available on this card.</p>
+        <p className="hint">Respond, or pass.</p>
+        <button type="button" className="flow-button" disabled={disabled} onClick={() => act({ type: "passResponse" })}>
+          Pass
+        </button>
+        {card && card.controller === humanPlayerId ? (
+          responses.length === 0 ? (
+            <p className="hint">No Response ability available on this card.</p>
+          ) : (
+            responses.map((r) => (
+              <button
+                key={r.abilityIndex}
+                type="button"
+                className="ability-button"
+                disabled={disabled}
+                onClick={() => startResponse(card.id, r.abilityIndex)}
+              >
+                {r.text}
+              </button>
+            ))
+          )
         ) : (
-          responses.map((r) => (
-            <button
-              key={r.abilityIndex}
-              type="button"
-              className="ability-button"
-              disabled={disabled}
-              onClick={() => startResponse(card.id, r.abilityIndex)}
-            >
-              {r.text}
-            </button>
-          ))
+          <p className="hint">Select one of your own cards to respond, or pass.</p>
         )}
       </div>
     );
   }
 
-  if (topFrame?.kind === "motorcadeInterceptionWindow" && card) {
+  if (topFrame?.kind === "motorcadeInterceptionWindow") {
     const eligible =
+      !!card &&
       card.controller === humanPlayerId &&
       card.zone === "inPlay" &&
       card.locationId === topFrame.presidentLocationId &&
@@ -107,15 +170,20 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
       getPassive(card.defRef)?.kind === "motorcadeInterception";
     return (
       <div className="activate-ability-box">
+        {statusHeader}
         <h3>INTERCEPT MOTORCADE</h3>
+        <p className="hint">Intercept, or let it through.</p>
+        <button type="button" className="flow-button" disabled={disabled} onClick={() => act({ type: "passIntercept" })}>
+          Pass
+        </button>
         {eligible ? (
           <button
             type="button"
             className="ability-button"
             disabled={disabled}
-            onClick={() => act({ type: "interceptMotorcade", cardId: card.id })}
+            onClick={() => act({ type: "interceptMotorcade", cardId: card!.id })}
           >
-            Intercept — eliminate {card.defRef}
+            Intercept — eliminate {card!.defRef}
           </button>
         ) : (
           <p className="hint">This card cannot intercept the Motorcade.</p>
@@ -124,37 +192,27 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
     );
   }
 
-  if (!card || card.defRef === null) {
-    return (
-      <div className="activate-ability-box">
-        <h3>ACTIVATE ABILITY</h3>
-        <p className="hint">No abilities</p>
-      </div>
-    );
-  }
-
-  // A restricted "activate" grant (Commander General's "activate any
-  // number of your regime cards at this location") can leave
-  // actionsRemaining at 0 while this specific card still qualifies (own
-  // faction and location match) — same story as canDrag's play-side
-  // check in App.tsx.
+  // Default: nothing pending — show the currently-viewed card's abilities
+  // (if any) alongside the turn-level Draw/End Turn controls.
   const activateGrant = state.turn.restrictedAction?.kind === "activate" ? state.turn.restrictedAction : null;
   const cardQualifiesForActivateGrant =
+    !!card &&
     activateGrant !== null &&
     (activateGrant.amount === "unbounded" || activateGrant.amount > 0) &&
     (activateGrant.faction === null || knownFaction(cardData, card) === activateGrant.faction) &&
     (activateGrant.locationId === null || card.locationId === activateGrant.locationId);
-  const canAct =
-    state.resolutionStack.length === 0 &&
-    state.turn.phase === "action" &&
-    (state.turn.actionsRemaining > 0 || cardQualifiesForActivateGrant);
-  const isOwnCard = card.controller === humanPlayerId && card.zone === "inPlay";
-  const abilities = isOwnCard && canAct ? usableActivateAbilities(state, card, state.turn.usedAbilities, humanPlayerId) : [];
+  const canActivate =
+    canTakeTurnAction && (state.turn.actionsRemaining > 0 || cardQualifiesForActivateGrant);
+  const isOwnCard = !!card && card.controller === humanPlayerId && card.zone === "inPlay";
+  const abilities = card && isOwnCard && canActivate ? usableActivateAbilities(state, card, state.turn.usedAbilities, humanPlayerId) : [];
 
   return (
     <div className="activate-ability-box">
+      {statusHeader}
       <h3>ACTIVATE ABILITY</h3>
-      {abilities.length === 0 ? (
+      {!card || card.defRef === null ? (
+        <p className="hint">No abilities</p>
+      ) : abilities.length === 0 ? (
         <p className="hint">No abilities{card.defRef === "President" ? " — Protected" : ""}</p>
       ) : (
         abilities.map((a) => (
@@ -169,6 +227,12 @@ export function ActivateAbilityBox({ card, state, humanPlayerId, act, selection,
           </button>
         ))
       )}
+      <button type="button" className="flow-button" disabled={disabled || !canDraw} onClick={() => act({ type: "draw" })}>
+        Draw
+      </button>
+      <button type="button" className="flow-button" disabled={disabled || !canEndTurn} onClick={() => act({ type: "endTurn" })}>
+        End Turn
+      </button>
     </div>
   );
 }

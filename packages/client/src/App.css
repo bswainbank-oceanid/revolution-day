@@ -388,7 +388,17 @@ h3 {
 .location-view-grid {
   display: grid;
   grid-template-columns: 1fr 2fr 1fr;
-  grid-template-rows: auto auto auto;
+  /* Row 1 (the location image) used to be "auto", capped only by the img's
+     own max-height (416px) — with a ~540px total budget, that left the
+     bl/br/bottomCenter rows entirely dependent on grid's leftover-space
+     stretch to get any height at all. Stretch only kicks in when those
+     rows are otherwise empty (no cards there yet), which is why cards
+     looked fine at empty locations but fell off the bottom the moment a
+     location actually had real card clusters — real content demands more
+     height than "auto" was ever actually reserving for it. A fixed,
+     much smaller row 1 makes every location's seat-row budget identical
+     and independent of how big the image happens to render. */
+  grid-template-rows: 240px auto auto;
   gap: 0;
   height: 85%;
   cursor: default;
@@ -402,10 +412,13 @@ h3 {
   display: flex;
   align-items: flex-start;
   justify-content: center;
+  /* Grid items stretch to fill their cell's block size by default, so
+     this matches row 1's own 240px track — no need to repeat the number. */
+  height: 100%;
 }
 .location-image-wrap img {
   max-width: 100%;
-  max-height: 416px;
+  max-height: 100%;
   border-radius: 6px;
 }
 .location-image-drop-target img {
@@ -508,20 +521,20 @@ h3 {
   margin: 0 0 0.3rem;
 }
 
-/* Bottom strip */
+/* Bottom strip — hand-strip-only now that Actions has merged into the
+   left column's Activate Ability box, so it just takes the full row. */
 .region-bottom {
   display: flex;
   align-items: center;
   padding: 0.5rem;
-  gap: 1rem;
 }
 .hand-strip {
   flex: 1;
   /* Without this, a flex item's default min-width is auto (its content's
      own intrinsic width) — with enough cards, .hand-strip-cards would
      just keep growing past the available space instead of ever actually
-     shrinking to fit, silently clipping cards (and even the Actions
-     Remaining box next to it) against region-bottom's overflow:hidden. */
+     shrinking to fit, silently clipping cards against region-bottom's
+     overflow:hidden. */
   min-width: 0;
 }
 .hand-strip h3 {
@@ -551,11 +564,11 @@ h3 {
   outline: 3px solid var(--marker-crimson);
   filter: drop-shadow(0 0 6px var(--marker-crimson));
 }
-.actions-box {
-  flex: 0 0 auto;
+.activate-ability-status {
   text-align: center;
-  border-left: 1px solid var(--border-white);
-  padding-left: 1rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-white);
 }
 .actions-remaining-label {
   font-size: 0.7rem;
@@ -571,7 +584,11 @@ h3 {
   margin: 0.2rem 0 0;
   color: var(--gold);
 }
-.actions-box button {
+.playback-caption {
+  margin: 0.3rem 0 0;
+  font-style: italic;
+}
+.flow-button {
   display: block;
   width: 100%;
   margin-top: 0.4rem;

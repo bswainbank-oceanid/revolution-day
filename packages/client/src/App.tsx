@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import type { FilteredCardInstance, FilteredGameState } from "@rev-day/engine";
 import { adjacentLocationIds, asCardInstance, cardData, getAllowedLocationTypes, knownFaction } from "@rev-day/engine";
 import "./App.css";
-import { ActionsBox } from "./ActionsBox";
 import { ActivateAbilityBox } from "./ActivateAbilityBox";
 import { CardViewer } from "./CardViewer";
 import { CityView } from "./CityView";
@@ -63,7 +62,28 @@ function App() {
     },
     [goToCity, goToLocation],
   );
-  const playback = useTurnPlayback(session?.log ?? null, session?.state ?? null, session?.humanPlayerId ?? null, handleCamera);
+  const playback = useTurnPlayback(
+    session?.log ?? null,
+    session?.state ?? null,
+    session?.humanPlayerId ?? null,
+    session?.botPlayerIds ?? null,
+    handleCamera,
+  );
+
+  // A fresh turn boundary into the human's own turn (see useTurnPlayback's
+  // own detection): reset the resting view state — Card Viewer selection
+  // and camera — to match what the last playback beat for that boundary
+  // already showed (Leader + City View), so nothing flickers back to
+  // whatever was being browsed before once playback settles.
+  useEffect(() => {
+    if (playback.turnStartSignal === 0) return;
+    setViewedCardId(null);
+    goToCity();
+    // Fire only when a new turn-start boundary is detected, not on every
+    // render — goToCity's identity is stable (useCallback) but included
+    // for clarity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playback.turnStartSignal]);
 
   const selectCard = useCallback(
     (card: FilteredCardInstance) => {
@@ -240,6 +260,7 @@ function App() {
             act={act}
             selection={selection}
             isPlaying={playback.isPlaying}
+            playbackCaption={playback.playbackCaption}
             disabled={interactionLocked}
           />
         </>
@@ -281,19 +302,16 @@ function App() {
         </>
       }
       bottom={
-        <>
-          <HandStrip
-            state={state}
-            playerId={humanPlayerId}
-            onSelectCard={interactionLocked ? undefined : selectCard}
-            canDrag={canDrag}
-            onDragStart={setDraggedCard}
-            onDragEnd={stopDragging}
-            cardPick={selection.cardPick}
-            pickModeActive={!interactionLocked && !!selection.cardPick && !selection.viewCardsMode}
-          />
-          <ActionsBox state={state} onAct={act} disabled={interactionLocked} selection={selection} isPlaying={playback.isPlaying} />
-        </>
+        <HandStrip
+          state={state}
+          playerId={humanPlayerId}
+          onSelectCard={interactionLocked ? undefined : selectCard}
+          canDrag={canDrag}
+          onDragStart={setDraggedCard}
+          onDragEnd={stopDragging}
+          cardPick={selection.cardPick}
+          pickModeActive={!interactionLocked && !!selection.cardPick && !selection.viewCardsMode}
+        />
       }
     />
   );
