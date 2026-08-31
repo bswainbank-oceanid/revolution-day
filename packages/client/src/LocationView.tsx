@@ -206,7 +206,7 @@ function SeatCluster({
               card={card}
               borderColor={color}
               viewerId={humanPlayerId}
-              style={{ marginLeft: i === 0 ? 0 : -34 }}
+              style={{ marginLeft: i === 0 ? 0 : -22 }}
               onSelect={onSelect}
               draggable={!pickModeActive && (canDrag?.(card) ?? false)}
               onDragStart={onCardDragStart}

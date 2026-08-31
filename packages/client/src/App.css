@@ -261,6 +261,12 @@ h3 {
   padding: 0.5rem;
   text-align: center;
 }
+.location-view-bg h2 {
+  /* A smaller heading footprint hands more of the pane's fixed height
+     budget to the location image itself. */
+  font-size: 1.1rem;
+  margin: 0 0 0.25rem;
+}
 .president-status-line {
   font-size: 0.9rem;
   margin-bottom: 0.5rem;
@@ -388,19 +394,23 @@ h3 {
 .location-view-grid {
   display: grid;
   grid-template-columns: 1fr 2fr 1fr;
-  /* Row 1 (the location image) used to be "auto", capped only by the img's
-     own max-height (416px) — with a ~540px total budget, that left the
-     bl/br/bottomCenter rows entirely dependent on grid's leftover-space
-     stretch to get any height at all. Stretch only kicks in when those
-     rows are otherwise empty (no cards there yet), which is why cards
-     looked fine at empty locations but fell off the bottom the moment a
-     location actually had real card clusters — real content demands more
-     height than "auto" was ever actually reserving for it. A fixed,
-     much smaller row 1 makes every location's seat-row budget identical
-     and independent of how big the image happens to render. */
-  grid-template-rows: 240px auto auto;
+  /* Row 1 (the location image) used to be plain "auto", capped only by
+     the img's own max-height (416px) — with a ~540px total budget, that
+     left the bl/br/bottomCenter rows entirely dependent on grid's
+     leftover-space stretch to get any height at all. Stretch only kicks
+     in when those rows are otherwise empty, which is why cards looked
+     fine at empty locations but fell off the bottom the moment a
+     location actually had real card clusters — and even when it didn't
+     overflow, the stretch-derived row height (and so the cards' vertical
+     position) varied by how much was in each row, not fixed. A large,
+     fixed row 1 plus a fixed *floor* (not plain "auto") for rows 2/3
+     makes the image fill most of the pane, and every location's card row
+     sits at the same position immediately under it — rows 2/3 only grow
+     past that floor in the rare case a seat needs to stack more than one
+     player's cards (see .mini-card's own width for the matching budget). */
+  grid-template-rows: 380px minmax(100px, auto) minmax(100px, auto);
   gap: 0;
-  height: 85%;
+  height: 92%;
   cursor: default;
 }
 .location-image-wrap {
@@ -462,7 +472,10 @@ h3 {
   display: inline-block;
 }
 .mini-card {
-  width: 92px;
+  /* Sized to fit rows 2/3's 100px floor (card + label + margin) so a
+     single-cluster seat sits at a fixed, consistent height rather than
+     forcing that floor even taller — see .location-view-grid's comment. */
+  width: 60px;
   border: 2px solid;
   border-radius: 3px;
   display: block;
