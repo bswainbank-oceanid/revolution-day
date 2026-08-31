@@ -6,16 +6,6 @@
 // plumbing for no real benefit to a "crude but plays correctly" bot.
 export type Rng = () => number;
 
-export function pickWeighted<T extends string>(rng: Rng, weights: readonly (readonly [T, number])[]): T {
-  const total = weights.reduce((sum, [, w]) => sum + w, 0);
-  let roll = rng() * total;
-  for (const [value, weight] of weights) {
-    if (roll < weight) return value;
-    roll -= weight;
-  }
-  return weights[weights.length - 1]![0];
-}
-
 export function pickRandom<T>(rng: Rng, items: readonly T[]): T | undefined {
   if (items.length === 0) return undefined;
   return items[Math.floor(rng() * items.length)];

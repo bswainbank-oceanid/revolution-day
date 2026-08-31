@@ -33,7 +33,7 @@ import type {
 import type { PresidentObjective } from "./presidentObjective";
 import { presidentObjectiveFor } from "./presidentObjective";
 import type { Rng } from "./random";
-import { coinFlip, pickN, pickRandom, pickWeighted } from "./random";
+import { coinFlip, pickN, pickRandom } from "./random";
 
 // The full "brain": one decision at a time, given the current (filtered —
 // no hidden identities) state. Pure, no I/O, doesn't call applyAction
@@ -373,32 +373,23 @@ function decideTurnAction(
   // here.
   const canSpendNormal = state.turn.actionsRemaining > 0;
 
-  const categories: ["playCard" | "draw" | "activateAbility" | "moveCard", number][] = [];
-  if (hasPlayableHandCard(state, playerId, cardData)) categories.push(["playCard", 40]);
-  if (canSpendNormal && deckHasCards(state)) categories.push(["draw", 30]);
-  if (usableActivateAbilities(state, playerId, cardData, objective).length > 0) {
-    categories.push(["activateAbility", 20]);
+  // Priority chain: roll once for which of play/activate to attempt as
+  // the primary action (65%/35%), then fall through to draw, then move,
+  // whenever the attempted option has no legal targets — never back to
+  // the other of play/activate, and never a second roll.
+  if (coinFlip(rng, 0.65)) {
+    if (hasPlayableHandCard(state, playerId, cardData)) return decidePlayCardOrMotorcade(state, playerId, cardData, rng);
+  } else if (usableActivateAbilities(state, playerId, cardData, objective).length > 0) {
+    return decideActivateAbility(state, playerId, cardData, objective, rng);
   }
-  if (canSpendNormal && hasMovableOwnCard(state, playerId)) categories.push(["moveCard", 10]);
+  if (canSpendNormal && deckHasCards(state)) return { type: "draw" };
+  if (canSpendNormal && hasMovableOwnCard(state, playerId)) return decideMoveCard(state, playerId, rng);
 
-  // Every category above is gated on the exact same viability check its
-  // own decide* function uses, so once offered here it's guaranteed not
-  // to bail to endTurn on its own — nothing viable at all (empty hand,
-  // empty deck, no usable ability, no movable card) is the only real
-  // reason left to end the turn early.
-  if (categories.length === 0) return { type: "endTurn" };
-
-  const category = pickWeighted(rng, categories);
-  switch (category) {
-    case "draw":
-      return { type: "draw" };
-    case "playCard":
-      return decidePlayCardOrMotorcade(state, playerId, cardData, rng);
-    case "activateAbility":
-      return decideActivateAbility(state, playerId, cardData, objective, rng);
-    case "moveCard":
-      return decideMoveCard(state, playerId, rng);
-  }
+  // Nothing in the chain was legal — the only real reason left to end
+  // the turn early (every step above is gated on the exact same
+  // viability check its own decide* function uses, so once attempted
+  // it's guaranteed not to bail to endTurn on its own).
+  return { type: "endTurn" };
 }
 
 function decidePlayCardOrMotorcade(state: FilteredGameState, playerId: PlayerId, cardData: CardData, rng: Rng): Action {
