@@ -169,8 +169,7 @@ function abilityHasAvailableFirstTarget(
       return relevantPool.length >= minNeeded;
     }
     case "reveal":
-    case "peek":
-    case "activateRemote": {
+    case "peek": {
       if (effect.target.ref !== "filter") return true; // self/binding — nothing to run out of
       // Neither verb can reach the President in current data — every
       // selector using them requires blendState:"faceDown", which he can
@@ -179,6 +178,28 @@ function abilityHasAvailableFirstTarget(
       if (minNeeded === 0) return true;
       const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard);
       return pool.length >= minNeeded;
+    }
+    case "activateRemote": {
+      if (effect.target.ref !== "filter") return true; // self/binding — nothing to run out of
+      const minNeeded = requiredMinCount(effect.target.count);
+      if (minNeeded === 0) return true;
+      const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+      // A card being a legal *target* (right kind/faction/location) isn't
+      // enough — remotely activating it still needs an Activate ability
+      // that's both unused this turn and itself has a first target
+      // available (same real-dead-end problem as every other case here,
+      // one level deeper). Without this, a bot could commit to remote
+      // activation with every candidate's abilities already exhausted:
+      // there's no legal "cancel" once committed (the engine gap this
+      // whole function exists to route around), decideActivateRemoteTargets
+      // can't submit anything legal either (this effect is exact-count,
+      // not unbounded, so an empty declaration isn't a valid "decline"),
+      // and the bot deadlocks — which the caller (takeBotTurn) detects
+      // as "stuck" within its own call, but the *client* has no such
+      // bound: it just keeps calling bot-turn forever since the decider
+      // never changes. A real freeze this surfaced, not hypothetical.
+      const withUsableAbility = pool.filter((c) => cardHasUsableActivateAbility(state, cardData, c, deciderId));
+      return withUsableAbility.length >= minNeeded;
     }
     case "play": {
       if (effect.target.ref !== "filter") return true;
@@ -202,6 +223,29 @@ function abilityHasAvailableFirstTarget(
     default:
       return true; // triggerAlarm/gainActions/draw/returnToHand/blend/gainControl/if always have some submission
   }
+}
+
+// Whether `card` has at least one Activate ability that's both unused
+// this turn and itself has an available first target — i.e. whether it's
+// actually a legal thing to remotely activate, not just a legal *target*
+// for the selector (kind/faction/location). Shared between
+// abilityHasAvailableFirstTarget's activateRemote pre-check and
+// decideActivateRemoteTargets's real candidate-narrowing so the two can
+// never drift apart.
+function cardHasUsableActivateAbility(
+  state: FilteredGameState,
+  cardData: CardData,
+  card: FilteredCardInstance,
+  deciderId: PlayerId,
+): boolean {
+  const instance = asCardInstance(card);
+  if (!instance) return false;
+  return getAbilities(cardData, instance).some((ability, abilityIndex) => {
+    if (ability.type !== "Activate") return false;
+    if (state.turn.usedAbilities.includes(`${card.id}#${abilityIndex}`)) return false;
+    const def = getAbilityEffects(instance.defRef, abilityIndex);
+    return def ? abilityHasAvailableFirstTarget(state, cardData, card, def, deciderId) : false;
+  });
 }
 
 function requiredMinCount(count: TargetCount): number {
@@ -615,7 +659,18 @@ function decideActivateRemoteTargets(
   if (effect.target.ref !== "filter") return { type: "chooseTargets", targetIds: [] };
   // Must know the candidate's own identity to pick one of its abilities —
   // a hidden card can't be remotely activated by a bot that can't see it.
-  const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard).filter((c) => c.defRef !== null);
+  // Also narrowed to cards with an actually-usable Activate ability (see
+  // cardHasUsableActivateAbility) — same "no legal decline once
+  // committed" dead end as a normal activateAbility choice, and the
+  // reason abilityHasAvailableFirstTarget's own activateRemote case now
+  // applies this identical filter *before* the bot ever commits to this
+  // ability at all (a real bug otherwise: Head of Security remotely
+  // activating Death Squad with nothing left at its location, or Puppet-
+  // Master finding every remaining candidate's abilities already used
+  // this turn, both got the bot stuck the same way).
+  const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard).filter(
+    (c) => c.defRef !== null && cardHasUsableActivateAbility(state, cardData, c, playerId),
+  );
   const chosenCard = pickRandom(rng, pool);
   if (!chosenCard) return { type: "chooseTargets", targetIds: [] }; // "no more" for an unbounded queue, or just fails/retries
 
@@ -625,12 +680,6 @@ function decideActivateRemoteTargets(
     .filter(({ ability, abilityIndex }) => {
       if (ability.type !== "Activate") return false;
       if (state.turn.usedAbilities.includes(`${chosenCard.id}#${abilityIndex}`)) return false;
-      // Same "no legal decline once committed" dead end as a normal
-      // activateAbility choice — remote activation pushes this ability's
-      // own AbilityResolutionFrame, so an empty candidate pool for it is
-      // just as fatal (a real bug: Head of Security remotely activated
-      // Death Squad's eliminate-1-or-2 ability with nothing left at its
-      // location, and got stuck the same way).
       const def = getAbilityEffects(instance.defRef, abilityIndex);
       return def ? abilityHasAvailableFirstTarget(state, cardData, chosenCard, def, playerId) : false;
     });

@@ -96,6 +96,18 @@ async function runUntilHumanDecision(
     const nextPlayer = decider(current);
     if (nextPlayer !== humanPlayerId) {
       const result = await botTurn(gameId, humanPlayerId, nextPlayer);
+      // Safety net: takeBotTurn (server side) already detects a bot with
+      // no legal decision left and returns its input state unchanged
+      // rather than looping forever itself — but decider() would then
+      // keep naming the exact same player forever too, and without this
+      // check *this* loop would call botTurn for them again and again
+      // with no bound (a real freeze this caught: Puppet-Master's remote
+      // activation committing with no candidate card left to actually
+      // activate). No progress across a whole call is never legitimate
+      // mid-turn, so surface it as an error instead of spinning.
+      if (JSON.stringify(result.state) === JSON.stringify(current)) {
+        throw new Error(`${nextPlayer} has no legal action available and got stuck — this is a bot/engine bug, not something to retry`);
+      }
       for (const step of result.logged) {
         entries.push({ actingPlayerId: step.actingPlayerId, action: step.action, resultingState: step.resultingState });
       }
