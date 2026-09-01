@@ -17,7 +17,13 @@ interface HandStripProps {
 }
 
 export function HandStrip({ state, playerId, onSelectCard, canDrag, onDragStart, onDragEnd, cardPick, pickModeActive }: HandStripProps) {
-  const hand = state.cards.filter((c) => c.zone === "hand" && c.controller === playerId);
+  // state.cards is one flat array fixed at game setup — a card's position
+  // never changes (draw/play/return-to-hand only flip its zone in place),
+  // and drawing always takes the lowest remaining deck-zone index, so
+  // array order among a player's hand cards already tracks draw order,
+  // oldest first. Reversed here so newest-drawn renders first (leftmost,
+  // per hand-strip-cards' right-justified layout — see App.css).
+  const hand = [...state.cards.filter((c) => c.zone === "hand" && c.controller === playerId)].reverse();
   const seatIndex = state.players.find((p) => p.id === playerId)?.seatIndex ?? 0;
   return (
     <div className="hand-strip">

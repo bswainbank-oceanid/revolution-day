@@ -659,6 +659,7 @@ h3 {
 }
 .hand-strip h3 {
   font-size: 0.85rem;
+  text-align: center;
 }
 .hand-strip-cards {
   display: flex;
@@ -666,6 +667,13 @@ h3 {
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 0.4rem;
+  /* Right-justified so the oldest card (last in DOM order — see
+     HandStrip.tsx's reversed render order) sits flush against the Action
+     Box immediately to the right; newer cards stack up leftward from
+     there. Only visible while the hand still fits — once it overflows,
+     justify-content has no free space left to apply and the row just
+     scrolls normally from its natural (already newest-first) order. */
+  justify-content: flex-end;
 }
 .hand-strip-card {
   width: 150px;
