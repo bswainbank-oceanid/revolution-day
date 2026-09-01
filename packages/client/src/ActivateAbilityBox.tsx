@@ -221,19 +221,9 @@ export function ActivateAbilityBox({
   let bottomRight: ReactNode;
 
   if (isPlaying) {
-    bottomRight = (
-      <>
-        <h3>ACTIVATE ABILITY</h3>
-        <p className="hint">Watching the turn play out…</p>
-      </>
-    );
+    bottomRight = <p className="hint">Watching the turn play out…</p>;
   } else if (unsupportedAbility) {
-    bottomRight = (
-      <>
-        <h3>ACTIVATE ABILITY</h3>
-        <p className="hint">This ability isn't supported by the client yet.</p>
-      </>
-    );
+    bottomRight = <p className="hint">This ability isn't supported by the client yet.</p>;
   } else if (cardPick || locationPick) {
     const selectedCount = cardPick?.selectedIds.length ?? 0;
     bottomRight = (
@@ -338,7 +328,7 @@ export function ActivateAbilityBox({
 
     bottomRight = (
       <>
-        <h3>ACTIVATE ABILITY</h3>
+        {abilities.length > 0 && <h3>ACTIVATE ABILITY</h3>}
         {!card || card.defRef === null ? (
           <p className="hint">No abilities</p>
         ) : abilities.length === 0 ? (

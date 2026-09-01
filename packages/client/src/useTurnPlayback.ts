@@ -146,14 +146,14 @@ interface Beat {
   readonly viewerCardId: string | null;
   readonly cameraTarget: CameraTarget;
   readonly caption: string | null;
-  // The single mandatory draw that opens a turn — free (doesn't cost an
-  // action, see reducer.ts's applyDraw), and there's nothing to actually
-  // review in it (just a card added to hand), so "Check Opponent's
-  // Turns" skips pausing on it even though it's still an opponent beat.
-  // Every other opponent beat (plays, moves, ability activations,
-  // targets, alarm responses, a later *voluntary* draw spent from
-  // actionsRemaining) still pauses.
-  readonly isOpeningDraw: boolean;
+  // Beats with nothing actually worth reviewing — the single mandatory
+  // draw that opens a turn (free, doesn't cost an action, see reducer.ts's
+  // applyDraw) and the synthetic turn-start camera reset below — so "Check
+  // Opponent's Turns" skips pausing on them even though they're still an
+  // opponent beat. Every other opponent beat (plays, moves, ability
+  // activations, targets, alarm responses, a later *voluntary* draw spent
+  // from actionsRemaining) still pauses.
+  readonly skipPause: boolean;
 }
 
 // A "chain" tracks one still-open cascade of resolution (an ability that
@@ -190,8 +190,12 @@ function buildBeats(
     const { action } = entry;
     const isOpeningDraw = action.type === "draw" && priorState.turn.phase === "draw";
 
-    const sequence = computeViewerCardSequence(entry, priorState);
-    const beatCards = sequence.length > 0 ? sequence : [null];
+    // endTurn itself has nothing to narrate — no card, no camera change
+    // worth a beat — so it gets no beat (and so no pause) at all; the
+    // City View reset players actually see happens separately, as the
+    // turn-start beat below once play reaches the human.
+    const sequence = action.type === "endTurn" ? [] : computeViewerCardSequence(entry, priorState);
+    const beatCards = sequence.length > 0 ? sequence : action.type === "endTurn" ? [] : [null];
     let entryInitiatorCardId: string | null = null;
     beatCards.forEach((viewerCardId, idx) => {
       if (idx === 0) entryInitiatorCardId = viewerCardId;
@@ -204,7 +208,7 @@ function buildBeats(
         viewerCardId,
         cameraTarget: computeCameraTarget(entry, priorState, viewerCardId),
         caption,
-        isOpeningDraw,
+        skipPause: isOpeningDraw,
       });
     });
 
@@ -221,7 +225,7 @@ function buildBeats(
           viewerCardId: closed.initiatorCardId,
           cameraTarget: computeCameraTarget(entry, priorState, closed.initiatorCardId),
           caption: null,
-          isOpeningDraw: false,
+          skipPause: false,
         });
       }
     }
@@ -244,7 +248,7 @@ function buildBeats(
     const priorCurrentPlayerId = i > 0 ? log[i - 1]!.resultingState.turn.currentPlayerId : null;
     const newCurrentPlayerId = entry.resultingState.turn.currentPlayerId;
     if (i > 0 && priorCurrentPlayerId !== humanPlayerId && newCurrentPlayerId === humanPlayerId) {
-      beats.push({ entryIndex: i, viewerCardId: null, cameraTarget: { kind: "city" }, caption: null, isOpeningDraw: false });
+      beats.push({ entryIndex: i, viewerCardId: null, cameraTarget: { kind: "city" }, caption: null, skipPause: true });
       turnStartCount++;
     }
   }
@@ -300,7 +304,7 @@ export function useTurnPlayback(
   // "Watch" (false) keeps every beat — human's and opponents' — on the
   // same timed pace as always. "Check" (true) leaves the human's own
   // beats on that same timed pace but pauses on every *opponent* beat
-  // (except the free opening draw — see Beat.isOpeningDraw) until
+  // (except beats with nothing to review — see Beat.skipPause) until
   // continueBeat() is called — see TurnPlaybackResult's own comments on
   // awaitingContinue/continueBeat.
   checkOpponentTurns: boolean,
@@ -336,13 +340,13 @@ export function useTurnPlayback(
   const currentEntry = currentBeat && log ? log[currentBeat.entryIndex] : null;
   const playbackActorId = currentEntry?.actingPlayerId ?? null;
   const isOpponentBeat = !!currentEntry && currentEntry.actingPlayerId !== humanPlayerId;
-  const awaitingContinue = checkOpponentTurns && !!currentBeat && isOpponentBeat && !currentBeat.isOpeningDraw;
+  const awaitingContinue = checkOpponentTurns && !!currentBeat && isOpponentBeat && !currentBeat.skipPause;
   const continueBeat = useCallback(() => setBeatIndex((i) => i + 1), []);
 
   useEffect(() => {
     if (!currentBeat) return;
     onCamera(currentBeat.cameraTarget);
-    if (checkOpponentTurns && isOpponentBeat && !currentBeat.isOpeningDraw) return; // paused — advanced only by continueBeat()
+    if (checkOpponentTurns && isOpponentBeat && !currentBeat.skipPause) return; // paused — advanced only by continueBeat()
     const advance = () => setBeatIndex((i) => i + 1);
     if (PACING_DELAY_MS === 0) {
       advance();

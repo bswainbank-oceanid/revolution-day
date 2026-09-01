@@ -14,7 +14,7 @@ import { LocationView } from "./LocationView";
 import { decider } from "./decider";
 import { playerLabel } from "./players";
 import { TurnRibbon } from "./TurnRibbon";
-import { resolveCard } from "./targetDecision";
+import { resolveCard, usableResponseAbilities } from "./targetDecision";
 import type { ActiveCardPick } from "./useTargetSelection";
 import { useTargetSelection } from "./useTargetSelection";
 import type { CameraTarget } from "./useTurnPlayback";
@@ -104,6 +104,28 @@ function App() {
     [goToLocation],
   );
   const stopDragging = useCallback(() => setDraggedCard(null), []);
+
+  // As soon as an alarm's Response window opens for the human, show
+  // whichever of their own cards can actually respond — the first one (in
+  // state.cards order) when more than one qualifies — instead of leaving
+  // the Card Viewer on whatever it last showed and making them hunt for a
+  // valid responder themselves.
+  const topResolutionFrame = session ? (session.state.resolutionStack[session.state.resolutionStack.length - 1] ?? null) : null;
+  const alarmFrame = topResolutionFrame?.kind === "alarmResolution" ? topResolutionFrame : null;
+  useEffect(() => {
+    if (!alarmFrame || !session || playback.isPlaying) return;
+    const responder = session.state.cards.find(
+      (c) =>
+        c.controller === session.humanPlayerId &&
+        c.zone === "inPlay" &&
+        usableResponseAbilities(session.state, c, alarmFrame.triggeringCardId, alarmFrame.locationId, session.humanPlayerId).length > 0,
+    );
+    if (responder) selectCard(responder);
+    // Fire only when a genuinely new alarm decision opens for the human —
+    // not on every render while it's still pending, so it doesn't override
+    // the player's own subsequent navigation within the same window.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alarmFrame?.triggeringCardId, alarmFrame?.locationId, alarmFrame?.nextIndex, playback.isPlaying]);
 
   const locked = session ? lockedLocationIds(session.state, selection.viewCardsMode ? null : selection.cardPick) : null;
   const lockSignature = locked ? [...locked].sort().join(",") : selection.locationPick ? "@city" : "";

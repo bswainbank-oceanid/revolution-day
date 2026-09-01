@@ -29,6 +29,12 @@
 }
 .region-left {
   grid-area: left;
+  /* CardViewer keeps its natural size; the Action box below it gets
+     whatever's left and scrolls its own overflowing quadrants internally
+     (see .activate-ability-box/.activate-ability-br in App.css) instead of
+     spilling past this region's own overflow:hidden edge. */
+  display: flex;
+  flex-direction: column;
 }
 .region-center {
   grid-area: center;

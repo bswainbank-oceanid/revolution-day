@@ -158,6 +158,7 @@ h3 {
 
 /* Left column */
 .card-viewer {
+  flex: 0 0 auto;
   padding: 0.75rem;
   box-sizing: border-box;
   text-align: center;
@@ -214,6 +215,11 @@ h3 {
    TR live resolution-stack breadcrumb (or last action), BR the pending
    choice's own buttons — see ActivateAbilityBox.tsx. */
 .activate-ability-box {
+  flex: 1;
+  /* Lets the grid shrink below its content's natural height instead of
+     forcing .region-left to overflow — the box's own quadrants scroll
+     internally instead (see .activate-ability-tr/.activate-ability-br). */
+  min-height: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: auto 1fr;
@@ -242,12 +248,21 @@ h3 {
   padding: 0 0 0.5rem 0.6rem;
   border-bottom: 1px solid var(--border-white);
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 .activate-ability-br {
   grid-column: 2;
   grid-row: 2;
   padding: 0.5rem 0 0 0.6rem;
   min-width: 0;
+  /* A long Response/Activate Ability button list scrolls within this
+     quadrant instead of falling off the bottom of the (fixed-height,
+     overflow:hidden) region-left — needs min-height:0 too, since a grid
+     item's default min-height is its content's own size, which would
+     otherwise defeat overflow-y here entirely. */
+  min-height: 0;
+  overflow-y: auto;
 }
 .ability-button {
   display: block;
