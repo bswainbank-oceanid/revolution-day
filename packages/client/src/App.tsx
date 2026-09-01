@@ -12,7 +12,7 @@ import { GameOverScreen } from "./GameOverScreen";
 import { HandStrip } from "./HandStrip";
 import { LocationView } from "./LocationView";
 import { decider } from "./decider";
-import { playerColorFor, playerLabel } from "./players";
+import { playerLabel } from "./players";
 import { TurnRibbon } from "./TurnRibbon";
 import { resolveCard } from "./targetDecision";
 import type { ActiveCardPick } from "./useTargetSelection";
@@ -160,10 +160,7 @@ function App() {
   // playback narrates it, otherwise decider(state)'s real pending
   // decision (the current player, or whoever's responding/intercepting/
   // reacting mid-turn) — colors the Action box and every Game Log line.
-  const actionColor = playerColorFor(
-    state,
-    playback.isPlaying && playback.playbackActorId ? playback.playbackActorId : decider(state),
-  );
+  const actionPlayerId = playback.isPlaying && playback.playbackActorId ? playback.playbackActorId : decider(state);
 
   // resolveCard covers the President's sentinel id too, alongside real
   // cards — see targetDecision.ts.
@@ -276,6 +273,8 @@ function App() {
             card={viewedCard}
             state={state}
             humanPlayerId={humanPlayerId}
+            botPlayerIds={botPlayerIds}
+            log={log}
             act={act}
             selection={selection}
             isPlaying={playback.isPlaying}
@@ -285,7 +284,7 @@ function App() {
             onCheckOpponentTurnsChange={setCheckOpponentTurns}
             awaitingContinue={playback.awaitingContinue}
             onContinue={playback.continueBeat}
-            actionColor={actionColor}
+            actionPlayerId={actionPlayerId}
           />
         </>
       }

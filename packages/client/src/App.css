@@ -210,25 +210,44 @@ h3 {
   font-size: 0.9rem;
   line-height: 1;
 }
+/* 2x2 grid: TL current player/actions remaining, BL turn-flow controls,
+   TR live resolution-stack breadcrumb (or last action), BR the pending
+   choice's own buttons — see ActivateAbilityBox.tsx. */
 .activate-ability-box {
-  display: flex;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr;
   padding: 0.75rem;
   box-sizing: border-box;
   border-top: 1px solid var(--border-white);
 }
-.activate-ability-left {
-  flex: 1;
-  min-width: 0;
-  padding-right: 0.6rem;
+.activate-ability-tl {
+  grid-column: 1;
+  grid-row: 1;
+  padding: 0 0.6rem 0.5rem 0;
+  border-right: 1px solid var(--border-white);
+  border-bottom: 1px solid var(--border-white);
+}
+.activate-ability-bl {
+  grid-column: 1;
+  grid-row: 2;
+  padding: 0.5rem 0.6rem 0 0;
+  border-right: 1px solid var(--border-white);
   display: flex;
   flex-direction: column;
 }
-.activate-ability-right {
-  flex: 1;
+.activate-ability-tr {
+  grid-column: 2;
+  grid-row: 1;
+  padding: 0 0 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border-white);
   min-width: 0;
-  padding-left: 0.6rem;
-  border-left: 1px solid var(--border-white);
+}
+.activate-ability-br {
+  grid-column: 2;
+  grid-row: 2;
+  padding: 0.5rem 0 0 0.6rem;
+  min-width: 0;
 }
 .ability-button {
   display: block;
@@ -627,9 +646,19 @@ h3 {
 }
 .activate-ability-status {
   text-align: center;
-  margin-bottom: 0.5rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--border-white);
+}
+.current-player-label {
+  font-weight: 700;
+  margin: 0 0 0.3rem;
+}
+.action-log-stack {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.action-log-stack li {
+  font-size: 0.8rem;
+  margin: 0 0 0.3rem;
 }
 .actions-remaining-label {
   font-size: 0.7rem;
