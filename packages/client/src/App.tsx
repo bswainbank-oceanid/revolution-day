@@ -291,24 +291,26 @@ function App() {
             onDragStart={setDraggedCard}
             onDragEnd={stopDragging}
           />
-          <ActivateAbilityBox
-            card={viewedCard}
-            state={state}
-            humanPlayerId={humanPlayerId}
-            botPlayerIds={botPlayerIds}
-            log={log}
-            act={act}
-            selection={selection}
-            isPlaying={playback.isPlaying}
-            playbackCaption={playback.playbackCaption}
-            disabled={interactionLocked}
-            checkOpponentTurns={checkOpponentTurns}
-            onCheckOpponentTurnsChange={setCheckOpponentTurns}
-            awaitingContinue={playback.awaitingContinue}
-            onContinue={playback.continueBeat}
-            actionPlayerId={actionPlayerId}
-          />
         </>
+      }
+      actionBox={
+        <ActivateAbilityBox
+          card={viewedCard}
+          state={state}
+          humanPlayerId={humanPlayerId}
+          botPlayerIds={botPlayerIds}
+          log={log}
+          act={act}
+          selection={selection}
+          isPlaying={playback.isPlaying}
+          playbackCaption={playback.playbackCaption}
+          disabled={interactionLocked}
+          checkOpponentTurns={checkOpponentTurns}
+          onCheckOpponentTurnsChange={setCheckOpponentTurns}
+          awaitingContinue={playback.awaitingContinue}
+          onContinue={playback.continueBeat}
+          actionPlayerId={actionPlayerId}
+        />
       }
       center={
         view.kind === "location" ? (

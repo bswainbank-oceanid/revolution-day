@@ -213,19 +213,23 @@ h3 {
 }
 /* 2x2 grid: TL current player/actions remaining, BL turn-flow controls,
    TR live resolution-stack breadcrumb (or last action), BR the pending
-   choice's own buttons — see ActivateAbilityBox.tsx. */
+   choice's own buttons — see ActivateAbilityBox.tsx. Lives in its own
+   region-actionbox grid cell (GameCanvas.css) now — same row, and same
+   250px height, as the hand strip, immediately left of Game Chat/Log —
+   rather than stacked under Card Viewer in the left column. TL/BL keep
+   their original ~226px width; TR/BR are 40% wider (226 * 1.4 ≈ 316px) —
+   226px + 316px + 2*0.75rem padding is exactly region-actionbox's 566px
+   column width, so the box fills its region exactly with no leftover
+   gap. The much shorter available height (was ~655px shared with Card
+   Viewer's column, now a flat 250px) is why every quadrant scrolls its
+   own overflow rather than assuming it'll always fit. */
 .activate-ability-box {
-  flex: 1;
-  /* Lets the grid shrink below its content's natural height instead of
-     forcing .region-left to overflow — the box's own quadrants scroll
-     internally instead (see .activate-ability-tr/.activate-ability-br). */
-  min-height: 0;
+  height: 100%;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 226px 316px;
   grid-template-rows: auto 1fr;
   padding: 0.75rem;
   box-sizing: border-box;
-  border-top: 1px solid var(--border-white);
 }
 .activate-ability-tl {
   grid-column: 1;
@@ -233,6 +237,8 @@ h3 {
   padding: 0 0.6rem 0.5rem 0;
   border-right: 1px solid var(--border-white);
   border-bottom: 1px solid var(--border-white);
+  min-height: 0;
+  overflow-y: auto;
 }
 .activate-ability-bl {
   grid-column: 1;
@@ -241,6 +247,8 @@ h3 {
   border-right: 1px solid var(--border-white);
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
 }
 .activate-ability-tr {
   grid-column: 2;
@@ -258,9 +266,9 @@ h3 {
   min-width: 0;
   /* A long Response/Activate Ability button list scrolls within this
      quadrant instead of falling off the bottom of the (fixed-height,
-     overflow:hidden) region-left — needs min-height:0 too, since a grid
-     item's default min-height is its content's own size, which would
-     otherwise defeat overflow-y here entirely. */
+     overflow:hidden) region-actionbox — needs min-height:0 too, since a
+     grid item's default min-height is its content's own size, which
+     would otherwise defeat overflow-y here entirely. */
   min-height: 0;
   overflow-y: auto;
 }

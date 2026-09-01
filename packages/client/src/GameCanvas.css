@@ -8,18 +8,25 @@
   background: var(--neutral-dark);
 }
 
+/* Four columns, not three: the Action Box now has its own dedicated
+   column (566px — see .activate-ability-box in App.css for where that
+   figure comes from) between the center pane and the right column,
+   occupied only in the bottom row. In the row above, "center" spans both
+   the actionbox-col and its own base column so City/Location View still
+   renders at the same 1180px width as before — the split between those
+   two columns is otherwise invisible in that row. */
 .game-canvas {
   width: 1920px;
   height: 1080px;
   flex: 0 0 auto;
   transform-origin: center center;
   display: grid;
-  grid-template-columns: 480px 1180px 260px;
+  grid-template-columns: 480px 614px 566px 260px;
   grid-template-rows: 175px 655px 250px;
   grid-template-areas:
-    "ribbon ribbon ribbon"
-    "left center right"
-    "left bottom right";
+    "ribbon ribbon ribbon ribbon"
+    "left center center right"
+    "bottom bottom actionbox right";
   background: var(--neutral-mid);
   color: var(--cream);
 }
@@ -29,12 +36,12 @@
 }
 .region-left {
   grid-area: left;
-  /* CardViewer keeps its natural size; the Action box below it gets
-     whatever's left and scrolls its own overflowing quadrants internally
-     (see .activate-ability-box/.activate-ability-br in App.css) instead of
-     spilling past this region's own overflow:hidden edge. */
+  /* Card Viewer is this region's only child now that the Action Box has
+     its own column (see region-actionbox) — center it in the full 655px
+     rather than leaving it pinned to the top with dead space below. */
   display: flex;
   flex-direction: column;
+  justify-content: center;
 }
 .region-center {
   grid-area: center;
@@ -45,12 +52,16 @@
 .region-bottom {
   grid-area: bottom;
 }
+.region-actionbox {
+  grid-area: actionbox;
+}
 
 .region-ribbon,
 .region-left,
 .region-center,
 .region-right,
-.region-bottom {
+.region-bottom,
+.region-actionbox {
   overflow: hidden;
   box-sizing: border-box;
   border: 2px solid var(--border-white);

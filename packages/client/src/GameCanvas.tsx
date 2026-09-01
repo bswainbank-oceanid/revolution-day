@@ -32,15 +32,21 @@ interface GameCanvasProps {
   readonly center: ReactNode;
   readonly right: ReactNode;
   readonly bottom: ReactNode;
+  readonly actionBox: ReactNode;
 }
 
-// The five fixed regions from DESIGN_NOTES.md's screen-region table:
-// ribbon (y 0-175, full width), left column (x 0-480, full remaining
-// height), center pane (x 480-1660, y 175-890), right column (x
-// 1660-1920, full remaining height), bottom strip (x 480-1660, y
-// 890-1080). Left/right columns run the full height; only center+bottom
-// share the lower portion of the middle.
-export function GameCanvas({ ribbon, left, center, right, bottom }: GameCanvasProps) {
+// Six fixed regions, evolved from DESIGN_NOTES.md's original screen-region
+// table: ribbon (y 0-175, full width); left column (x 0-480, y 175-830,
+// Card Viewer only now); center pane (x 480-1660, y 175-830, widened by
+// however much the action-box column below borrows from its own row —
+// see GameCanvas.css's 4-column layout); the Action Box (its own column
+// immediately left of Chat/Log, y 830-1080 — the same row as, and same
+// height as, the hand strip, so it lines up with wherever Game Chat's own
+// bottom-of-column position falls); right column (x 1660-1920, full
+// height, Game Log + Game Chat stacked); hand strip (x 0-[action box's
+// left edge], y 830-1080 — starts at the screen's left edge now that the
+// Action Box no longer shares the left column's lower half).
+export function GameCanvas({ ribbon, left, center, right, bottom, actionBox }: GameCanvasProps) {
   const scale = useCanvasScale();
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -52,6 +58,7 @@ export function GameCanvas({ ribbon, left, center, right, bottom }: GameCanvasPr
         <div className="region-center">{center}</div>
         <div className="region-right">{right}</div>
         <div className="region-bottom">{bottom}</div>
+        <div className="region-actionbox">{actionBox}</div>
       </div>
     </div>
   );
