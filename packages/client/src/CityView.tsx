@@ -1,7 +1,7 @@
 import type { MouseEvent } from "react";
 import type { FilteredCardInstance, FilteredGameState } from "@rev-day/engine";
 import { PRESIDENT_TARGET_ID, presidentPseudoCard } from "@rev-day/engine";
-import { locationArtUrl } from "./art";
+import { locationArtUrl, locationBadgeUrl } from "./art";
 import { playerColor, playersInSeatOrder } from "./players";
 import type { ActiveCardPick, ActiveLocationPick } from "./useTargetSelection";
 
@@ -115,7 +115,11 @@ export function CityView({
               >
                 <img src={art} alt="" />
                 <span className="city-tile-badge">{index + 1}</span>
-                <span className="city-tile-name">{location.name ?? location.type}</span>
+                <img
+                  src={locationBadgeUrl(location.name ?? location.type)}
+                  alt={location.name ?? location.type}
+                  className="city-tile-name-badge"
+                />
                 {presidentHere && (
                   <img
                     src="/cards/39_regime_president.png"

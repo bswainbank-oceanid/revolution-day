@@ -321,15 +321,19 @@ h3 {
   font-size: 0.75rem;
   font-weight: 700;
 }
-.city-tile-name {
+/* .city-tile-image img's own width/max-height rule has higher
+   specificity (class+tag) than a single-class badge rule and would
+   otherwise blow this badge up to the tile photo's own width — see
+   .city-tile-image .city-president-on-tile just below for the same
+   problem/fix. */
+.city-tile-image .city-tile-name-badge {
   position: absolute;
   bottom: 4px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.6);
-  padding: 1px 6px;
-  font-size: 0.7rem;
-  border-radius: 3px;
+  width: 124px;
+  max-height: none;
+  border-radius: 4px;
 }
 .city-president-marker {
   width: 72px;
@@ -359,9 +363,9 @@ h3 {
   flex-wrap: wrap;
 }
 .city-chip {
-  border-radius: 50%;
-  width: 18px;
-  height: 18px;
+  border-radius: 2px;
+  width: 16px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;

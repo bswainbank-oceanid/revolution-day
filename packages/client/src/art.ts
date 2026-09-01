@@ -86,3 +86,21 @@ export function locationArtUrl(locationName: string, streetIndex: number): strin
   const file = LOCATION_ART[locationName] ?? STREET_VARIANTS[streetIndex % STREET_VARIANTS.length]!;
   return `/locations/${file}`;
 }
+
+// Standalone icon+name badges (public/locations/badges/*.png) — cropped
+// once from each location photo's own printed badge (all 3 Street
+// variants share the same "STREET" badge, so there's one per location
+// *name*, not per art variant) and touched up by hand from there. Used
+// in City View instead of a plain text label, which read as illegible
+// against the small tile art.
+const LOCATION_BADGE: Record<string, string> = {
+  Arena: "arena.png",
+  HQ: "hq.png",
+  Palace: "palace.png",
+  Street: "street.png",
+};
+
+export function locationBadgeUrl(locationName: string): string {
+  const file = LOCATION_BADGE[locationName] ?? LOCATION_BADGE.Street!;
+  return `/locations/badges/${file}`;
+}
