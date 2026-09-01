@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cardData, getPassive, knownFaction } from "@rev-day/engine";
 import type { Action, FilteredCardInstance, FilteredGameState, PlayerId, RestrictedActionGrant } from "@rev-day/engine";
 import { usableActivateAbilities, usableResponseAbilities } from "./targetDecision";
@@ -37,6 +38,14 @@ interface ActivateAbilityBoxProps {
   // back, sending a stale action type against whatever frame the server
   // has since moved on to.
   readonly disabled?: boolean;
+  // "Check Opponent's Turns" — see useTurnPlayback's own comments. A
+  // persistent setting, not tied to any particular pending decision, so
+  // it (and the Continue button it reveals) renders in a fixed footer
+  // regardless of which branch below is otherwise active.
+  readonly checkOpponentTurns: boolean;
+  readonly onCheckOpponentTurnsChange: (checked: boolean) => void;
+  readonly awaitingContinue: boolean;
+  readonly onContinue: () => void;
 }
 
 // Merged box: houses every button/selection previously split between this
@@ -53,6 +62,10 @@ export function ActivateAbilityBox({
   isPlaying,
   playbackCaption,
   disabled,
+  checkOpponentTurns,
+  onCheckOpponentTurnsChange,
+  awaitingContinue,
+  onContinue,
 }: ActivateAbilityBoxProps) {
   const { cardPick, locationPick, respondingWith, startResponse, viewCardsMode, setViewCardsMode, unsupportedAbility } = selection;
   const topFrame = state.resolutionStack[state.resolutionStack.length - 1] ?? null;
@@ -76,31 +89,49 @@ export function ActivateAbilityBox({
     </div>
   );
 
+  // Same reasoning as statusHeader — a persistent setting, not tied to
+  // any one branch below, so it always renders in the same spot at the
+  // bottom of the box. The Continue button only appears once "Check" is
+  // on, and stays disabled except while actually paused on an opponent's
+  // beat (awaitingContinue) — see useTurnPlayback.
+  const checkOpponentTurnsFooter = (
+    <div className="check-opponent-turns">
+      <label className="check-opponent-turns-label">
+        <input
+          type="checkbox"
+          checked={checkOpponentTurns}
+          onChange={(e) => onCheckOpponentTurnsChange(e.target.checked)}
+        />
+        Check Opponent's Turns
+      </label>
+      {checkOpponentTurns && (
+        <button type="button" className="flow-button" disabled={!awaitingContinue} onClick={onContinue}>
+          Continue
+        </button>
+      )}
+    </div>
+  );
+
+  let body: ReactNode;
+
   if (isPlaying) {
-    return (
-      <div className="activate-ability-box">
-        {statusHeader}
+    body = (
+      <>
         <h3>ACTIVATE ABILITY</h3>
         <p className="hint">Watching the turn play out…</p>
-      </div>
+      </>
     );
-  }
-
-  if (unsupportedAbility) {
-    return (
-      <div className="activate-ability-box">
-        {statusHeader}
+  } else if (unsupportedAbility) {
+    body = (
+      <>
         <h3>ACTIVATE ABILITY</h3>
         <p className="hint">This ability isn't supported by the client yet.</p>
-      </div>
+      </>
     );
-  }
-
-  if (cardPick || locationPick) {
+  } else if (cardPick || locationPick) {
     const selectedCount = cardPick?.selectedIds.length ?? 0;
-    return (
-      <div className="activate-ability-box">
-        {statusHeader}
+    body = (
+      <>
         <h3>{respondingWith ? "RESPOND" : "CHOOSE TARGETS"}</h3>
         {cardPick && (
           <>
@@ -123,15 +154,12 @@ export function ActivateAbilityBox({
           </>
         )}
         {locationPick && <p className="hint">Click a highlighted location.</p>}
-      </div>
+      </>
     );
-  }
-
-  if (topFrame?.kind === "alarmResolution" && !respondingWith) {
+  } else if (topFrame?.kind === "alarmResolution" && !respondingWith) {
     const responses = card && card.controller === humanPlayerId ? usableResponseAbilities(state, card, topFrame.triggeringCardId, topFrame.locationId, humanPlayerId) : [];
-    return (
-      <div className="activate-ability-box">
-        {statusHeader}
+    body = (
+      <>
         <h3>RESPOND</h3>
         <p className="hint">Respond, or pass.</p>
         <button type="button" className="flow-button" disabled={disabled} onClick={() => act({ type: "passResponse" })}>
@@ -156,11 +184,9 @@ export function ActivateAbilityBox({
         ) : (
           <p className="hint">Select one of your own cards to respond, or pass.</p>
         )}
-      </div>
+      </>
     );
-  }
-
-  if (topFrame?.kind === "motorcadeInterceptionWindow") {
+  } else if (topFrame?.kind === "motorcadeInterceptionWindow") {
     const eligible =
       !!card &&
       card.controller === humanPlayerId &&
@@ -168,9 +194,8 @@ export function ActivateAbilityBox({
       card.locationId === topFrame.presidentLocationId &&
       card.defRef !== null &&
       getPassive(card.defRef)?.kind === "motorcadeInterception";
-    return (
-      <div className="activate-ability-box">
-        {statusHeader}
+    body = (
+      <>
         <h3>INTERCEPT MOTORCADE</h3>
         <p className="hint">Intercept, or let it through.</p>
         <button type="button" className="flow-button" disabled={disabled} onClick={() => act({ type: "passIntercept" })}>
@@ -188,51 +213,58 @@ export function ActivateAbilityBox({
         ) : (
           <p className="hint">This card cannot intercept the Motorcade.</p>
         )}
-      </div>
+      </>
+    );
+  } else {
+    // Default: nothing pending — show the currently-viewed card's
+    // abilities (if any) alongside the turn-level Draw/End Turn controls.
+    const activateGrant = state.turn.restrictedAction?.kind === "activate" ? state.turn.restrictedAction : null;
+    const cardQualifiesForActivateGrant =
+      !!card &&
+      activateGrant !== null &&
+      (activateGrant.amount === "unbounded" || activateGrant.amount > 0) &&
+      (activateGrant.faction === null || knownFaction(cardData, card) === activateGrant.faction) &&
+      (activateGrant.locationId === null || card.locationId === activateGrant.locationId);
+    const canActivate =
+      canTakeTurnAction && (state.turn.actionsRemaining > 0 || cardQualifiesForActivateGrant);
+    const isOwnCard = !!card && card.controller === humanPlayerId && card.zone === "inPlay";
+    const abilities = card && isOwnCard && canActivate ? usableActivateAbilities(state, card, state.turn.usedAbilities, humanPlayerId) : [];
+
+    body = (
+      <>
+        <h3>ACTIVATE ABILITY</h3>
+        {!card || card.defRef === null ? (
+          <p className="hint">No abilities</p>
+        ) : abilities.length === 0 ? (
+          <p className="hint">No abilities{card.defRef === "President" ? " — Protected" : ""}</p>
+        ) : (
+          abilities.map((a) => (
+            <button
+              key={a.abilityIndex}
+              type="button"
+              className="ability-button"
+              disabled={disabled}
+              onClick={() => act({ type: "activateAbility", cardId: card.id, abilityIndex: a.abilityIndex })}
+            >
+              {a.text}
+            </button>
+          ))
+        )}
+        <button type="button" className="flow-button" disabled={disabled || !canDraw} onClick={() => act({ type: "draw" })}>
+          Draw
+        </button>
+        <button type="button" className="flow-button" disabled={disabled || !canEndTurn} onClick={() => act({ type: "endTurn" })}>
+          End Turn
+        </button>
+      </>
     );
   }
-
-  // Default: nothing pending — show the currently-viewed card's abilities
-  // (if any) alongside the turn-level Draw/End Turn controls.
-  const activateGrant = state.turn.restrictedAction?.kind === "activate" ? state.turn.restrictedAction : null;
-  const cardQualifiesForActivateGrant =
-    !!card &&
-    activateGrant !== null &&
-    (activateGrant.amount === "unbounded" || activateGrant.amount > 0) &&
-    (activateGrant.faction === null || knownFaction(cardData, card) === activateGrant.faction) &&
-    (activateGrant.locationId === null || card.locationId === activateGrant.locationId);
-  const canActivate =
-    canTakeTurnAction && (state.turn.actionsRemaining > 0 || cardQualifiesForActivateGrant);
-  const isOwnCard = !!card && card.controller === humanPlayerId && card.zone === "inPlay";
-  const abilities = card && isOwnCard && canActivate ? usableActivateAbilities(state, card, state.turn.usedAbilities, humanPlayerId) : [];
 
   return (
     <div className="activate-ability-box">
       {statusHeader}
-      <h3>ACTIVATE ABILITY</h3>
-      {!card || card.defRef === null ? (
-        <p className="hint">No abilities</p>
-      ) : abilities.length === 0 ? (
-        <p className="hint">No abilities{card.defRef === "President" ? " — Protected" : ""}</p>
-      ) : (
-        abilities.map((a) => (
-          <button
-            key={a.abilityIndex}
-            type="button"
-            className="ability-button"
-            disabled={disabled}
-            onClick={() => act({ type: "activateAbility", cardId: card.id, abilityIndex: a.abilityIndex })}
-          >
-            {a.text}
-          </button>
-        ))
-      )}
-      <button type="button" className="flow-button" disabled={disabled || !canDraw} onClick={() => act({ type: "draw" })}>
-        Draw
-      </button>
-      <button type="button" className="flow-button" disabled={disabled || !canEndTurn} onClick={() => act({ type: "endTurn" })}>
-        End Turn
-      </button>
+      {body}
+      {checkOpponentTurnsFooter}
     </div>
   );
 }

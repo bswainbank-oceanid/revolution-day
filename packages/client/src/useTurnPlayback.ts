@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { asCardInstance, cardData, getAbilities } from "@rev-day/engine";
 import type { Action, FilteredGameState, PlayerId } from "@rev-day/engine";
 import { PACING_DELAY_MS } from "./pacing";
@@ -146,6 +146,14 @@ interface Beat {
   readonly viewerCardId: string | null;
   readonly cameraTarget: CameraTarget;
   readonly caption: string | null;
+  // The single mandatory draw that opens a turn — free (doesn't cost an
+  // action, see reducer.ts's applyDraw), and there's nothing to actually
+  // review in it (just a card added to hand), so "Check Opponent's
+  // Turns" skips pausing on it even though it's still an opponent beat.
+  // Every other opponent beat (plays, moves, ability activations,
+  // targets, alarm responses, a later *voluntary* draw spent from
+  // actionsRemaining) still pauses.
+  readonly isOpeningDraw: boolean;
 }
 
 // A "chain" tracks one still-open cascade of resolution (an ability that
@@ -167,14 +175,20 @@ function buildBeats(
   humanPlayerId: PlayerId,
   botPlayerIds: readonly PlayerId[],
   chainStack: Chain[],
+  // The true state before log[0] — there's no log[-1] to fall back on, so
+  // without this, the very first logged entry (almost always the
+  // starting player's own opening draw) would wrongly compare against
+  // its own resulting state instead of the pristine pre-draw one below.
+  initialState: FilteredGameState,
 ): { readonly beats: Beat[]; readonly turnStartCount: number } {
   const beats: Beat[] = [];
   let turnStartCount = 0;
 
   for (let i = fromIndex; i < log.length; i++) {
     const entry = log[i]!;
-    const priorState = i > 0 ? log[i - 1]!.resultingState : entry.resultingState;
+    const priorState = i > 0 ? log[i - 1]!.resultingState : initialState;
     const { action } = entry;
+    const isOpeningDraw = action.type === "draw" && priorState.turn.phase === "draw";
 
     const sequence = computeViewerCardSequence(entry, priorState);
     const beatCards = sequence.length > 0 ? sequence : [null];
@@ -185,7 +199,13 @@ function buildBeats(
       const caption = viewerCardId
         ? computeBeatCaption(entry, priorState, viewerCardId, isSourceCard, humanPlayerId, botPlayerIds)
         : null;
-      beats.push({ entryIndex: i, viewerCardId, cameraTarget: computeCameraTarget(entry, priorState, viewerCardId), caption });
+      beats.push({
+        entryIndex: i,
+        viewerCardId,
+        cameraTarget: computeCameraTarget(entry, priorState, viewerCardId),
+        caption,
+        isOpeningDraw,
+      });
     });
 
     const priorLen = priorState.resolutionStack.length;
@@ -201,6 +221,7 @@ function buildBeats(
           viewerCardId: closed.initiatorCardId,
           cameraTarget: computeCameraTarget(entry, priorState, closed.initiatorCardId),
           caption: null,
+          isOpeningDraw: false,
         });
       }
     }
@@ -223,7 +244,7 @@ function buildBeats(
     const priorCurrentPlayerId = i > 0 ? log[i - 1]!.resultingState.turn.currentPlayerId : null;
     const newCurrentPlayerId = entry.resultingState.turn.currentPlayerId;
     if (i > 0 && priorCurrentPlayerId !== humanPlayerId && newCurrentPlayerId === humanPlayerId) {
-      beats.push({ entryIndex: i, viewerCardId: null, cameraTarget: { kind: "city" }, caption: null });
+      beats.push({ entryIndex: i, viewerCardId: null, cameraTarget: { kind: "city" }, caption: null, isOpeningDraw: false });
       turnStartCount++;
     }
   }
@@ -249,6 +270,16 @@ export interface TurnPlaybackResult {
   // view state (Card Viewer selection, City View) to match what the last
   // playback beat already showed.
   readonly turnStartSignal: number;
+  // True whenever "Check Opponent's Turns" mode has paused playback on an
+  // opponent's beat, waiting for continueBeat() — the caller's "Continue"
+  // button should be enabled exactly when this is true (and otherwise
+  // disabled or hidden, since clicking it does nothing until then).
+  readonly awaitingContinue: boolean;
+  // Advances exactly one beat — the only way playback moves forward while
+  // paused for awaitingContinue. Harmless to call otherwise (nothing is
+  // currently waiting on it), but callers should still gate the button
+  // itself on awaitingContinue so it doesn't read as always-clickable.
+  readonly continueBeat: () => void;
 }
 
 // log/finalState/humanPlayerId/botPlayerIds are nullable so this can be
@@ -260,6 +291,16 @@ export function useTurnPlayback(
   humanPlayerId: PlayerId | null,
   botPlayerIds: readonly PlayerId[] | null,
   onCamera: (target: CameraTarget) => void,
+  // "Watch" (false) keeps every beat — human's and opponents' — on the
+  // same timed pace as always. "Check" (true) leaves the human's own
+  // beats on that same timed pace but pauses on every *opponent* beat
+  // (except the free opening draw — see Beat.isOpeningDraw) until
+  // continueBeat() is called — see TurnPlaybackResult's own comments on
+  // awaitingContinue/continueBeat.
+  checkOpponentTurns: boolean,
+  // The pristine pre-game state — see buildBeats' own comment on why
+  // log[0] needs this instead of a log[-1] that doesn't exist.
+  initialState: FilteredGameState | null,
 ): TurnPlaybackResult {
   const beatsRef = useRef<Beat[]>([]);
   const consumedLogLengthRef = useRef(0);
@@ -270,13 +311,14 @@ export function useTurnPlayback(
   // Append newly-arrived log entries as fresh beats during render — safe
   // under StrictMode's double-invoke since consumedLogLengthRef makes this
   // idempotent for the same log.
-  if (log && humanPlayerId && botPlayerIds && log.length > consumedLogLengthRef.current) {
+  if (log && humanPlayerId && botPlayerIds && initialState && log.length > consumedLogLengthRef.current) {
     const { beats: newBeats, turnStartCount } = buildBeats(
       log,
       consumedLogLengthRef.current,
       humanPlayerId,
       botPlayerIds,
       chainStackRef.current,
+      initialState,
     );
     beatsRef.current = [...beatsRef.current, ...newBeats];
     consumedLogLengthRef.current = log.length;
@@ -285,10 +327,15 @@ export function useTurnPlayback(
 
   const beats = beatsRef.current;
   const currentBeat = beatIndex < beats.length ? beats[beatIndex]! : null;
+  const currentEntry = currentBeat && log ? log[currentBeat.entryIndex] : null;
+  const isOpponentBeat = !!currentEntry && currentEntry.actingPlayerId !== humanPlayerId;
+  const awaitingContinue = checkOpponentTurns && !!currentBeat && isOpponentBeat && !currentBeat.isOpeningDraw;
+  const continueBeat = useCallback(() => setBeatIndex((i) => i + 1), []);
 
   useEffect(() => {
     if (!currentBeat) return;
     onCamera(currentBeat.cameraTarget);
+    if (checkOpponentTurns && isOpponentBeat && !currentBeat.isOpeningDraw) return; // paused — advanced only by continueBeat()
     const advance = () => setBeatIndex((i) => i + 1);
     if (PACING_DELAY_MS === 0) {
       advance();
@@ -296,10 +343,12 @@ export function useTurnPlayback(
     }
     const timer = setTimeout(advance, PACING_DELAY_MS);
     return () => clearTimeout(timer);
-    // Deliberately keyed only on progress through the beat queue, not on
-    // onCamera's identity (App.tsx's closure changes every render).
+    // Deliberately keyed only on progress through the beat queue (plus
+    // checkOpponentTurns/isOpponentBeat, which gate whether this effect
+    // schedules anything at all), not on onCamera's identity (App.tsx's
+    // closure changes every render).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beatIndex, beats.length]);
+  }, [beatIndex, beats.length, checkOpponentTurns, isOpponentBeat]);
 
   if (!log || !finalState || !humanPlayerId) {
     return {
@@ -308,6 +357,8 @@ export function useTurnPlayback(
       playbackViewerCardId: null,
       playbackCaption: null,
       turnStartSignal: turnStartSignalRef.current,
+      awaitingContinue: false,
+      continueBeat,
     };
   }
 
@@ -317,5 +368,13 @@ export function useTurnPlayback(
   const playbackViewerCardId = currentBeat ? currentBeat.viewerCardId : null;
   const playbackCaption = currentBeat ? currentBeat.caption : null;
 
-  return { displayState, isPlaying, playbackViewerCardId, playbackCaption, turnStartSignal: turnStartSignalRef.current };
+  return {
+    displayState,
+    isPlaying,
+    playbackViewerCardId,
+    playbackCaption,
+    turnStartSignal: turnStartSignalRef.current,
+    awaitingContinue,
+    continueBeat,
+  };
 }

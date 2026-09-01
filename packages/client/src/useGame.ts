@@ -32,6 +32,12 @@ export interface GameSession {
   // playersInPlayOrder, which anchors the top ribbon on this rather than
   // seat order.
   readonly startingPlayerId: PlayerId;
+  // The pristine state createGame returns, before anything — even the
+  // starting player's own opening draw — has happened. Captured once,
+  // same as startingPlayerId, so useTurnPlayback has a real "prior state"
+  // to compare the very first log entry against (there's no log[-1] to
+  // fall back on otherwise).
+  readonly initialState: FilteredGameState;
   readonly state: FilteredGameState;
   readonly gameOver: WinConditionExplanation | null;
   // Every individual action taken this session, human's and bots', in
@@ -150,8 +156,9 @@ export function useGame(): UseGameResult {
       const seatOrder = shuffle([humanPlayerId, ...botPlayerIds]);
       const row = await createGame(seatOrder, humanPlayerId);
       const startingPlayerId = row.state.turn.currentPlayerId;
+      const initialState = row.state;
       const { state, gameOver, entries } = await runUntilHumanDecision(row.id, humanPlayerId, row.state);
-      setSession({ gameId: row.id, humanPlayerId, botPlayerIds, startingPlayerId, state, gameOver, log: entries });
+      setSession({ gameId: row.id, humanPlayerId, botPlayerIds, startingPlayerId, initialState, state, gameOver, log: entries });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

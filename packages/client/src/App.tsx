@@ -54,6 +54,7 @@ function App() {
   const { view, goToCity, goToLocation } = useViewNavigation();
   const [viewedCardId, setViewedCardId] = useState<string | null>(null);
   const [draggedCard, setDraggedCard] = useState<FilteredCardInstance | null>(null);
+  const [checkOpponentTurns, setCheckOpponentTurns] = useState(false);
   const selection = useTargetSelection(session?.state ?? null, session?.humanPlayerId ?? null, act);
   const handleCamera = useCallback(
     (target: CameraTarget) => {
@@ -68,6 +69,8 @@ function App() {
     session?.humanPlayerId ?? null,
     session?.botPlayerIds ?? null,
     handleCamera,
+    checkOpponentTurns,
+    session?.initialState ?? null,
   );
 
   // A fresh turn boundary into the human's own turn (see useTurnPlayback's
@@ -269,6 +272,10 @@ function App() {
             isPlaying={playback.isPlaying}
             playbackCaption={playback.playbackCaption}
             disabled={interactionLocked}
+            checkOpponentTurns={checkOpponentTurns}
+            onCheckOpponentTurnsChange={setCheckOpponentTurns}
+            awaitingContinue={playback.awaitingContinue}
+            onContinue={playback.continueBeat}
           />
         </>
       }
