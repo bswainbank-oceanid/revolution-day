@@ -265,6 +265,12 @@ export interface TurnPlaybackResult {
   // The current beat's "who/how targeted" (or summary) text, for the
   // merged Activate/Actions box's status area; null when nothing to show.
   readonly playbackCaption: string | null;
+  // Whoever the current beat's own log entry belongs to — the "current
+  // player or the player performing the reaction" color-coding callers
+  // use while playback is narrating (see decider() for the equivalent
+  // once playback has finished and a real decision is pending). Null
+  // whenever there's no current beat.
+  readonly playbackActorId: PlayerId | null;
   // Increments once per detected turn-start boundary into the human's own
   // turn — callers react to a change in this to reset their own resting
   // view state (Card Viewer selection, City View) to match what the last
@@ -328,6 +334,7 @@ export function useTurnPlayback(
   const beats = beatsRef.current;
   const currentBeat = beatIndex < beats.length ? beats[beatIndex]! : null;
   const currentEntry = currentBeat && log ? log[currentBeat.entryIndex] : null;
+  const playbackActorId = currentEntry?.actingPlayerId ?? null;
   const isOpponentBeat = !!currentEntry && currentEntry.actingPlayerId !== humanPlayerId;
   const awaitingContinue = checkOpponentTurns && !!currentBeat && isOpponentBeat && !currentBeat.isOpeningDraw;
   const continueBeat = useCallback(() => setBeatIndex((i) => i + 1), []);
@@ -356,6 +363,7 @@ export function useTurnPlayback(
       isPlaying: false,
       playbackViewerCardId: null,
       playbackCaption: null,
+      playbackActorId: null,
       turnStartSignal: turnStartSignalRef.current,
       awaitingContinue: false,
       continueBeat,
@@ -373,6 +381,7 @@ export function useTurnPlayback(
     isPlaying,
     playbackViewerCardId,
     playbackCaption,
+    playbackActorId,
     turnStartSignal: turnStartSignalRef.current,
     awaitingContinue,
     continueBeat,

@@ -7,6 +7,19 @@ export function cardName(state: FilteredGameState, cardId: string): string {
   return resolveCard(state, cardId)?.defRef ?? "a card";
 }
 
+// Same fallback as cardName for a card whose identity isn't known to the
+// viewer, but distinguishes *why*: still face-down (a blended card, in
+// which case there's something concrete to say even without a name) from
+// genuinely unknown (defRef null for any other reason — the plain "a
+// card" fallback, e.g. once it's already been revealed and the log entry
+// is stale, or the viewer never had visibility at all).
+export function cardNameOrBlended(state: FilteredGameState, cardId: string): string {
+  const card = resolveCard(state, cardId);
+  if (!card) return "a card";
+  if (card.defRef !== null) return card.defRef;
+  return card.faceUp === false ? "a blended card" : "a card";
+}
+
 // The board is fixed and small (6 locations), so a plain lookup by id is
 // plenty — same source of truth CityView/LocationView use for names.
 export function locationName(state: FilteredGameState, locationId: string | undefined): string | null {
@@ -25,7 +38,7 @@ export function describeEntry(entry: LogEntry, humanPlayerId: PlayerId, botPlaye
       return `${who} drew a card.`;
     case "playCard": {
       const at = locationName(resultingState, action.locationId);
-      return `${who} played ${cardName(resultingState, action.cardId)}${at ? ` at ${at}` : ""}.`;
+      return `${who} played ${cardNameOrBlended(resultingState, action.cardId)}${at ? ` at ${at}` : ""}.`;
     }
     case "playMotorcade":
       return `${who} played a Motorcade.`;

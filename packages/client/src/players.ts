@@ -40,6 +40,14 @@ export function playerColor(seatIndex: number): string {
   return PLAYER_COLORS[seatIndex % PLAYER_COLORS.length]!;
 }
 
+// playerColor by id instead of seatIndex directly — the common case
+// everywhere outside the ribbon/city-view code that already has a Player
+// record in hand.
+export function playerColorFor(state: FilteredGameState, playerId: PlayerId): string {
+  const seatIndex = state.players.find((p) => p.id === playerId)?.seatIndex ?? 0;
+  return playerColor(seatIndex);
+}
+
 // A player's leader is only nameable if its identity is currently known
 // to the viewer — always true for your own leader (filterForPlayer keeps
 // it visible regardless of zone/faceUp), true for an opponent's only once

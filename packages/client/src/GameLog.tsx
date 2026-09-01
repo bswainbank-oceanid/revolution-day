@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { PlayerId } from "@rev-day/engine";
 import { describeEntry } from "./gameText";
+import { playerColorFor } from "./players";
 import type { LogEntry } from "./useGame";
 
 interface GameLogProps {
@@ -23,7 +24,12 @@ export function GameLog({ log, humanPlayerId, botPlayerIds }: GameLogProps) {
       <h3>GAME LOG</h3>
       <div className="game-log-lines" ref={linesRef}>
         {log.slice(-30).map((entry, i) => (
-          <p key={i}>{describeEntry(entry, humanPlayerId, botPlayerIds)}</p>
+          // Same color-coding as the Action box: whoever actually took
+          // this entry's action — the current player, or whoever was
+          // responding/intercepting/reacting at the time.
+          <p key={i} style={{ color: playerColorFor(entry.resultingState, entry.actingPlayerId) }}>
+            {describeEntry(entry, humanPlayerId, botPlayerIds)}
+          </p>
         ))}
       </div>
     </div>

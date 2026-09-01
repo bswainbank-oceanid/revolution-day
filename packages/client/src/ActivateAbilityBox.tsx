@@ -46,6 +46,11 @@ interface ActivateAbilityBoxProps {
   readonly onCheckOpponentTurnsChange: (checked: boolean) => void;
   readonly awaitingContinue: boolean;
   readonly onContinue: () => void;
+  // The current player, or whoever's responding/intercepting/reacting
+  // mid-turn (App.tsx's own decider()/playbackActorId resolution) — every
+  // piece of text in the box (both halves) renders in this player's
+  // color, matching the same color-coding in the Game Log.
+  readonly actionColor: string;
 }
 
 // Merged box: houses every button/selection previously split between this
@@ -66,6 +71,7 @@ export function ActivateAbilityBox({
   onCheckOpponentTurnsChange,
   awaitingContinue,
   onContinue,
+  actionColor,
 }: ActivateAbilityBoxProps) {
   const { cardPick, locationPick, respondingWith, startResponse, viewCardsMode, setViewCardsMode, unsupportedAbility } = selection;
   const topFrame = state.resolutionStack[state.resolutionStack.length - 1] ?? null;
@@ -76,24 +82,23 @@ export function ActivateAbilityBox({
   const canEndTurn = canTakeTurnAction;
 
   // Always visible, regardless of which branch below is active — actions-
-  // remaining context doesn't disappear just because a pick/alarm/
-  // intercept window opened on top of it.
-  const statusHeader = (
+  // remaining context (and the buttons that spend it) doesn't disappear
+  // just because a pick/alarm/intercept window opened on top of it.
+  const actionsHeader = (
     <div className="activate-ability-status">
       <p className="actions-remaining-label">ACTIONS REMAINING</p>
       <p className="actions-remaining-count">{state.turn.actionsRemaining}</p>
       {state.turn.restrictedAction && (
         <p className="hint restricted-play-actions">{describeGrant(state.turn.restrictedAction)}</p>
       )}
-      {isPlaying && playbackCaption && <p className="hint playback-caption">{playbackCaption}</p>}
     </div>
   );
 
-  // Same reasoning as statusHeader — a persistent setting, not tied to
+  // Same reasoning as actionsHeader — a persistent setting, not tied to
   // any one branch below, so it always renders in the same spot at the
-  // bottom of the box. The Continue button only appears once "Check" is
-  // on, and stays disabled except while actually paused on an opponent's
-  // beat (awaitingContinue) — see useTurnPlayback.
+  // bottom of the left (controls) half. The Continue button only appears
+  // once "Check" is on, and stays disabled except while actually paused
+  // on an opponent's beat (awaitingContinue) — see useTurnPlayback.
   const checkOpponentTurnsFooter = (
     <div className="check-opponent-turns">
       <label className="check-opponent-turns-label">
@@ -112,17 +117,21 @@ export function ActivateAbilityBox({
     </div>
   );
 
-  let body: ReactNode;
+  // controls: buttons only, on the left. current: the heading + status/
+  // narration prose describing what's happening right now, on the right —
+  // "the current action" the split calls for.
+  let controls: ReactNode = null;
+  let current: ReactNode;
 
   if (isPlaying) {
-    body = (
+    current = (
       <>
         <h3>ACTIVATE ABILITY</h3>
-        <p className="hint">Watching the turn play out…</p>
+        <p className="hint">{playbackCaption ?? "Watching the turn play out…"}</p>
       </>
     );
   } else if (unsupportedAbility) {
-    body = (
+    current = (
       <>
         <h3>ACTIVATE ABILITY</h3>
         <p className="hint">This ability isn't supported by the client yet.</p>
@@ -130,60 +139,65 @@ export function ActivateAbilityBox({
     );
   } else if (cardPick || locationPick) {
     const selectedCount = cardPick?.selectedIds.length ?? 0;
-    body = (
+    current = (
       <>
         <h3>{respondingWith ? "RESPOND" : "CHOOSE TARGETS"}</h3>
         {cardPick && (
-          <>
-            <p className="hint">
-              {selectedCount} selected · {cardPick.candidates.length} eligible
-            </p>
-            <div className="target-mode-toggle">
-              <button type="button" className={viewCardsMode ? "" : "active"} onClick={() => setViewCardsMode(false)}>
-                Choose Targets
-              </button>
-              <button type="button" className={viewCardsMode ? "active" : ""} onClick={() => setViewCardsMode(true)}>
-                View Cards
-              </button>
-            </div>
-            {cardPick.done && (
-              <button type="button" className="flow-button" disabled={disabled} onClick={cardPick.done}>
-                Done
-              </button>
-            )}
-          </>
+          <p className="hint">
+            {selectedCount} selected · {cardPick.candidates.length} eligible
+          </p>
         )}
         {locationPick && <p className="hint">Click a highlighted location.</p>}
       </>
     );
+    controls = cardPick && (
+      <>
+        <div className="target-mode-toggle">
+          <button type="button" className={viewCardsMode ? "" : "active"} onClick={() => setViewCardsMode(false)}>
+            Choose Targets
+          </button>
+          <button type="button" className={viewCardsMode ? "active" : ""} onClick={() => setViewCardsMode(true)}>
+            View Cards
+          </button>
+        </div>
+        {cardPick.done && (
+          <button type="button" className="flow-button" disabled={disabled} onClick={cardPick.done}>
+            Done
+          </button>
+        )}
+      </>
+    );
   } else if (topFrame?.kind === "alarmResolution" && !respondingWith) {
     const responses = card && card.controller === humanPlayerId ? usableResponseAbilities(state, card, topFrame.triggeringCardId, topFrame.locationId, humanPlayerId) : [];
-    body = (
+    current = (
       <>
         <h3>RESPOND</h3>
         <p className="hint">Respond, or pass.</p>
-        <button type="button" className="flow-button" disabled={disabled} onClick={() => act({ type: "passResponse" })}>
-          Pass
-        </button>
         {card && card.controller === humanPlayerId ? (
-          responses.length === 0 ? (
-            <p className="hint">No Response ability available on this card.</p>
-          ) : (
-            responses.map((r) => (
-              <button
-                key={r.abilityIndex}
-                type="button"
-                className="ability-button"
-                disabled={disabled}
-                onClick={() => startResponse(card.id, r.abilityIndex)}
-              >
-                {r.text}
-              </button>
-            ))
-          )
+          responses.length === 0 && <p className="hint">No Response ability available on this card.</p>
         ) : (
           <p className="hint">Select one of your own cards to respond, or pass.</p>
         )}
+      </>
+    );
+    controls = (
+      <>
+        <button type="button" className="flow-button" disabled={disabled} onClick={() => act({ type: "passResponse" })}>
+          Pass
+        </button>
+        {card &&
+          card.controller === humanPlayerId &&
+          responses.map((r) => (
+            <button
+              key={r.abilityIndex}
+              type="button"
+              className="ability-button"
+              disabled={disabled}
+              onClick={() => startResponse(card.id, r.abilityIndex)}
+            >
+              {r.text}
+            </button>
+          ))}
       </>
     );
   } else if (topFrame?.kind === "motorcadeInterceptionWindow") {
@@ -194,14 +208,19 @@ export function ActivateAbilityBox({
       card.locationId === topFrame.presidentLocationId &&
       card.defRef !== null &&
       getPassive(card.defRef)?.kind === "motorcadeInterception";
-    body = (
+    current = (
       <>
         <h3>INTERCEPT MOTORCADE</h3>
         <p className="hint">Intercept, or let it through.</p>
+        {!eligible && <p className="hint">This card cannot intercept the Motorcade.</p>}
+      </>
+    );
+    controls = (
+      <>
         <button type="button" className="flow-button" disabled={disabled} onClick={() => act({ type: "passIntercept" })}>
           Pass
         </button>
-        {eligible ? (
+        {eligible && (
           <button
             type="button"
             className="ability-button"
@@ -210,8 +229,6 @@ export function ActivateAbilityBox({
           >
             Intercept — eliminate {card!.defRef}
           </button>
-        ) : (
-          <p className="hint">This card cannot intercept the Motorcade.</p>
         )}
       </>
     );
@@ -230,26 +247,29 @@ export function ActivateAbilityBox({
     const isOwnCard = !!card && card.controller === humanPlayerId && card.zone === "inPlay";
     const abilities = card && isOwnCard && canActivate ? usableActivateAbilities(state, card, state.turn.usedAbilities, humanPlayerId) : [];
 
-    body = (
+    current = (
       <>
         <h3>ACTIVATE ABILITY</h3>
         {!card || card.defRef === null ? (
           <p className="hint">No abilities</p>
-        ) : abilities.length === 0 ? (
-          <p className="hint">No abilities{card.defRef === "President" ? " — Protected" : ""}</p>
         ) : (
-          abilities.map((a) => (
-            <button
-              key={a.abilityIndex}
-              type="button"
-              className="ability-button"
-              disabled={disabled}
-              onClick={() => act({ type: "activateAbility", cardId: card.id, abilityIndex: a.abilityIndex })}
-            >
-              {a.text}
-            </button>
-          ))
+          abilities.length === 0 && <p className="hint">No abilities{card.defRef === "President" ? " — Protected" : ""}</p>
         )}
+      </>
+    );
+    controls = (
+      <>
+        {abilities.map((a) => (
+          <button
+            key={a.abilityIndex}
+            type="button"
+            className="ability-button"
+            disabled={disabled}
+            onClick={() => act({ type: "activateAbility", cardId: card!.id, abilityIndex: a.abilityIndex })}
+          >
+            {a.text}
+          </button>
+        ))}
         <button type="button" className="flow-button" disabled={disabled || !canDraw} onClick={() => act({ type: "draw" })}>
           Draw
         </button>
@@ -261,10 +281,13 @@ export function ActivateAbilityBox({
   }
 
   return (
-    <div className="activate-ability-box">
-      {statusHeader}
-      {body}
-      {checkOpponentTurnsFooter}
+    <div className="activate-ability-box" style={{ color: actionColor }}>
+      <div className="activate-ability-left">
+        {actionsHeader}
+        {controls}
+        {checkOpponentTurnsFooter}
+      </div>
+      <div className="activate-ability-right">{current}</div>
     </div>
   );
 }
