@@ -1,16 +1,17 @@
 import type { FilteredGameState, PlayerId } from "@rev-day/engine";
 import { CARD_BACK_URL } from "./art";
-import { handCountFor, leaderNameFor, playerColor, playerLabel, playersInSeatOrder } from "./players";
+import { handCountFor, leaderNameFor, playerColor, playerLabel, playersInPlayOrder } from "./players";
 import type { LogEntry } from "./useGame";
 
 interface TurnRibbonProps {
   readonly state: FilteredGameState;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  readonly startingPlayerId: PlayerId;
   readonly log: readonly LogEntry[];
 }
 
-export function TurnRibbon({ state, humanPlayerId, botPlayerIds, log }: TurnRibbonProps) {
+export function TurnRibbon({ state, humanPlayerId, botPlayerIds, startingPlayerId, log }: TurnRibbonProps) {
   const deckCount = state.cards.filter((c) => c.zone === "deck").length;
   const turnNumber = 1 + log.filter((e) => e.action.type === "endTurn").length;
 
@@ -22,7 +23,7 @@ export function TurnRibbon({ state, humanPlayerId, botPlayerIds, log }: TurnRibb
         <span>{deckCount} cards left</span>
       </div>
       <div className="player-panels">
-        {playersInSeatOrder(state).map((p) => (
+        {playersInPlayOrder(state, startingPlayerId).map((p) => (
           <PlayerPanel key={p.id} state={state} playerId={p.id} humanPlayerId={humanPlayerId} botPlayerIds={botPlayerIds} seatIndex={p.seatIndex} />
         ))}
       </div>

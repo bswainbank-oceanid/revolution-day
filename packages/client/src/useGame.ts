@@ -25,6 +25,13 @@ export interface GameSession {
   readonly gameId: number;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  // Whoever the engine's own random roll picked to take the very first
+  // turn (setupGame's startingPlayerId) — captured once, from the
+  // pristine state createGame returns, and never updated again. Distinct
+  // from seatIndex (mere array position at setup) — see players.ts's
+  // playersInPlayOrder, which anchors the top ribbon on this rather than
+  // seat order.
+  readonly startingPlayerId: PlayerId;
   readonly state: FilteredGameState;
   readonly gameOver: WinConditionExplanation | null;
   // Every individual action taken this session, human's and bots', in
@@ -142,8 +149,9 @@ export function useGame(): UseGameResult {
       // be the human. Shuffle so any seat, human or bot, can lead.
       const seatOrder = shuffle([humanPlayerId, ...botPlayerIds]);
       const row = await createGame(seatOrder, humanPlayerId);
+      const startingPlayerId = row.state.turn.currentPlayerId;
       const { state, gameOver, entries } = await runUntilHumanDecision(row.id, humanPlayerId, row.state);
-      setSession({ gameId: row.id, humanPlayerId, botPlayerIds, state, gameOver, log: entries });
+      setSession({ gameId: row.id, humanPlayerId, botPlayerIds, startingPlayerId, state, gameOver, log: entries });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

@@ -149,7 +149,7 @@ function App() {
     );
   }
 
-  const { humanPlayerId, botPlayerIds, log } = session;
+  const { humanPlayerId, botPlayerIds, startingPlayerId, log } = session;
   const state = playback.displayState ?? session.state;
   const interactionLocked = loading || playback.isPlaying;
 
@@ -248,7 +248,7 @@ function App() {
 
   return (
     <GameCanvas
-      ribbon={<TurnRibbon state={state} humanPlayerId={humanPlayerId} botPlayerIds={botPlayerIds} log={log} />}
+      ribbon={<TurnRibbon state={state} humanPlayerId={humanPlayerId} botPlayerIds={botPlayerIds} startingPlayerId={startingPlayerId} log={log} />}
       left={
         <>
           {error && <p className="error in-game-error">{error}</p>}

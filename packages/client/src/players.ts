@@ -19,6 +19,23 @@ export function playersInSeatOrder(state: FilteredGameState): readonly FilteredG
   return [...state.players].sort((a, b) => a.seatIndex - b.seatIndex);
 }
 
+// Seat order rotated so `startingPlayerId` — whoever the engine's own
+// random roll actually chose to go first (setupGame's startingPlayerId,
+// captured once at game creation — see GameSession.startingPlayerId),
+// independent of seatIndex — leads. The rest follow in their normal
+// turn-rotation sequence from there, wrapping around. Seat order alone
+// (playersInSeatOrder) doesn't guarantee this: seatIndex is just array
+// position at setup, unrelated to who the starting-player roll picked.
+export function playersInPlayOrder(
+  state: FilteredGameState,
+  startingPlayerId: PlayerId,
+): readonly FilteredGameState["players"][number][] {
+  const seated = playersInSeatOrder(state);
+  const startIndex = seated.findIndex((p) => p.id === startingPlayerId);
+  if (startIndex <= 0) return seated;
+  return [...seated.slice(startIndex), ...seated.slice(0, startIndex)];
+}
+
 export function playerColor(seatIndex: number): string {
   return PLAYER_COLORS[seatIndex % PLAYER_COLORS.length]!;
 }
