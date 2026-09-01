@@ -133,7 +133,7 @@ function computeBeatCaption(
   humanPlayerId: PlayerId,
   botPlayerIds: readonly PlayerId[],
 ): string {
-  if (isSourceCard) return describeEntry(entry, humanPlayerId, botPlayerIds);
+  if (isSourceCard) return describeEntry(entry, priorState, humanPlayerId, botPlayerIds);
   const { action, resultingState, actingPlayerId } = entry;
   const who = actingPlayerId === humanPlayerId ? "You" : playerLabel(resultingState, actingPlayerId, humanPlayerId, botPlayerIds);
   const targetName = cardName(resultingState, viewerCardId);

@@ -3,6 +3,7 @@ import type { FilteredCardInstance, FilteredGameState, PlayerId } from "@rev-day
 import { PRESIDENT_TARGET_ID, presidentPseudoCard } from "@rev-day/engine";
 import { MiniCard } from "./MiniCard";
 import { locationArtUrl, cardArtUrl } from "./art";
+import { locationName } from "./gameText";
 import { playerColor, playerLabel, playersInSeatOrder } from "./players";
 import type { ActiveCardPick } from "./useTargetSelection";
 
@@ -99,7 +100,7 @@ export function LocationView({
 
   return (
     <div className="location-view-bg" onClick={pickModeActive ? undefined : onBackgroundClick}>
-      <h2>LOCATION VIEW — {location.name ?? location.type}</h2>
+      <h2>LOCATION VIEW — {locationName(state, locationId) ?? location.name ?? location.type}</h2>
       <div className="location-view-grid">
         <Seat {...seatProps} seat="tl" playerIds={seats.get("tl") ?? []} />
         <div

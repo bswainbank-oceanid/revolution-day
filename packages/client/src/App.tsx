@@ -300,6 +300,7 @@ function App() {
           humanPlayerId={humanPlayerId}
           botPlayerIds={botPlayerIds}
           log={log}
+          initialState={session.initialState}
           act={act}
           selection={selection}
           isPlaying={playback.isPlaying}
@@ -345,7 +346,7 @@ function App() {
       }
       right={
         <>
-          <GameLog log={log} humanPlayerId={humanPlayerId} botPlayerIds={botPlayerIds} />
+          <GameLog log={log} humanPlayerId={humanPlayerId} botPlayerIds={botPlayerIds} initialState={session.initialState} />
           <GameChat />
         </>
       }

@@ -8,7 +8,7 @@ import type {
   ResolutionFrame,
   RestrictedActionGrant,
 } from "@rev-day/engine";
-import { describeEntry } from "./gameText";
+import { describeEntry, locationName } from "./gameText";
 import { playerColorFor, playerLabel } from "./players";
 import { usableActivateAbilities, usableResponseAbilities } from "./targetDecision";
 import type { useTargetSelection } from "./useTargetSelection";
@@ -54,8 +54,10 @@ function describeFrame(
       return `Alarm (${cardName(frame.triggeringCardId)}) — awaiting ${who(frame.order[frame.nextIndex]!)}`;
     case "protectedTargetingWindow":
       return `Protected reveal — awaiting ${who(frame.order[frame.nextIndex]!)}`;
-    case "motorcadeInterceptionWindow":
-      return `Motorcade — awaiting ${who(frame.order[frame.nextIndex]!)}`;
+    case "motorcadeInterceptionWindow": {
+      const at = locationName(state, frame.presidentLocationId);
+      return `Motorcade${at ? ` (from ${at})` : ""} — awaiting ${who(frame.order[frame.nextIndex]!)}`;
+    }
     case "reactivePassiveWindow":
       return `Reactive window (${cardName(frame.sourceCardId)}) — awaiting ${who(frame.order[frame.nextIndex]!)}`;
   }
@@ -70,6 +72,11 @@ interface ActivateAbilityBoxProps {
   // resolution stack is empty — see describeFrame's own comment for the
   // stack-non-empty case.
   readonly log: readonly LogEntry[];
+  // The pristine pre-game state — describeEntry needs the log's last
+  // entry's *prior* state (e.g. the President's location before a
+  // Motorcade moved him), and there's no log[-2] to fall back on when
+  // there's only one entry so far.
+  readonly initialState: FilteredGameState;
   readonly act: (action: Action) => void;
   readonly selection: ReturnType<typeof useTargetSelection>;
   // While bot-turn playback is stepping, `state` here is the currently-
@@ -119,6 +126,7 @@ export function ActivateAbilityBox({
   humanPlayerId,
   botPlayerIds,
   log,
+  initialState,
   act,
   selection,
   isPlaying,
@@ -205,9 +213,10 @@ export function ActivateAbilityBox({
     );
   } else {
     const lastEntry = log[log.length - 1];
+    const priorState = log.length > 1 ? log[log.length - 2]!.resultingState : initialState;
     upperRight = lastEntry ? (
       <p className="hint" style={{ color: playerColorFor(lastEntry.resultingState, lastEntry.actingPlayerId) }}>
-        {describeEntry(lastEntry, humanPlayerId, botPlayerIds)}
+        {describeEntry(lastEntry, priorState, humanPlayerId, botPlayerIds)}
       </p>
     ) : (
       <p className="hint">No actions yet.</p>
