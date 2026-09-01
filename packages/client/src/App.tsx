@@ -299,6 +299,7 @@ function App() {
         ) : (
           <CityView
             state={state}
+            startingPlayerId={startingPlayerId}
             onSelectLocation={interactionLocked ? undefined : goToLocation}
             allowedDropLocationIds={allowedDropLocationIds}
             onDropCard={handleDropCard}

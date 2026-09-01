@@ -1,12 +1,18 @@
 import type { MouseEvent } from "react";
-import type { FilteredCardInstance, FilteredGameState } from "@rev-day/engine";
+import type { FilteredCardInstance, FilteredGameState, PlayerId } from "@rev-day/engine";
 import { PRESIDENT_TARGET_ID, presidentPseudoCard } from "@rev-day/engine";
 import { locationArtUrl, locationBadgeUrl } from "./art";
-import { playerColor, playersInSeatOrder } from "./players";
+import { playerColor, playersInPlayOrder } from "./players";
 import type { ActiveCardPick, ActiveLocationPick } from "./useTargetSelection";
 
 interface CityViewProps {
   readonly state: FilteredGameState;
+  // Same play order (starting player first, then normal turn rotation —
+  // see players.ts's playersInPlayOrder) the top ribbon uses, so each
+  // player's card-count badge sits in the same fixed left-to-right slot
+  // at every location, mirroring the ribbon instead of shifting around
+  // per-tile based on raw seat index or who happens to have cards there.
+  readonly startingPlayerId: PlayerId;
   readonly onSelectLocation?: (locationId: string) => void;
   // Step 5: drag-and-drop play/move — a location tile highlights when a
   // card is being dragged and this tile is a legal drop target for it
@@ -35,6 +41,7 @@ interface CityViewProps {
 // itself is already laid out in that linear order.
 export function CityView({
   state,
+  startingPlayerId,
   onSelectLocation,
   allowedDropLocationIds,
   onDropCard,
@@ -45,6 +52,7 @@ export function CityView({
 }: CityViewProps) {
   let streetIndex = 0;
   const president = state.president;
+  const playOrder = playersInPlayOrder(state, startingPlayerId);
   const isPresidentCandidate = cardPick?.candidates.some((c) => c.id === PRESIDENT_TARGET_ID) ?? false;
   const isPresidentSelected = cardPick?.selectedIds.includes(PRESIDENT_TARGET_ID) ?? false;
 
@@ -135,13 +143,21 @@ export function CityView({
                 {counts.size === 0 ? (
                   <span className="hint">No cards here</span>
                 ) : (
-                  playersInSeatOrder(state)
-                    .filter((p) => counts.has(p.id))
-                    .map((p) => (
-                      <span key={p.id} className="city-chip" style={{ background: playerColor(p.seatIndex) }}>
-                        {counts.get(p.id)}
-                      </span>
-                    ))
+                  // A fixed slot per player, in the same order every tile
+                  // (see playOrder's own comment) — a player with nothing
+                  // here still reserves their position (invisible, not
+                  // omitted), so a given player's badge never shifts
+                  // depending on who else happens to have cards at this
+                  // particular location.
+                  playOrder.map((p) => (
+                    <span
+                      key={p.id}
+                      className={`city-chip${counts.has(p.id) ? "" : " city-chip-empty"}`}
+                      style={counts.has(p.id) ? { background: playerColor(p.seatIndex) } : undefined}
+                    >
+                      {counts.get(p.id) ?? ""}
+                    </span>
+                  ))
                 )}
               </div>
             </div>

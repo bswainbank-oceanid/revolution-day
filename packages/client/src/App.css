@@ -373,6 +373,11 @@ h3 {
   color: var(--ink);
   font-weight: 700;
 }
+/* Reserves this player's fixed slot at a location with nothing of theirs
+   there, instead of omitting it — see CityView's own comment. */
+.city-chip-empty {
+  visibility: hidden;
+}
 .city-offboard {
   position: absolute;
   left: -76px;
