@@ -150,13 +150,28 @@ function abilityHasAvailableFirstTarget(
 ): boolean {
   const effect = def.effects[0];
   if (!effect) return false;
+  // Activating sourceCard — whether directly or (one level up the call
+  // stack) as someone else's remote target — unconditionally reveals it
+  // *before* its own targets are chosen (see reducer.ts's
+  // applyActivateAbility/applyActivateRemote). Checking against its
+  // current, possibly-still-blended state can wrongly read this ability
+  // as usable/unusable relative to what it'll actually be once activated
+  // — not just for its own selector, but for any *other* card's own
+  // ability that happens to be scanning for blended cards at this
+  // location (Journalist's "reveal a blended target here"), where
+  // sourceCard being the very card about to lose its blend is exactly
+  // what makes that other candidate's own usability flip out from under
+  // it mid-decision. A real, reproducible deadlock this was causing.
+  const workingState: FilteredGameState = sourceCard.faceUp
+    ? state
+    : { ...state, cards: state.cards.map((c) => (c.id === sourceCard.id ? { ...c, faceUp: true } : c)) };
   switch (effect.verb) {
     case "eliminate": {
       if (effect.target.ref !== "filter") return true; // self/binding — nothing to run out of
       if (effect.target.selection === "random") return true; // engine draws automatically
       const minNeeded = requiredMinCount(effect.target.count);
       if (minNeeded === 0) return true;
-      const pool = eliminateCandidatePool(state, cardData, sourceCard, deciderId, effect);
+      const pool = eliminateCandidatePool(workingState, cardData, sourceCard, deciderId, effect);
       // The bot never player-chooses to eliminate its own cards (a hard
       // exclusion, not just a preference — see decideEliminateTargetIds),
       // so an eliminate ability with no *opposing* target is just as much
@@ -177,14 +192,14 @@ function abilityHasAvailableFirstTarget(
       // never satisfy (no Blend attribute) — so no special-casing needed.
       const minNeeded = requiredMinCount(effect.target.count);
       if (minNeeded === 0) return true;
-      const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+      const pool = candidateInPlayCards(workingState, cardData, effect.target, sourceCard);
       return pool.length >= minNeeded;
     }
     case "activateRemote": {
       if (effect.target.ref !== "filter") return true; // self/binding — nothing to run out of
       const minNeeded = requiredMinCount(effect.target.count);
       if (minNeeded === 0) return true;
-      const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard);
+      const pool = candidateInPlayCards(workingState, cardData, effect.target, sourceCard);
       // A card being a legal *target* (right kind/faction/location) isn't
       // enough — remotely activating it still needs an Activate ability
       // that's both unused this turn and itself has a first target
@@ -199,7 +214,7 @@ function abilityHasAvailableFirstTarget(
       // as "stuck" within its own call, but the *client* has no such
       // bound: it just keeps calling bot-turn forever since the decider
       // never changes. A real freeze this surfaced, not hypothetical.
-      const withUsableAbility = pool.filter((c) => cardHasUsableActivateAbility(state, cardData, c, deciderId));
+      const withUsableAbility = pool.filter((c) => cardHasUsableActivateAbility(workingState, cardData, c, deciderId));
       return withUsableAbility.length >= minNeeded;
     }
     case "play": {
@@ -232,7 +247,9 @@ function abilityHasAvailableFirstTarget(
 // for the selector (kind/faction/location). Shared between
 // abilityHasAvailableFirstTarget's activateRemote pre-check and
 // decideActivateRemoteTargets's real candidate-narrowing so the two can
-// never drift apart.
+// never drift apart. (abilityHasAvailableFirstTarget itself accounts for
+// `card` being revealed by its own activation before evaluating its
+// targets — see that function's own comment — so this doesn't need to.)
 function cardHasUsableActivateAbility(
   state: FilteredGameState,
   cardData: CardData,
@@ -620,7 +637,12 @@ function decideEliminateTargetIds(
     effect.target.controller === "self" || effect.target.controller === "other"
       ? pool // already hard-constrained by the selector itself
       : pool.filter((c) => c.controller !== playerId);
-  let finalPool = opposingOnly.length > 0 ? opposingOnly : pool;
+  // Not just "any opposing candidates at all" — enough of them to actually
+  // satisfy this effect's own minimum count. A multi-target effect
+  // (Master Assassin's "eliminate exactly 2") can have one genuine
+  // opposing candidate and still need to fall back to the full pool to
+  // make up the rest, the same as having zero.
+  let finalPool = opposingOnly.length >= requiredMinCount(effect.target.count) ? opposingOnly : pool;
 
   // A "protect" leader never targets the President, even incidentally via
   // a generic ability that happens to include him as one of several

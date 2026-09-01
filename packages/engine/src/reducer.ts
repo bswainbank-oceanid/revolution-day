@@ -56,18 +56,106 @@ import type { CardData } from "./types";
 // case than the original design intended, not needed by any encoded
 // ability yet. See rev_day_engine_design memory for the full design this
 // is incrementally building toward.
+// Action types that can pop or advance some *other* resolution-stack
+// frame (an alarm pass, a nested reveal/intercept/reactive window) and so
+// might be the moment control returns to an eliminate effect that hasn't
+// had its targets declared yet — see autoResolveTrivialEliminate. Deliberately
+// excludes "chooseTargets" itself and the plain turn actions: a fresh
+// activateAbility, or a multi-effect ability's own chooseTargets advancing
+// to its next effect, should still surface a real (if only formally
+// required) decision the normal way — this only short-circuits the
+// specific "something else happened first and may have changed what's
+// still legally targetable" moment.
+const RESOLUTION_CONTINUING_ACTIONS = new Set<Action["type"]>([
+  "passResponse",
+  "useResponse",
+  "revealBlended",
+  "passReveal",
+  "interceptMotorcade",
+  "passIntercept",
+  "playReactive",
+  "passReactive",
+]);
+
 export function applyAction(
   state: GameState,
   actingPlayerId: PlayerId,
   action: Action,
   cardData: CardData,
 ): GameState {
+  let next = applyActionInner(state, actingPlayerId, action, cardData);
+  if (RESOLUTION_CONTINUING_ACTIONS.has(action.type)) {
+    next = autoResolveTrivialEliminate(next, cardData);
+  }
   // drainPendingPassives wraps every path: a card being eliminated queues
   // a PendingPassiveTrigger (Celebrity/Martyr) rather than opening a
   // window immediately, and that queue only starts draining once the
   // *entire* top-level action (including any alarm/window sub-resolution)
   // has fully completed and the stack is genuinely empty again.
-  return drainPendingPassives(applyActionInner(state, actingPlayerId, action, cardData));
+  return drainPendingPassives(next);
+}
+
+// A Response (or any other resolution-stack action) can eliminate, defect,
+// or otherwise remove the very candidate an already-activated eliminate
+// effect was counting on — see validateTargets' own comment on the same
+// race. Once whatever just happened resolves, chooseTargets shouldn't
+// still be required as a formality: with 0 truly-eligible candidates left
+// there's nothing to eliminate, so the effect simply completes; with
+// exactly 1, that's the only legal submission there ever was, so it's
+// applied automatically rather than asked for. Uses the engine's own
+// full-information candidate pool (declareEliminateTargets' own
+// resolveEligibleTargets/presidentMatchesSelector) rather than a filtered
+// one, since this is also the only place that can correctly resolve a
+// still-blended card being the sole remaining true candidate — something
+// neither a human's own client-side view nor a bot could ever safely
+// guess at. Scoped to filter-based, non-random "exact"/"range" eliminate
+// effects only (matches validateTargets' own scope) and only once —
+// finishEffectStep/applyEffect naturally re-exposes another frame needing
+// the same treatment, so this loops rather than resolving just one step.
+function autoResolveTrivialEliminate(state: GameState, cardData: CardData): GameState {
+  for (let i = 0; i < 50; i++) {
+    const frame = state.resolutionStack[state.resolutionStack.length - 1];
+    if (frame?.kind !== "abilityResolution" || frame.targetIds !== null) return state;
+    const sourceCard = state.cards.find((c) => c.id === frame.sourceCardId);
+    if (!sourceCard) return state;
+    const definition = getAbilityEffects(sourceCard.defRef, frame.abilityIndex);
+    const effect = definition?.effects[frame.effectIndex ?? 0];
+    if (!effect || effect.verb !== "eliminate") return state;
+    if (effect.target.ref !== "filter" || effect.target.selection === "random") return state;
+    if (effect.target.count.mode !== "exact" && effect.target.count.mode !== "range") return state;
+
+    const eligibleCards = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
+    const eligibleIds = eligibleCards.map((c) => c.id);
+    if (presidentMatchesSelector(state, effect.target, sourceCard)) eligibleIds.push(PRESIDENT_TARGET_ID);
+    // Protection-aware, like validateTargets' own reachableIds (see
+    // protectionReachableIds) — a candidate that's Protected no matter
+    // what else gets submitted alongside it (most often shielded only by
+    // the ability's own source card, never itself a candidate) shouldn't
+    // count toward "is this still a real choice" either.
+    const reachableIds = protectionReachableIds(
+      state,
+      cardData,
+      frame.actingPlayerId,
+      eligibleIds,
+      effect.ignoreProtected ?? false,
+    );
+
+    const requiredMin = effect.target.count.mode === "exact" ? effect.target.count.value : effect.target.count.min;
+    if (reachableIds.length > requiredMin) return state; // a real choice remains
+
+    // Falling back to the normal explicit chooseTargets flow on failure
+    // here (rather than throwing) is just a defensive backstop — with
+    // reachableIds already protection-aware, this submission should
+    // always be legal in practice.
+    let next: GameState;
+    try {
+      next = applyEffect(state, cardData, frame, sourceCard, frame.actingPlayerId, effect, reachableIds);
+    } catch {
+      return state;
+    }
+    state = next;
+  }
+  return state;
 }
 
 function applyActionInner(
@@ -1355,6 +1443,37 @@ function applyPeekEffect(
   return finishEffectStep(state, nextFrame);
 }
 
+// Which of `eligibleIds` (a selector-matched pool, still protection-blind)
+// could ever actually be legally submitted — i.e. isn't Protected even
+// under the most favorable possible batch (every *other* eligible id
+// simultaneously excluded/eliminated alongside it). Excluding more
+// candidates as potential protectors can only ever help a check like this
+// pass, never hurt it, so this is the most permissive protection check
+// possible for a given id; the real, narrower per-submission check
+// (declareEliminateTargets' own protection loop, against whatever batch
+// was *actually* declared) still applies unchanged afterward. A candidate
+// that fails even this maximal check is protected no matter what else
+// gets submitted alongside it — most often shielded only by the ability's
+// own source card, which structurally can never be a candidate for its
+// own effect — and should count as unreachable for count/membership
+// purposes the same as if it weren't a selector match at all, rather than
+// silently demanding a submission nothing could ever satisfy.
+function protectionReachableIds(
+  state: GameState,
+  cardData: CardData,
+  actingPlayerId: PlayerId,
+  eligibleIds: readonly string[],
+  bypassProtection: boolean,
+): string[] {
+  if (bypassProtection) return [...eligibleIds];
+  return eligibleIds.filter((id) => {
+    const batchExcluded = eligibleIds.filter((otherId) => otherId !== id);
+    return id === PRESIDENT_TARGET_ID
+      ? isLegalPresidentTarget(state, cardData, actingPlayerId, false, batchExcluded)
+      : isLegalEliminationTarget(state, cardData, state.cards.find((c) => c.id === id)!, actingPlayerId, batchExcluded);
+  });
+}
+
 // Validates a declared target (either a card or the President sentinel)
 // against the ability's selector, and reports whether Protected-immunity
 // is currently active for it — shared by direct ability resolution
@@ -1421,7 +1540,16 @@ function declareEliminateTargets(
   const eligibleIds = eligibleCards.map((c) => c.id);
   if (presidentMatches) eligibleIds.push(PRESIDENT_TARGET_ID);
 
-  validateTargets(effect.target.count, targetIds, eligibleIds);
+  // Membership/count are checked against only the *reachable* subset of
+  // eligibleIds — see protectionReachableIds — not the raw selector-match
+  // pool. Without this, a candidate that's Protected no matter what else
+  // gets simultaneously eliminated (most often: shielded only by the
+  // ability's own source card, which can never itself be a candidate)
+  // still counts toward the required minimum, demanding a submission no
+  // combination could ever satisfy — a real dead end, not just an
+  // incidental exclusion.
+  const reachableIds = protectionReachableIds(state, cardData, actingPlayerId, eligibleIds, bypassProtection);
+  validateTargets(effect.target.count, targetIds, reachableIds);
 
   if (!bypassProtection) {
     for (const id of targetIds) {

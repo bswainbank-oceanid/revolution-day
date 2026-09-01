@@ -791,14 +791,18 @@ describe("applyAction: alarm resolution", () => {
     const gunman = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Gunman")!;
     // Republican Guard specifically — no passive, so this stays focused on
     // alarm resolution rather than also exercising the reactive-passive
-    // queue (see the dedicated passives describe block for that).
-    const target = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard")!;
+    // queue (see the dedicated passives describe block for that). Two
+    // copies, so a real chooseTargets choice still remains once the alarm
+    // pass completes — with only one candidate left, the engine would
+    // auto-resolve it instead (see autoResolveTrivialEliminate).
+    const [target, decoyTarget] = state.cards.filter((c) => c.kind === "nonLeader" && c.defRef === "Republican Guard");
     const loc = state.board[0]!.id;
     state = placeInPlay(state, gunman.id, loc, player, false); // starts face-down
     // Blended (face-down), so `other` has a real chance to respond and gets
     // included in the alarm's order — an all-face-up board with no Response
     // abilities would have nobody eligible and skip the alarm frame entirely.
-    state = placeInPlay(state, target.id, loc, other, false);
+    state = placeInPlay(state, target!.id, loc, other, false);
+    state = placeInPlay(state, decoyTarget!.id, loc, other);
     state = act(state, player, { type: "draw" });
 
     const activated = act(state, player, { type: "activateAbility", cardId: gunman.id, abilityIndex: 0 });
@@ -812,9 +816,73 @@ describe("applyAction: alarm resolution", () => {
     }
     expect(s.resolutionStack).toHaveLength(1);
 
-    const resolved = act(s, player, { type: "chooseTargets", targetIds: [target.id] });
+    const resolved = act(s, player, { type: "chooseTargets", targetIds: [target!.id] });
     expect(resolved.resolutionStack).toHaveLength(0);
-    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === target!.id)!.zone).toBe("eliminated");
+  });
+
+  it("auto-resolves with no elimination once a response leaves the effect with zero legal targets", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const [responder, targetOwner] = state.players.filter((p) => p.id !== player).map((p) => p.id);
+    const armySniper = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Army Sniper")!;
+    // Rebel Soldier — Army Sniper's own selector is Rebel-only, so this is
+    // its sole opposing candidate here.
+    const target = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Rebel Soldier")!;
+    // Bodyguard's Response is also Rebel-only, blended so it's eligible to
+    // respond at all — once revealed it's Regime, so it can never itself
+    // become a candidate for Army Sniper's own effect.
+    const bodyguard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Bodyguard")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, armySniper.id, loc, player, true);
+    state = placeInPlay(state, target.id, loc, targetOwner!, true);
+    state = placeInPlay(state, bodyguard.id, loc, responder!, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: armySniper.id, abilityIndex: 0 });
+
+    const responded = act(state, responder!, {
+      type: "useResponse",
+      cardId: bodyguard.id,
+      abilityIndex: 0,
+      targetIds: [target.id],
+    });
+
+    // The response ate Army Sniper's only legal target — with nothing left
+    // to eliminate, its own effect auto-resolves as a no-op rather than
+    // requiring a formal empty chooseTargets submission.
+    expect(responded.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+    expect(responded.resolutionStack).toHaveLength(0);
+    expect(responded.cards.find((c) => c.id === armySniper.id)!.zone).toBe("inPlay");
+  });
+
+  it("auto-chooses the sole remaining legal target once a response eliminates all but one", () => {
+    let state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const [responder, targetOwner] = state.players.filter((p) => p.id !== player).map((p) => p.id);
+    const armySniper = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Army Sniper")!;
+    const [rebel1, rebel2] = state.cards.filter((c) => c.kind === "nonLeader" && c.defRef === "Rebel Soldier");
+    const bodyguard = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Bodyguard")!;
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, armySniper.id, loc, player, true);
+    state = placeInPlay(state, rebel1!.id, loc, targetOwner!, true);
+    state = placeInPlay(state, rebel2!.id, loc, targetOwner!, true);
+    state = placeInPlay(state, bodyguard.id, loc, responder!, false);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: armySniper.id, abilityIndex: 0 });
+
+    const responded = act(state, responder!, {
+      type: "useResponse",
+      cardId: bodyguard.id,
+      abilityIndex: 0,
+      targetIds: [rebel1!.id],
+    });
+
+    // Exactly one legal target (rebel2) is left once the response resolves
+    // — no real choice remains, so it's picked automatically rather than
+    // waiting on a chooseTargets submission naming the only option.
+    expect(responded.cards.find((c) => c.id === rebel1!.id)!.zone).toBe("eliminated");
+    expect(responded.cards.find((c) => c.id === rebel2!.id)!.zone).toBe("eliminated");
+    expect(responded.resolutionStack).toHaveLength(0);
   });
 
   it("cancels the underlying ability entirely if a response eliminates the triggering character", () => {
@@ -1154,6 +1222,42 @@ describe("applyAction: remote activation", () => {
     // The original player, not Republican Guard's controller, resolves it.
     const resolved = act(remoted, player, { type: "chooseTargets", targetIds: [target.id] });
     expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+  });
+
+  // Regression: a real bot got permanently stuck remotely activating Death
+  // Squad's "eliminate one or two at this location" when the only other
+  // card there — Head of Security, Protected — was shielded solely by
+  // Death Squad itself, the ability's own source (structurally never its
+  // own candidate). validateTargets' count requirement was blind to
+  // protection, so it still demanded a submission (min 1) that no
+  // combination could ever legally satisfy: submitting Head of Security
+  // failed Protected-immunity, submitting nothing failed the count.
+  it("auto-resolves with no elimination when the only candidate is Protected only by the ability's own (uncandidatable) source card", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const hos = state.cards.find((c) => c.defRef === "Head of Security")!; // Protected, Regime
+    const deathSquad = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Death Squad")!; // Regime, unrestricted eliminate
+    const loc = state.board[0]!.id;
+    state = placeInPlay(state, hos.id, loc, player);
+    // Same faction (Regime), co-located — shields Head of Security, but is
+    // itself the ability's own source and can never be its own candidate.
+    state = placeInPlay(state, deathSquad.id, loc, other);
+    state = act(state, player, { type: "draw" });
+
+    const activated = act(state, player, { type: "activateAbility", cardId: hos.id, abilityIndex: 0 });
+    let remoted = act(activated, player, {
+      type: "chooseTargets",
+      targetIds: [deathSquad.id],
+      remoteAbilityIndex: 0,
+    });
+    // Death Squad's own alarm — player's Head of Security (a different
+    // card, with its own Response ability) is eligible to respond; pass
+    // it if so before reaching Death Squad's own target declaration.
+    remoted = passWholeAlarm(remoted);
+
+    expect(remoted.resolutionStack).toHaveLength(0);
+    expect(remoted.cards.find((c) => c.id === hos.id)!.zone).toBe("inPlay");
   });
 
   it("rejects a faction-filtered remote card outside the ability's faction", () => {

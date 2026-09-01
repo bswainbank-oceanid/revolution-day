@@ -534,6 +534,36 @@ describe("decideBotAction: avoids abilities with no legal way to complete", () =
     }
   });
 
+  // Regression: activating any card unconditionally reveals it first (see
+  // reducer.ts's applyActivateAbility) — abilityHasAvailableFirstTarget's
+  // activateRemote pre-check evaluated candidates against the card's
+  // *current* (still-blended) state, not the post-reveal state activation
+  // would actually produce. Here, Guerrilla Commander is the only card
+  // Journalist could ever reveal at this location (Journalist's own
+  // Activate ability needs a blended target here) — but activating
+  // Guerrilla Commander's remote-activate reveals Guerrilla Commander
+  // itself first, so by the time Journalist would actually be chosen and
+  // resolved, its own ability has nothing left to reveal. A real bot got
+  // stuck exactly this way: the pre-check said Journalist was usable, the
+  // ability committed, and the follow-up chooseTargets had nothing legal
+  // to submit.
+  it("never remotely activates a candidate whose own usability depended on the activating card's blend it's about to lose", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]); // 8 players — Guerrilla Commander guaranteed dealt
+    const guerrilla = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrilla.controller ?? state.turn.currentPlayerId;
+    const loc = state.board[0]!.id;
+    const journalist = findByDefRef(state, "Journalist");
+    state = place(state, guerrilla.id, loc, player, false); // blended — the only thing Journalist could reveal here
+    state = place(state, journalist.id, loc, player); // face-up Rebel nonLeader — a legal remote-activation candidate
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).not.toMatchObject({ type: "activateAbility", cardId: guerrilla.id });
+    }
+  });
+
   it("never activates Wife's ability when she isn't at the President's location", () => {
     let state = freshGame(["a", "b", "c"]);
     const wife = findByDefRef(state, "Wife");
