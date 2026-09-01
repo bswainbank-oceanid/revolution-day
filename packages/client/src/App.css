@@ -610,6 +610,23 @@ h3 {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Content does overflow and the scroll-to-bottom effect does move it —
+     verified live — but an OS/browser auto-hiding overlay scrollbar can
+     render as good as invisible here, reading as "it doesn't scroll" even
+     though it does. A styled, always-rendered scrollbar removes that
+     ambiguity. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--gold) transparent;
+}
+.game-log-lines::-webkit-scrollbar {
+  width: 8px;
+}
+.game-log-lines::-webkit-scrollbar-track {
+  background: transparent;
+}
+.game-log-lines::-webkit-scrollbar-thumb {
+  background: var(--gold);
+  border-radius: 4px;
 }
 .game-log-lines p {
   font-size: 0.75rem;
