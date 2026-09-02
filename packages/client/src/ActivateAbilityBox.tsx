@@ -8,7 +8,7 @@ import type {
   ResolutionFrame,
   RestrictedActionGrant,
 } from "@rev-day/engine";
-import { describeEntry, locationName } from "./gameText";
+import { describeEntry, leaderEliminatedInEntry, locationName, presidentEliminatedInEntry } from "./gameText";
 import { playerColorFor, playerLabel } from "./players";
 import { usableActivateAbilities, usableResponseAbilities } from "./targetDecision";
 import type { useTargetSelection } from "./useTargetSelection";
@@ -214,8 +214,14 @@ export function ActivateAbilityBox({
   } else {
     const lastEntry = log[log.length - 1];
     const priorState = log.length > 1 ? log[log.length - 2]!.resultingState : initialState;
+    const presidentDown = lastEntry ? presidentEliminatedInEntry(priorState, lastEntry.resultingState) : false;
+    const leaderDown = lastEntry && !presidentDown ? leaderEliminatedInEntry(priorState, lastEntry.resultingState) : false;
+    const specialClass = presidentDown ? "president-eliminated-line" : leaderDown ? "leader-eliminated-line" : null;
     upperRight = lastEntry ? (
-      <p className="hint" style={{ color: playerColorFor(lastEntry.resultingState, lastEntry.actingPlayerId) }}>
+      <p
+        className={specialClass ? `hint ${specialClass}` : "hint"}
+        style={specialClass ? undefined : { color: playerColorFor(lastEntry.resultingState, lastEntry.actingPlayerId) }}
+      >
         {describeEntry(lastEntry, priorState, humanPlayerId, botPlayerIds)}
       </p>
     ) : (

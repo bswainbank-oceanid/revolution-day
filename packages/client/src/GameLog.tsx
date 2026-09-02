@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { FilteredGameState, PlayerId } from "@rev-day/engine";
-import { describeEntry } from "./gameText";
+import { describeEntry, leaderEliminatedInEntry, presidentEliminatedInEntry } from "./gameText";
 import { playerColorFor } from "./players";
 import type { LogEntry } from "./useGame";
 
@@ -36,11 +36,18 @@ export function GameLog({ log, humanPlayerId, botPlayerIds, initialState }: Game
         {visible.map((entry, i) => {
           const globalIndex = startIndex + i;
           const priorState = globalIndex > 0 ? log[globalIndex - 1]!.resultingState : initialState;
+          const presidentDown = presidentEliminatedInEntry(priorState, entry.resultingState);
+          const leaderDown = !presidentDown && leaderEliminatedInEntry(priorState, entry.resultingState);
+          const specialClass = presidentDown ? "president-eliminated-line" : leaderDown ? "leader-eliminated-line" : undefined;
           return (
             // Same color-coding as the Action box: whoever actually took
             // this entry's action — the current player, or whoever was
-            // responding/intercepting/reacting at the time.
-            <p key={globalIndex} style={{ color: playerColorFor(entry.resultingState, entry.actingPlayerId) }}>
+            // responding/intercepting/reacting at the time. The President's
+            // own elimination (and, one tier down, a player leader's)
+            // overrides that with a fixed gold treatment instead — a rare,
+            // game-defining event that should read as louder than the
+            // normal per-player color-coding.
+            <p key={globalIndex} className={specialClass} style={specialClass ? undefined : { color: playerColorFor(entry.resultingState, entry.actingPlayerId) }}>
               {describeEntry(entry, priorState, humanPlayerId, botPlayerIds)}
             </p>
           );

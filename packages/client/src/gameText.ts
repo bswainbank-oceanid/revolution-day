@@ -1,4 +1,5 @@
-import type { FilteredGameState, PlayerId } from "@rev-day/engine";
+import { asCardInstance, cardData, getAbilities, PRESIDENT_TARGET_ID } from "@rev-day/engine";
+import type { Action, FilteredGameState, PlayerId } from "@rev-day/engine";
 import { playerLabel } from "./players";
 import { resolveCard } from "./targetDecision";
 import type { LogEntry } from "./useGame";
@@ -75,6 +76,92 @@ function motorcadeInterceptedSuffix(resultingState: FilteredGameState): string {
   return at ? ` — the President remains at ${at}` : "";
 }
 
+// True exactly on the entry where the President's own status flips to
+// eliminated — used both to fold him into newlyEliminatedCardIds below
+// and to flag that entry's line for special styling (see GameLog.tsx/
+// ActivateAbilityBox.tsx's presidentEliminatedInEntry usage).
+export function presidentEliminatedInEntry(priorState: FilteredGameState, resultingState: FilteredGameState): boolean {
+  return priorState.president.status !== "eliminated" && resultingState.president.status === "eliminated";
+}
+
+// Same idea, one tier down: a player leader (kind: "leader" — the
+// President's own pseudo-card also carries this kind, but he's never in
+// state.cards, so there's no overlap with presidentEliminatedInEntry
+// above) newly eliminated this entry — flagged for the milder gold
+// treatment (see GameLog.tsx/ActivateAbilityBox.tsx).
+export function leaderEliminatedInEntry(priorState: FilteredGameState, resultingState: FilteredGameState): boolean {
+  const wasEliminated = new Set(priorState.cards.filter((c) => c.zone === "eliminated").map((c) => c.id));
+  return resultingState.cards.some((c) => c.kind === "leader" && c.zone === "eliminated" && !wasEliminated.has(c.id));
+}
+
+// Every card newly in the "eliminated" zone this entry, plus the
+// President's own sentinel id (PRESIDENT_TARGET_ID) when he's the one who
+// just went down — a single ability can eliminate more than one target at
+// once (Death Squad's "one or two targets", Suicide Bomber's
+// random-target-then-self chain), so this is a list, not a single id.
+function newlyEliminatedCardIds(priorState: FilteredGameState, resultingState: FilteredGameState): readonly string[] {
+  const wasEliminated = new Set(priorState.cards.filter((c) => c.zone === "eliminated").map((c) => c.id));
+  const cardIds = resultingState.cards.filter((c) => c.zone === "eliminated" && !wasEliminated.has(c.id)).map((c) => c.id);
+  return presidentEliminatedInEntry(priorState, resultingState) ? [...cardIds, PRESIDENT_TARGET_ID] : cardIds;
+}
+
+// Which card's ability caused the elimination(s) this entry, and whether
+// that ability is Activate or Response (per card_data.json — the only two
+// ability types that exist) — the two things the elimination note needs
+// to attribute. activateAbility/useResponse resolve immediately when the
+// target was trivial (no real choice needed), so their own action already
+// names the source directly; when a real choice WAS needed, the actual
+// elimination lands on a later chooseTargets entry instead, sourced from
+// whatever AbilityResolutionFrame is still open (protectedTargetingWindow
+// etc. can sit briefly on top of it, hence scanning from the top down
+// rather than assuming it's the last frame pushed). interceptMotorcade is
+// a passive (motorcadeInterception), not an Activate/Response ability, so
+// it gets a source but no ability-type qualifier. Anything else (a passive
+// reactive queue, e.g.) has no single card to attribute — null.
+function eliminationCause(
+  priorState: FilteredGameState,
+  resultingState: FilteredGameState,
+  action: Action,
+): { readonly sourceCardId: string; readonly abilityType: "Activate" | "Response" | null } | null {
+  if (action.type === "activateAbility") return { sourceCardId: action.cardId, abilityType: "Activate" };
+  if (action.type === "useResponse") return { sourceCardId: action.cardId, abilityType: "Response" };
+  if (action.type === "interceptMotorcade") return { sourceCardId: action.cardId, abilityType: null };
+  const frame = [...priorState.resolutionStack].reverse().find((f) => f.kind === "abilityResolution");
+  if (!frame) return null;
+  const sourceCard = resultingState.cards.find((c) => c.id === frame.sourceCardId);
+  const instance = sourceCard ? asCardInstance(sourceCard) : null;
+  const abilityType = instance ? (getAbilities(cardData, instance)[frame.abilityIndex]?.type ?? null) : null;
+  return { sourceCardId: frame.sourceCardId, abilityType: abilityType === "Response" ? "Response" : "Activate" };
+}
+
+// "— eliminated {card} at {location} via {source}'s {Activate|Response}
+// ability" per newly-eliminated card — location comes from priorState
+// since eliminateCard clears locationId once a card is actually
+// eliminated (see reducer.ts). Self-eliminations (the interceptor
+// sacrificing itself, Suicide Bomber's own second effect) skip the "via"
+// clause — "eliminated X via X" doesn't add anything a reader doesn't
+// already know from naming the card once.
+function describeEliminations(priorState: FilteredGameState, resultingState: FilteredGameState, action: Action): string {
+  const eliminatedIds = newlyEliminatedCardIds(priorState, resultingState);
+  if (eliminatedIds.length === 0) return "";
+  const cause = eliminationCause(priorState, resultingState, action);
+  return eliminatedIds
+    .map((id) => {
+      // resolveCard (targetDecision.ts) special-cases PRESIDENT_TARGET_ID
+      // into a pseudo-card with the same shape — the President's own
+      // elimination reads identically to a real card's below.
+      const priorCard = resolveCard(priorState, id);
+      const name = id === PRESIDENT_TARGET_ID ? "the President" : (priorCard?.defRef ?? cardName(priorState, id));
+      const at = locationName(priorState, priorCard?.locationId);
+      const atClause = at ? ` at ${at}` : "";
+      if (!cause || cause.sourceCardId === id) return ` — eliminated ${name}${atClause}.`;
+      const sourceName = cardName(resultingState, cause.sourceCardId);
+      const viaClause = cause.abilityType ? `${sourceName}'s ${cause.abilityType} ability` : sourceName;
+      return ` — eliminated ${name}${atClause} via ${viaClause}.`;
+    })
+    .join("");
+}
+
 export function describeEntry(
   entry: LogEntry,
   priorState: FilteredGameState,
@@ -85,6 +172,10 @@ export function describeEntry(
   // narration; other players still use the Player/Bot N scheme.
   const who = entry.actingPlayerId === humanPlayerId ? "You" : playerLabel(entry.resultingState, entry.actingPlayerId, humanPlayerId, botPlayerIds);
   const { action, resultingState } = entry;
+  return baseDescription(who, action, resultingState, priorState) + describeEliminations(priorState, resultingState, action);
+}
+
+function baseDescription(who: string, action: Action, resultingState: FilteredGameState, priorState: FilteredGameState): string {
   switch (action.type) {
     case "draw":
       return `${who} drew a card.`;
@@ -104,7 +195,7 @@ export function describeEntry(
       return `${who} activated ${cardName(resultingState, action.cardId)}${at ? ` at ${at}` : ""}.`;
     }
     case "endTurn":
-      return entry.actingPlayerId === humanPlayerId ? "You ended your turn." : `${who} ended their turn.`;
+      return who === "You" ? "You ended your turn." : `${who} ended their turn.`;
     case "chooseTargets":
       return `${who} chose targets.`;
     case "useResponse":

@@ -640,6 +640,28 @@ h3 {
   font-size: 0.75rem;
   margin: 0 0 0.3rem;
 }
+/* The President's own elimination is a rare, game-defining event — loud
+   enough to override both the Game Log's per-line font-size and the
+   Action Box's .hint (font-size + dimmed opacity), which is why this
+   needs !important rather than relying on selector specificity across
+   two unrelated contexts. Deliberately bypasses the normal per-player
+   color-coding (GameLog.tsx/ActivateAbilityBox.tsx skip the inline
+   color style whenever this class applies) rather than fighting it. */
+.president-eliminated-line {
+  color: var(--gold) !important;
+  font-weight: 700 !important;
+  font-size: 1.15rem !important;
+  opacity: 1 !important;
+}
+/* A player leader's elimination gets the same gold, larger-than-normal
+   treatment one tier down — lighter weight than the President's, so the
+   two stay visually distinguishable at a glance. */
+.leader-eliminated-line {
+  color: var(--gold) !important;
+  font-weight: 600 !important;
+  font-size: 1.15rem !important;
+  opacity: 1 !important;
+}
 
 /* Bottom strip — hand-strip-only now that Actions has merged into the
    left column's Activate Ability box, so it just takes the full row. */
