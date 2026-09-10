@@ -6,6 +6,7 @@ import {
   forwardStepDistance,
   leaderLocationObjectiveFor,
   shouldDeployLocationLeaderNow,
+  stagingLocationId,
   stepToward,
 } from "./leaderObjective";
 
@@ -29,6 +30,20 @@ describe("leaderLocationObjectiveFor", () => {
   it("is null for an unknown defRef", () => {
     const state = freshGame();
     expect(leaderLocationObjectiveFor("Not A Real Leader", winConditions, state.board).eliminateAtLocationId).toBeNull();
+  });
+});
+
+describe("stagingLocationId", () => {
+  it("resolves to the location immediately before the win location", () => {
+    const state = freshGame();
+    const palace = state.board.find((l) => l.name === "Palace")!;
+    const palaceIndex = state.board.findIndex((l) => l.id === palace.id);
+    expect(stagingLocationId(state.board, palace.id)).toBe(state.board[palaceIndex - 1]!.id);
+  });
+
+  it("is undefined when the win location is the first on the board", () => {
+    const state = freshGame();
+    expect(stagingLocationId(state.board, state.board[0]!.id)).toBeUndefined();
   });
 });
 

@@ -68,6 +68,21 @@ export function shouldDeployLocationLeaderNow(state: FilteredGameState, objectiv
   return forwardStepDistance(state.board, state.president.locationId, objective.eliminateAtLocationId) <= DEPLOY_DISTANCE_THRESHOLD;
 }
 
+// The single location immediately before the win location along the
+// board's fixed order — e.g. one step before the Palace. A Motorcade
+// interceptor (Throng of Admirers / Angry Mob) sacrifices itself to
+// cancel the *next* move attempted from wherever it's standing when that
+// move is played, so this is where one needs to be stationed to control
+// the final approach: cancelling the move that would deliver the
+// President onto the win location itself, on demand, rather than leaving
+// his arrival to chance. Undefined if the win location is the very first
+// board location (no location precedes it) — not reachable with the
+// current board layout, but kept honest rather than assuming index 0.
+export function stagingLocationId(board: BoardLayout, eliminateAtLocationId: string): string | undefined {
+  const index = board.findIndex((l) => l.id === eliminateAtLocationId);
+  return index > 0 ? board[index - 1]!.id : undefined;
+}
+
 export interface ProtectionTargets {
   readonly locationIds: readonly string[];
 }

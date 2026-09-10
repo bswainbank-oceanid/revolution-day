@@ -1,5 +1,12 @@
 import { cardData, filterForPlayer, setupGame } from "@rev-day/engine";
-import type { AbilityResolutionFrame, AlarmResolutionFrame, CardInstance, GameState, PlayerId } from "@rev-day/engine";
+import type {
+  AbilityResolutionFrame,
+  AlarmResolutionFrame,
+  CardInstance,
+  GameState,
+  MotorcadeInterceptionWindowFrame,
+  PlayerId,
+} from "@rev-day/engine";
 import { describe, expect, it } from "vitest";
 import { decideBotAction } from "./decide";
 import type { Rng } from "./random";
@@ -722,5 +729,133 @@ describe("decideBotAction: Wife's location-gated objective", () => {
 
     const action = decideBotAction(filtered, player, cardData, zero);
     expect(action).toEqual({ type: "chooseTargets", targetIds: [opposingTarget.id] });
+  });
+});
+
+describe("decideBotAction: routing Motorcade interceptors ('mobs') for Wife's controller", () => {
+  it("deploys a mob to the staging location before the Palace, not the Palace itself, from hand", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const mob = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    const palaceIndex = state.board.findIndex((l) => l.name === "Palace");
+    const staging = state.board[palaceIndex - 1]!.id;
+    state = {
+      ...state,
+      cards: state.cards.map((c) => (c.id === mob.id ? { ...c, zone: "hand" as const, controller: player } : c)),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: mob.id, locationId: staging });
+  });
+
+  it("routes an already-staged mob toward the Palace via movement, not a random adjacent step", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const mob = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    const palaceIndex = state.board.findIndex((l) => l.name === "Palace");
+    const staging = state.board[palaceIndex - 1]!.id;
+    const palace = state.board[palaceIndex]!.id;
+    state = place(state, mob.id, staging, player);
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", actionsRemaining: 2 } };
+    // Force the move branch: no playable hand card and no drawable deck.
+    state = {
+      ...state,
+      cards: state.cards.map((c) =>
+        (c.zone === "hand" || c.zone === "deck") && (c.zone !== "hand" || c.controller === player)
+          ? { ...c, zone: "discard" as const }
+          : c,
+      ),
+    };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "moveCard", cardId: mob.id, toLocationId: palace });
+  });
+
+  it("always intercepts to prevent the President leaving the Palace, regardless of whose turn it nominally is", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const palace = state.board.find((l) => l.name === "Palace")!.id;
+    const mob = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    state = place(state, mob.id, palace, player);
+    state = { ...state, president: { status: "alive", locationId: palace } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: other, phase: "action" } };
+
+    const frame: MotorcadeInterceptionWindowFrame = {
+      kind: "motorcadeInterceptionWindow",
+      actingPlayerId: other,
+      presidentLocationId: palace,
+      order: [player],
+      nextIndex: 0,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).toEqual({ type: "interceptMotorcade", cardId: mob.id });
+    }
+  });
+
+  it("intercepts by default at the staging location when it isn't this player's own turn", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const palaceIndex = state.board.findIndex((l) => l.name === "Palace");
+    const staging = state.board[palaceIndex - 1]!.id;
+    const mob = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    state = place(state, mob.id, staging, player);
+    state = { ...state, president: { status: "alive", locationId: staging } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: other, phase: "action" } };
+
+    const frame: MotorcadeInterceptionWindowFrame = {
+      kind: "motorcadeInterceptionWindow",
+      actingPlayerId: other,
+      presidentLocationId: staging,
+      order: [player],
+      nextIndex: 0,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).toEqual({ type: "interceptMotorcade", cardId: mob.id });
+    }
+  });
+
+  it("lets the motorcade through at the staging location once it's already this player's own turn", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const palaceIndex = state.board.findIndex((l) => l.name === "Palace");
+    const staging = state.board[palaceIndex - 1]!.id;
+    const mob = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    state = place(state, mob.id, staging, player);
+    state = { ...state, president: { status: "alive", locationId: staging } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+
+    const frame: MotorcadeInterceptionWindowFrame = {
+      kind: "motorcadeInterceptionWindow",
+      actingPlayerId: other,
+      presidentLocationId: staging,
+      order: [player],
+      nextIndex: 0,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).toEqual({ type: "passIntercept" });
+    }
   });
 });

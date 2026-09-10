@@ -36,7 +36,13 @@ import type {
 import type { PresidentObjective } from "./presidentObjective";
 import { presidentObjectiveFor } from "./presidentObjective";
 import type { LeaderLocationObjective } from "./leaderObjective";
-import { computeProtectionTargets, leaderLocationObjectiveFor, shouldDeployLocationLeaderNow, stepToward } from "./leaderObjective";
+import {
+  computeProtectionTargets,
+  leaderLocationObjectiveFor,
+  shouldDeployLocationLeaderNow,
+  stagingLocationId,
+  stepToward,
+} from "./leaderObjective";
 import type { Rng } from "./random";
 import { coinFlip, pickN, pickRandom } from "./random";
 
@@ -69,7 +75,7 @@ export function decideBotAction(
     case "protectedTargetingWindow":
       return decideRevealAction(state, playerId, frame, rng);
     case "motorcadeInterceptionWindow":
-      return decideInterceptAction(state, playerId, frame, rng);
+      return decideInterceptAction(state, playerId, frame, locationObjective, rng);
     case "reactivePassiveWindow":
       return decideReactiveAction(state, playerId, cardData, frame, rng);
   }
@@ -654,13 +660,15 @@ function playableTargetLocation(
 }
 
 // Where `card` should currently be routed, in priority order: the win
-// location itself, for an eliminate-capable card once the deploy window
-// is open (Palace-stacking redundancy — the win condition doesn't require
-// this player's own leader to land the kill, see WinPredicate's
-// presidentEliminatedAt); then wherever Regime protection is currently
-// needed (see computeProtectionTargets). A non-Regime, non-eliminate-
-// capable card gets an empty list and falls through to the existing
-// random placement, unchanged from before this feature.
+// location (and its staging spot as a fallback), unconditionally, for a
+// Motorcade interceptor; then the win location itself, for an
+// eliminate-capable card once the deploy window is open (Palace-stacking
+// redundancy — the win condition doesn't require this player's own
+// leader to land the kill, see WinPredicate's presidentEliminatedAt);
+// then wherever Regime protection is currently needed (see
+// computeProtectionTargets). A non-interceptor, non-Regime,
+// non-eliminate-capable card gets an empty list and falls through to the
+// existing random placement, unchanged from before this feature.
 function desiredCardLocations(
   state: FilteredGameState,
   playerId: PlayerId,
@@ -676,8 +684,28 @@ function desiredCardLocations(
   if (!locationObjective.eliminateAtLocationId) return [];
 
   const ids: string[] = [];
-  if (shouldDeployLocationLeaderNow(state, locationObjective) && cardHasAnyEliminateAbility(cardData, card)) {
+
+  // Motorcade interceptors ("mobs" — Throng of Admirers / Angry Mob) are
+  // the actual defense against the President just sailing past the win
+  // location once he arrives (see decideInterceptAction's own comment) —
+  // get one positioned early, well before the deploy window below opens,
+  // since holding the line is anticipatory, not last-minute. Neither
+  // card's own allowed location types include the win location itself
+  // (it's "Secure"; they're "Public"/"Street" only), so this lists the
+  // win location first and the staging spot right before it second:
+  // playableTargetLocation's first-legal-match scan naturally falls
+  // through to staging for an initial hand play (the win location fails
+  // its own type check), while stepToward's nearest-of-all-desired scan
+  // naturally walks an already-staged mob the rest of the way in, since
+  // "already there" drops out of its own candidate set.
+  if (cardHasMotorcadeInterceptionPassive(card)) {
     ids.push(locationObjective.eliminateAtLocationId);
+    const staging = stagingLocationId(state.board, locationObjective.eliminateAtLocationId);
+    if (staging) ids.push(staging);
+  }
+
+  if (shouldDeployLocationLeaderNow(state, locationObjective) && cardHasAnyEliminateAbility(cardData, card)) {
+    if (!ids.includes(locationObjective.eliminateAtLocationId)) ids.push(locationObjective.eliminateAtLocationId);
   }
   if (knownFaction(cardData, card) === "Regime") {
     for (const id of computeProtectionTargets(state, playerId, locationObjective).locationIds) {
@@ -685,6 +713,10 @@ function desiredCardLocations(
     }
   }
   return ids;
+}
+
+function cardHasMotorcadeInterceptionPassive(card: FilteredCardInstance): boolean {
+  return card.defRef !== null && getPassive(card.defRef)?.kind === "motorcadeInterception";
 }
 
 // Whether `card` has any ability (Activate or Response) with an eliminate
@@ -1069,6 +1101,7 @@ function decideInterceptAction(
   state: FilteredGameState,
   playerId: PlayerId,
   frame: MotorcadeInterceptionWindowFrame,
+  locationObjective: LeaderLocationObjective,
   rng: Rng,
 ): Action {
   const eligible = state.cards.filter(
@@ -1079,7 +1112,33 @@ function decideInterceptAction(
       c.defRef !== null &&
       getPassive(c.defRef)?.kind === "motorcadeInterception",
   );
-  if (eligible.length === 0 || !coinFlip(rng, 0.5)) return { type: "passIntercept" };
+  if (eligible.length === 0) return { type: "passIntercept" };
+
+  if (locationObjective.eliminateAtLocationId) {
+    if (frame.presidentLocationId === locationObjective.eliminateAtLocationId) {
+      // He's AT the win location right now — never let this move apply,
+      // no exceptions. Every other outcome here costs nothing but a
+      // turn; letting him leave the win location (eventually "surviving"
+      // off the board) forecloses this player's win condition for good.
+      return { type: "interceptMotorcade", cardId: pickRandom(rng, eligible)!.id };
+    }
+    const staging = stagingLocationId(state.board, locationObjective.eliminateAtLocationId);
+    if (frame.presidentLocationId === staging) {
+      // The staging spot right before it: hold him here by default — if
+      // this player isn't set up to capitalize yet, letting him through
+      // now just burns the "always stop" rule above with nobody ready to
+      // act on it. But if it's already this player's own turn, nothing
+      // else gets to move before they do, so there's nothing to lose by
+      // letting him through immediately instead of stalling for no
+      // reason.
+      if (state.turn.currentPlayerId !== playerId) {
+        return { type: "interceptMotorcade", cardId: pickRandom(rng, eligible)!.id };
+      }
+      return { type: "passIntercept" };
+    }
+  }
+
+  if (!coinFlip(rng, 0.5)) return { type: "passIntercept" };
   const chosen = pickRandom(rng, eligible)!;
   return { type: "interceptMotorcade", cardId: chosen.id };
 }
