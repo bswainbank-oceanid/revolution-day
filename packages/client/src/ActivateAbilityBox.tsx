@@ -8,7 +8,7 @@ import type {
   ResolutionFrame,
   RestrictedActionGrant,
 } from "@rev-day/engine";
-import { describeEntry, leaderEliminatedInEntry, locationName, presidentEliminatedInEntry } from "./gameText";
+import { describeEntry, endgameTurnsLeftText, leaderEliminatedInEntry, locationName, presidentEliminatedInEntry } from "./gameText";
 import { playerColorFor, playerLabel } from "./players";
 import { usableActivateAbilities, usableResponseAbilities } from "./targetDecision";
 import type { useTargetSelection } from "./useTargetSelection";
@@ -109,6 +109,21 @@ interface ActivateAbilityBoxProps {
   // since a nested frame can belong to a *different* player than the one
   // who opened it.
   readonly actionPlayerId: PlayerId;
+  // The "Move" entry in the ability list — moveModeCardId is App.tsx's
+  // own client-only pending state (non-null while CityView is showing
+  // this card's adjacent locations as click targets, per the user's own
+  // spec: select the card, click Move, choose a highlighted location or
+  // click elsewhere to cancel). onStartMove begins it for the currently-
+  // viewed card and switches to City View — this component only ever
+  // reads moveModeCardId to know whether to show the button or a
+  // "choose a location" hint instead.
+  readonly moveModeCardId: string | null;
+  readonly onStartMove: (cardId: string) => void;
+  // Why the last submitted action was rejected (useGame.ts's own
+  // actionError — a 400 from applyAction, an actual illegal move, not a
+  // network/session problem) — takes over the Upper Right quadrant
+  // instead of failing silently, until the next action attempt clears it.
+  readonly actionError?: string | null;
 }
 
 // Four fixed quadrants (per the user's own spec): Upper Left is who's
@@ -137,6 +152,9 @@ export function ActivateAbilityBox({
   awaitingContinue,
   onContinue,
   actionPlayerId,
+  moveModeCardId,
+  onStartMove,
+  actionError,
 }: ActivateAbilityBoxProps) {
   const { cardPick, locationPick, respondingWith, startResponse, viewCardsMode, setViewCardsMode, unsupportedAbility } = selection;
   const topFrame = state.resolutionStack[state.resolutionStack.length - 1] ?? null;
@@ -146,6 +164,13 @@ export function ActivateAbilityBox({
   const deckCount = state.cards.filter((c) => c.zone === "deck").length;
   const canDraw = canTakeTurnAction && state.turn.actionsRemaining > 0 && deckCount > 0;
   const canEndTurn = canTakeTurnAction;
+
+  // Once the President's elimination has started the endgame countdown,
+  // and only on the human's own actual turn (not while narrating a bot's,
+  // or an off-turn response/interception that merely happens to be
+  // theirs) — see gameText.ts's own comment on why this needs no seat math.
+  const turnsLeftText =
+    actionPlayerId === humanPlayerId && state.turn.currentPlayerId === humanPlayerId ? endgameTurnsLeftText(state) : null;
 
   // Upper Left: always visible — actions-remaining context doesn't
   // disappear just because a pick/alarm/intercept window opened on top
@@ -158,6 +183,7 @@ export function ActivateAbilityBox({
       {state.turn.restrictedAction && (
         <p className="hint restricted-play-actions">{describeGrant(state.turn.restrictedAction)}</p>
       )}
+      {turnsLeftText && <p className="hint endgame-turns-left">{turnsLeftText}</p>}
     </div>
   );
 
@@ -198,8 +224,14 @@ export function ActivateAbilityBox({
   // response is now what's actually pending), so each line sets its own
   // color rather than inheriting the box's own actionColor. Falls back to
   // just the single most recent logged action once the stack is empty.
+  // actionError takes over ahead of all of that — the state didn't
+  // actually advance (the attempted action was rejected), so whatever
+  // would otherwise show here is still exactly accurate, but explaining
+  // the rejection is the more urgent thing to say right now.
   let upperRight: ReactNode;
-  if (isPlaying) {
+  if (actionError) {
+    upperRight = <p className="hint action-error">{actionError}</p>;
+  } else if (isPlaying) {
     upperRight = <p className="hint">{playbackCaption ?? "Watching the turn play out…"}</p>;
   } else if (state.resolutionStack.length > 0) {
     upperRight = (
@@ -340,26 +372,41 @@ export function ActivateAbilityBox({
       canTakeTurnAction && (state.turn.actionsRemaining > 0 || cardQualifiesForActivateGrant);
     const isOwnCard = !!card && card.controller === humanPlayerId && card.zone === "inPlay";
     const abilities = card && isOwnCard && canActivate ? usableActivateAbilities(state, card, state.turn.usedAbilities, humanPlayerId) : [];
+    // Move spends the normal turn budget only — no restricted grant ever
+    // pays for it (see App.tsx's own comment on cardQualifiesForPlayGrant),
+    // so this doesn't need the activate-grant carve-out canActivate has.
+    const canMove = !!card && card.defRef !== null && isOwnCard && canTakeTurnAction && state.turn.actionsRemaining > 0;
+    const isMovingThisCard = !!card && moveModeCardId === card.id;
+    const hasAnyOption = abilities.length > 0 || canMove;
 
     bottomRight = (
       <>
-        {abilities.length > 0 && <h3>ACTIVATE ABILITY</h3>}
-        {!card || card.defRef === null ? (
+        {hasAnyOption && <h3>ACTIVATE ABILITY</h3>}
+        {isMovingThisCard ? (
+          <p className="hint">Choose a highlighted location, or click elsewhere to cancel.</p>
+        ) : !card || card.defRef === null ? (
           <p className="hint">No abilities</p>
-        ) : abilities.length === 0 ? (
+        ) : !hasAnyOption ? (
           <p className="hint">No abilities{card.defRef === "President" ? " — Protected" : ""}</p>
         ) : (
-          abilities.map((a) => (
-            <button
-              key={a.abilityIndex}
-              type="button"
-              className="ability-button"
-              disabled={disabled}
-              onClick={() => act({ type: "activateAbility", cardId: card.id, abilityIndex: a.abilityIndex })}
-            >
-              {a.text}
-            </button>
-          ))
+          <>
+            {abilities.map((a) => (
+              <button
+                key={a.abilityIndex}
+                type="button"
+                className="ability-button"
+                disabled={disabled}
+                onClick={() => act({ type: "activateAbility", cardId: card.id, abilityIndex: a.abilityIndex })}
+              >
+                {a.text}
+              </button>
+            ))}
+            {canMove && (
+              <button type="button" className="ability-button" disabled={disabled} onClick={() => onStartMove(card.id)}>
+                Move
+              </button>
+            )}
+          </>
         )}
       </>
     );

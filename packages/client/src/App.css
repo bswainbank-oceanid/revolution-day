@@ -770,6 +770,19 @@ h3 {
   margin: 0.2rem 0 0;
   color: var(--gold);
 }
+.endgame-turns-left {
+  margin: 0.2rem 0 0;
+  color: var(--gold);
+  font-weight: 700;
+}
+/* .hint's own opacity/font-size would otherwise dim this (same specificity,
+   .hint comes first) — an explanation of why the last move was rejected
+   should read as clearly as the .error banner it mirrors, not muted. */
+.action-error {
+  color: var(--marker-crimson);
+  font-weight: 600;
+  opacity: 1;
+}
 .playback-caption {
   margin: 0.3rem 0 0;
   font-style: italic;

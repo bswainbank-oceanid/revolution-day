@@ -50,7 +50,16 @@ export interface GameSession {
 interface UseGameResult {
   readonly session: GameSession | null;
   readonly loading: boolean;
+  // Session-level trouble (network failure, 404 — the game itself is
+  // gone) — shown as App.tsx's own banner, since there's no specific
+  // attempted move for the Action Box to explain.
   readonly error: string | null;
+  // Why the *last submitted action* was rejected (a 400 from applyAction
+  // — an illegal move, not a network/session problem) — surfaced in the
+  // Action Box's current-action quadrant instead of failing silently.
+  // Cleared automatically at the start of the next act() call, success or
+  // failure, same as `error` above.
+  readonly actionError: string | null;
   readonly startNewGame: () => Promise<void>;
   readonly act: (action: Action) => Promise<void>;
 }
@@ -143,6 +152,7 @@ export function useGame(): UseGameResult {
   const [session, setSession] = useState<GameSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const startNewGame = useCallback(async () => {
     setLoading(true);
@@ -171,6 +181,7 @@ export function useGame(): UseGameResult {
       if (!session || session.gameOver) return;
       setLoading(true);
       setError(null);
+      setActionError(null);
       try {
         const result = await applyAction(session.gameId, session.humanPlayerId, session.humanPlayerId, action);
         const ownEntry: LogEntry = { actingPlayerId: session.humanPlayerId, action, resultingState: result.state };
@@ -181,15 +192,25 @@ export function useGame(): UseGameResult {
         const { state, gameOver, entries } = await runUntilHumanDecision(session.gameId, session.humanPlayerId, result.state);
         setSession({ ...session, state, gameOver, log: [...session.log, ownEntry, ...entries] });
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
-        // A 404 means the game itself is gone (e.g. the server's dev
-        // database got wiped/restarted underneath an open tab) — the
-        // stale session.state would otherwise sit frozen forever, showing
-        // whatever it last rendered with no way to recover except a full
-        // page reload. Falling back to the New Game screen is the actual
-        // correct state to be in once the game we're pointed at no longer
-        // exists.
-        if (err instanceof ApiError && err.status === 404) setSession(null);
+        // A 400 is applyAction rejecting the specific move just attempted
+        // (an illegal action, not a session problem) — the Action Box
+        // explains it directly instead of a generic banner. Anything else
+        // (network failure, a 404 once the game itself is gone) is session-
+        // level trouble with no specific move to explain, so it keeps
+        // going through the general error banner instead.
+        if (err instanceof ApiError && err.status === 400) {
+          setActionError(err.message);
+        } else {
+          setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
+          // A 404 means the game itself is gone (e.g. the server's dev
+          // database got wiped/restarted underneath an open tab) — the
+          // stale session.state would otherwise sit frozen forever, showing
+          // whatever it last rendered with no way to recover except a full
+          // page reload. Falling back to the New Game screen is the actual
+          // correct state to be in once the game we're pointed at no longer
+          // exists.
+          if (err instanceof ApiError && err.status === 404) setSession(null);
+        }
       } finally {
         setLoading(false);
       }
@@ -197,5 +218,5 @@ export function useGame(): UseGameResult {
     [session],
   );
 
-  return { session, loading, error, startNewGame, act };
+  return { session, loading, error, actionError, startNewGame, act };
 }

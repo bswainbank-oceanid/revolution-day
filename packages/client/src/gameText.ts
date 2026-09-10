@@ -8,6 +8,25 @@ export function cardName(state: FilteredGameState, cardId: string): string {
   return resolveCard(state, cardId)?.defRef ?? "a card";
 }
 
+// "You have N more turns" / "Your Last Turn" once the President's
+// elimination has started the endgame countdown (state.turn.
+// endgameTurnsRemaining — null before then, set to 3*players.length+1 at
+// the moment he dies and decremented by 1 on every single player's
+// endTurn from there, see reducer.ts's applyEndTurn). That's a *shared*
+// counter across every player, not a per-player one, but since rotation
+// always proceeds seat-by-seat starting from whoever's turn is current,
+// counting how many of the next `remaining` decrements land back on the
+// current player is just remaining's distribution over players.length —
+// no seat lookup needed as long as this is only read for the player whose
+// turn it actually is right now (state.turn.currentPlayerId).
+export function endgameTurnsLeftText(state: FilteredGameState): string | null {
+  const remaining = state.turn.endgameTurnsRemaining;
+  const playerCount = state.players.length;
+  if (remaining === null || remaining < 1 || playerCount < 1) return null;
+  const myTurnsLeft = Math.floor((remaining - 1) / playerCount) + 1;
+  return myTurnsLeft === 1 ? "Your Last Turn" : `You have ${myTurnsLeft} more turns`;
+}
+
 // Same fallback as cardName for a card whose identity isn't known to the
 // viewer, but distinguishes *why*: still face-down (a blended card, in
 // which case there's something concrete to say even without a name) from
@@ -38,7 +57,7 @@ export function locationName(state: FilteredGameState, locationId: string | null
   if (!location) return null;
   const number = locationNumber(state, locationId);
   const name = location.name ?? location.type;
-  return number ? `${name} (${number})` : name;
+  return number ? `${name} - ${number}` : name;
 }
 
 // The "President's starting and ending locations" whenever a Motorcade

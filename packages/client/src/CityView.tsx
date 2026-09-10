@@ -33,6 +33,17 @@ interface CityViewProps {
   readonly onSelectCard?: (card: FilteredCardInstance) => void;
   readonly cardPick?: ActiveCardPick | null;
   readonly pickModeActive?: boolean;
+  // The "Move" button's own click-to-choose flow (ActivateAbilityBox) —
+  // distinct from locationPick (ability targeting, driven by a
+  // resolution-stack frame): here App.tsx feeds the move's own candidate
+  // set through allowedDropLocationIds (so it reuses the exact same
+  // drop-target highlight as a dragged card), and onCancelMove's mere
+  // presence is what this component treats as "move mode is active" —
+  // every tile click resolves to one or the other, and so does a
+  // click anywhere else in the view (the background, the President
+  // marker) rather than falling through to normal navigation/selection.
+  readonly onChooseMoveTarget?: (locationId: string) => void;
+  readonly onCancelMove?: () => void;
 }
 
 // 3x2 grid in board (linear) order — DESIGN_NOTES.md: "Street / HQ /
@@ -49,19 +60,29 @@ export function CityView({
   onSelectCard,
   cardPick,
   pickModeActive,
+  onChooseMoveTarget,
+  onCancelMove,
 }: CityViewProps) {
   let streetIndex = 0;
   const president = state.president;
   const playOrder = playersInPlayOrder(state, startingPlayerId);
   const isPresidentCandidate = cardPick?.candidates.some((c) => c.id === PRESIDENT_TARGET_ID) ?? false;
   const isPresidentSelected = cardPick?.selectedIds.includes(PRESIDENT_TARGET_ID) ?? false;
+  const moveModeActive = !!onCancelMove;
 
   const viewPresident = (e: MouseEvent) => {
     e.stopPropagation();
+    if (moveModeActive) {
+      onCancelMove!();
+      return;
+    }
     onSelectCard?.(presidentPseudoCard(state));
   };
   const onPresidentMarkerClick = (e: MouseEvent) => {
-    if (pickModeActive && isPresidentCandidate) {
+    if (moveModeActive) {
+      e.stopPropagation();
+      onCancelMove!();
+    } else if (pickModeActive && isPresidentCandidate) {
       e.stopPropagation();
       cardPick!.toggle(presidentPseudoCard(state));
     } else {
@@ -70,7 +91,7 @@ export function CityView({
   };
 
   return (
-    <div className="city-view">
+    <div className="city-view" onClick={moveModeActive ? onCancelMove : undefined}>
       <h2>CITY VIEW</h2>
       <p className="president-status-line">PRESIDENT: {presidentStatusText(state)}</p>
       <div className="city-grid">
@@ -97,13 +118,19 @@ export function CityView({
           const presidentHere = president.status === "alive" && president.locationId === location.id;
           const isDropTarget = allowedDropLocationIds?.has(location.id) ?? false;
           const isLocationPickCandidate = locationPick?.candidateLocationIds.includes(location.id) ?? false;
-          const onClick = locationPick
-            ? isLocationPickCandidate
-              ? () => locationPick.choose(location.id)
-              : undefined
-            : onSelectLocation
-              ? () => onSelectLocation(location.id)
-              : undefined;
+          const onClick = moveModeActive
+            ? (e: MouseEvent) => {
+                e.stopPropagation();
+                if (isDropTarget) onChooseMoveTarget?.(location.id);
+                else onCancelMove!();
+              }
+            : locationPick
+              ? isLocationPickCandidate
+                ? () => locationPick.choose(location.id)
+                : undefined
+              : onSelectLocation
+                ? () => onSelectLocation(location.id)
+                : undefined;
           return (
             <div key={location.id} className="city-tile">
               <button

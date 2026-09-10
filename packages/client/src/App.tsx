@@ -51,11 +51,17 @@ function lockedLocationIds(state: FilteredGameState, pick: ActiveCardPick | null
 // final state can already exist while playback is still narrating the
 // bot steps leading up to it).
 function App() {
-  const { session, loading, error, startNewGame, act } = useGame();
+  const { session, loading, error, actionError, startNewGame, act } = useGame();
   const { view, goToCity, goToLocation } = useViewNavigation();
   const [viewedCardId, setViewedCardId] = useState<string | null>(null);
   const [draggedCard, setDraggedCard] = useState<FilteredCardInstance | null>(null);
   const [checkOpponentTurns, setCheckOpponentTurns] = useState(false);
+  // The "Move" button's own client-only pending state — moveCard has no
+  // resolution-stack frame of its own (unlike ability targeting), so
+  // there's nothing server-side to mirror here. Cleared on completion, on
+  // explicit cancel (CityView's onCancelMove), or implicitly by selectCard
+  // below the moment a *different* card gets viewed.
+  const [moveCardId, setMoveCardId] = useState<string | null>(null);
   const selection = useTargetSelection(session?.state ?? null, session?.humanPlayerId ?? null, act);
   const handleCamera = useCallback(
     (target: CameraTarget) => {
@@ -99,6 +105,10 @@ function App() {
   const selectCard = useCallback(
     (card: FilteredCardInstance) => {
       setViewedCardId(card.id);
+      // Viewing a different card while a move is pending reads as "never
+      // mind" — same "elsewhere" cancellation CityView's own clicks give
+      // the move (see onCancelMove below).
+      setMoveCardId((prev) => (prev && prev !== card.id ? null : prev));
       if (card.zone === "inPlay" && card.locationId) goToLocation(card.locationId);
     },
     [goToLocation],
@@ -222,9 +232,29 @@ function App() {
   const playGrantActive = playGrant !== null && (playGrant.amount === "unbounded" || playGrant.amount > 0);
   const cardQualifiesForPlayGrant = (card: FilteredCardInstance): boolean =>
     playGrantActive && (playGrant!.faction === null || knownFaction(cardData, card) === playGrant!.faction);
+  // The "Move" button's own pending selection — same adjacency rule as a
+  // dragged in-play card (see allowedDropLocationIds below), just driven
+  // by a click-to-start button instead of a drag gesture.
+  const moveModeActive = moveCardId !== null;
+  const moveCard = moveCardId ? resolveCard(state, moveCardId) : null;
+  const moveCandidateLocationIds = new Set<string>();
+  if (moveCard?.zone === "inPlay" && moveCard.locationId) {
+    for (const id of adjacentLocationIds(state.board, moveCard.locationId)) moveCandidateLocationIds.add(id);
+  }
+  const startMove = (cardId: string) => {
+    setMoveCardId(cardId);
+    goToCity();
+  };
+  const chooseMoveTarget = (locationId: string) => {
+    if (moveCardId && moveCandidateLocationIds.has(locationId)) act({ type: "moveCard", cardId: moveCardId, toLocationId: locationId });
+    setMoveCardId(null);
+  };
+  const cancelMove = () => setMoveCardId(null);
+
   const canDrag = (card: FilteredCardInstance): boolean =>
     !interactionLocked &&
     !pickActive &&
+    !moveModeActive &&
     canTakeTurnAction &&
     (card.zone === "hand"
       ? state.turn.actionsRemaining > 0 || cardQualifiesForPlayGrant(card)
@@ -305,12 +335,15 @@ function App() {
           selection={selection}
           isPlaying={playback.isPlaying}
           playbackCaption={playback.playbackCaption}
-          disabled={interactionLocked}
+          disabled={interactionLocked || moveModeActive}
           checkOpponentTurns={checkOpponentTurns}
           onCheckOpponentTurnsChange={setCheckOpponentTurns}
           awaitingContinue={playback.awaitingContinue}
           onContinue={playback.continueBeat}
           actionPlayerId={actionPlayerId}
+          moveModeCardId={moveCardId}
+          onStartMove={startMove}
+          actionError={actionError}
         />
       }
       center={
@@ -335,12 +368,14 @@ function App() {
             state={state}
             startingPlayerId={startingPlayerId}
             onSelectLocation={interactionLocked ? undefined : goToLocation}
-            allowedDropLocationIds={allowedDropLocationIds}
+            allowedDropLocationIds={moveModeActive ? moveCandidateLocationIds : allowedDropLocationIds}
             onDropCard={handleDropCard}
             locationPick={selection.locationPick}
             onSelectCard={interactionLocked ? undefined : selectCard}
             cardPick={selection.cardPick}
             pickModeActive={!interactionLocked && !!selection.cardPick && !selection.viewCardsMode}
+            onChooseMoveTarget={chooseMoveTarget}
+            onCancelMove={moveModeActive ? cancelMove : undefined}
           />
         )
       }
