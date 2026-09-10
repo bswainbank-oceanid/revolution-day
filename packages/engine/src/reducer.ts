@@ -1805,6 +1805,16 @@ function applyPlayEffect(
 // Math.random(). Only `count.mode === "exact"` with a `randomPool` set is
 // interpreted; a future card using plain uniform random with no
 // pool/fallback tiering would need a small extension here.
+//
+// The President is merged into the fallback (Protected) pool here — he's
+// always "Protected" while alive (see partitionByProtection's own
+// comment) and, per additional_rulings, targetable by the same
+// unfiltered/Regime-faction selectors any other card is — previously a
+// documented gap (see resolveEligibleTargets' own comment): with nobody
+// else at the location, the random draw found zero candidates at all and
+// silently ate the 4-target effect, so a Suicide Bomber left alone with
+// the President only ever eliminated itself via the ability's separate
+// "eliminate this card" step, never him.
 function applyRandomEliminateEffect(
   state: GameState,
   frame: AbilityResolutionFrame,
@@ -1828,41 +1838,45 @@ function applyRandomEliminateEffect(
 
   const candidates = resolveEligibleTargets(state, cardData, effect.target, sourceCard);
   const { primary, fallback } = partitionByProtection(cardData, candidates);
-  const { targetIds: drawnIds, rng } = drawRandomTargets(state.rng, primary, fallback, effect.target.count.value);
+  const primaryIds = primary.map((c) => c.id);
+  const fallbackIds = fallback.map((c) => c.id);
+  if (presidentMatchesSelector(state, effect.target, sourceCard)) fallbackIds.push(PRESIDENT_TARGET_ID);
+  const { targetIds: drawnIds, rng } = drawRandomTargets(state.rng, primaryIds, fallbackIds, effect.target.count.value);
 
-  const targetSet = new Set(drawnIds);
-  const triggers: PendingPassiveTrigger[] = [];
-  const cards = state.cards.map((c) => {
-    if (!targetSet.has(c.id)) return c;
-    const { card: updated, trigger } = eliminateCard(c, sourceCard.controller);
-    if (trigger) triggers.push(trigger);
-    return updated;
-  });
-  const pendingPassiveQueue = triggers.length > 0 ? [...state.pendingPassiveQueue, ...triggers] : state.pendingPassiveQueue;
-  return finishEffectStep({ ...state, cards, rng, pendingPassiveQueue }, frame);
+  let cards = state.cards;
+  let president = state.president;
+  let turn = state.turn;
+  let pendingPassiveQueue = state.pendingPassiveQueue;
+  for (const id of drawnIds) {
+    const result = eliminateSingleTarget({ ...state, cards, president, turn, pendingPassiveQueue }, id, sourceCard.controller);
+    cards = result.cards;
+    president = result.president;
+    turn = result.turn;
+    pendingPassiveQueue = result.pendingPassiveQueue;
+  }
+  return finishEffectStep({ ...state, cards, president, turn, rng, pendingPassiveQueue }, frame);
 }
 
 // Exhausts `primary` fully before touching `fallback` at all — "protected
 // cards are eliminated only if there are no other targets" — but *which*
 // primary cards get hit is still random when there are more of them than
 // needed. Reuses the same seeded shuffle setupGame uses for dealing, so
-// this is just as deterministic/replayable per seed.
+// this is just as deterministic/replayable per seed. Works over plain ids
+// (not CardInstance) so the President's own sentinel id can sit in
+// `fallback` alongside real card ids — see applyRandomEliminateEffect.
 function drawRandomTargets(
   rng: RngState,
-  primary: readonly CardInstance[],
-  fallback: readonly CardInstance[],
+  primary: readonly string[],
+  fallback: readonly string[],
   count: number,
 ): { targetIds: string[]; rng: RngState } {
   if (primary.length >= count) {
     const shuffled = shuffle(rng, primary);
-    return { targetIds: shuffled.items.slice(0, count).map((c) => c.id), rng: shuffled.rng };
+    return { targetIds: shuffled.items.slice(0, count), rng: shuffled.rng };
   }
   const remaining = count - primary.length;
   const shuffledFallback = shuffle(rng, fallback);
-  const targetIds = [
-    ...primary.map((c) => c.id),
-    ...shuffledFallback.items.slice(0, remaining).map((c) => c.id),
-  ];
+  const targetIds = [...primary, ...shuffledFallback.items.slice(0, remaining)];
   return { targetIds, rng: shuffledFallback.rng };
 }
 

@@ -1953,6 +1953,29 @@ describe("applyAction: random target selection (Suicide Bomber)", () => {
     expect(eliminatedIds.has(bomber.id)).toBe(true);
   });
 
+  it("falls back to the President when he's the only other card at the location", () => {
+    // Regression: the random draw used to never include the President at
+    // all (a documented gap — see resolveEligibleTargets' own comment),
+    // so with nobody else there the primary pool was empty, the fallback
+    // pool was empty too (he was never added to it), and the whole
+    // 4-target effect silently ate zero eliminations — leaving him
+    // untouched even though he was the only possible candidate.
+    let state = freshGame(["a", "b", "c"]);
+    const bomber = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Suicide Bomber")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    state = placeInPlay(state, bomber.id, loc, player);
+    state = { ...state, president: { status: "alive", locationId: loc } };
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: bomber.id, abilityIndex: 0 });
+    state = passWholeAlarm(state);
+
+    const resolved = resolveSuicideBomberAbility(state, player);
+
+    expect(resolved.president.status).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === bomber.id)?.zone).toBe("eliminated");
+  });
+
   it("rejects submitting explicit targets for the random-draw step — they're drawn automatically", () => {
     let state = freshGame(["a", "b", "c"]);
     const bomber = state.cards.find((c) => c.kind === "nonLeader" && c.defRef === "Suicide Bomber")!;
