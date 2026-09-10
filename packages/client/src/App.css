@@ -482,6 +482,42 @@ h3 {
      silently clipping cards against region-center's own overflow:hidden. */
   overflow-y: auto;
 }
+/* The strip above the grid is the *entire* actually-clickable area (the
+   board image and card clusters below it stop click propagation — they
+   do their own thing: drag targets, card selection) — styled as one
+   band, edge to edge, rather than leaving only the small button inside
+   it looking interactive while the rest of the strip (equally clickable)
+   looked like plain background. Bleeds into .location-view-bg's own
+   padding via negative margins so the tinted band really does span the
+   same full width the click actually covers. */
+.location-view-header {
+  padding: 0.4rem 0.5rem;
+  margin: -0.5rem -0.5rem 0;
+}
+.location-view-header-clickable {
+  background: var(--neutral-mid);
+  border-bottom: 1px solid var(--gold);
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+.location-view-header-clickable:hover {
+  filter: brightness(1.25);
+}
+.location-view-return-button {
+  display: block;
+  margin: 0.3rem auto 0;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.75rem;
+  background: var(--neutral-mid);
+  color: var(--gold);
+  border: 1px solid var(--gold);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.location-view-return-button:hover {
+  background: var(--gold);
+  color: var(--ink);
+}
 .location-view-grid {
   display: grid;
   grid-template-columns: 1fr 2fr 1fr;
@@ -714,13 +750,35 @@ h3 {
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 0.4rem;
-  /* Right-justified so the oldest card (last in DOM order — see
-     HandStrip.tsx's reversed render order) sits flush against the Action
-     Box immediately to the right; newer cards stack up leftward from
-     there. Only visible while the hand still fits — once it overflows,
-     justify-content has no free space left to apply and the row just
-     scrolls normally from its natural (already newest-first) order. */
-  justify-content: flex-end;
+  /* overflow-x:auto alone renders as an OS/browser auto-hiding overlay
+     scrollbar (barely visible) once a large hand actually overflows —
+     same fix as .game-log-lines: force a real, always-rendered one. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--gold) transparent;
+}
+.hand-strip-cards::-webkit-scrollbar {
+  height: 8px;
+}
+.hand-strip-cards::-webkit-scrollbar-track {
+  background: transparent;
+}
+.hand-strip-cards::-webkit-scrollbar-thumb {
+  background: var(--gold);
+  border-radius: 4px;
+}
+/* Right-justified so the oldest card (last in DOM order — see
+   HandStrip.tsx's reversed render order) sits flush against the Action
+   Box immediately to the right, newer cards stacking up leftward. Done
+   via an auto left margin on the first child, not justify-content:
+   flex-end on the container — that combination is a known flex/overflow
+   bug (Chromium and Firefox both): once content genuinely overflows, the
+   browser stops accounting for the overflow at all (scrollWidth reports
+   as equal to clientWidth), so the hand becomes unreachably wide with no
+   way to scroll to the older cards. An auto margin only ever consumes
+   *leftover* space — it correctly collapses to 0 once content overflows,
+   leaving normal (and correctly detected) horizontal scrolling intact. */
+.hand-strip-cards > :first-child {
+  margin-left: auto;
 }
 .hand-strip-card {
   width: 150px;

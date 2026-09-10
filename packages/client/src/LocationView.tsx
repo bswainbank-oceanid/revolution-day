@@ -98,10 +98,56 @@ export function LocationView({
     pickModeActive,
   };
 
+  // Whether a click on the actually-uncovered parts of this pane (the
+  // header strip above the grid, and the gap cell directly under the
+  // board image — the board image/seats themselves stop propagation, see
+  // location-image-wrap/Seat below) does anything — gates the header
+  // strip's own clickable styling so it never promises a click that
+  // wouldn't do anything.
+  const backgroundClickable = !pickModeActive && !!onBackgroundClick;
+
+  // bl/br sit in the row directly under the image (row 2) — reserved at
+  // a 100px floor (see .location-view-grid's own comment) so a stacked
+  // cluster never gets clipped. But the *far* more common case is nobody
+  // at bl/br at all (most locations only ever fill bottomCenter, row 3),
+  // and a bare 100px floor with nothing in it just reads as "the cards
+  // are oddly far from the location" — collapse it to 0 whenever both are
+  // genuinely empty, so bottomCenter's cards sit right under the image.
+  // seats.get(...) is a rotational seat *assignment* (every player in the
+  // game gets one, whether or not they have anything here) — matching
+  // SeatCluster's own "any actual inPlay card at this location" check
+  // below, not just presence in the map, is what tells us if the row
+  // will really render anything.
+  const seatHasCards = (seat: SeatName): boolean =>
+    (seats.get(seat) ?? []).some((playerId) =>
+      state.cards.some((c) => c.zone === "inPlay" && c.locationId === locationId && c.controller === playerId),
+    );
+  const row2Empty = !seatHasCards("bl") && !seatHasCards("br");
+
   return (
     <div className="location-view-bg" onClick={pickModeActive ? undefined : onBackgroundClick}>
-      <h2>LOCATION VIEW — {locationName(state, locationId) ?? location.name ?? location.type}</h2>
-      <div className="location-view-grid">
+      {/* The *entire* strip above the grid is what actually sends you back
+          (h2 and the button below both have no stopPropagation of their
+          own, so a click anywhere in this div's own background bubbles up
+          just the same) — styled as one clickable banner, edge to edge,
+          rather than leaving only the small button inside it looking
+          interactive. */}
+      <div className={`location-view-header${backgroundClickable ? " location-view-header-clickable" : ""}`}>
+        <h2>LOCATION VIEW — {locationName(state, locationId) ?? location.name ?? location.type}</h2>
+        {backgroundClickable && (
+          <button
+            type="button"
+            className="location-view-return-button"
+            onClick={(e) => {
+              e.stopPropagation(); // avoid double-firing via the parent's own onClick
+              onBackgroundClick!();
+            }}
+          >
+            ‹ Return to City View
+          </button>
+        )}
+      </div>
+      <div className="location-view-grid" style={row2Empty ? { gridTemplateRows: "380px 0px minmax(100px, auto)" } : undefined}>
         <Seat {...seatProps} seat="tl" playerIds={seats.get("tl") ?? []} />
         <div
           className={`location-image-wrap${isDropTarget ? " location-image-drop-target" : ""}`}
