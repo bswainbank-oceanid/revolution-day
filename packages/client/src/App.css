@@ -227,7 +227,15 @@ h3 {
   height: 100%;
   display: grid;
   grid-template-columns: 226px 316px;
-  grid-template-rows: auto 1fr;
+  /* Row 1 (TL/TR) used to be "auto" — sized to fit its own content, which
+     meant a tall TL/TR (a multi-line breadcrumb, the gold President/
+     leader-eliminated announcement) stole height from row 2's 1fr,
+     leaving Draw/End Turn/Check Opponent's Turns squeezed into needing a
+     scrollbar of their own. A fixed row 1 height guarantees row 2 always
+     gets the rest of the box, no matter what row 1 is showing — row 1
+     scrolls internally instead (already had overflow-y:auto) in the rare
+     case its own content doesn't fit 84px. */
+  grid-template-rows: 84px 1fr;
   padding: 0.75rem;
   box-sizing: border-box;
 }
@@ -258,6 +266,23 @@ h3 {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
+}
+/* .hint's own font-size rule would otherwise win over inheriting this
+   quadrant's smaller size (an element's own matching rule always beats
+   an ancestor's, regardless of specificity) — shrunk explicitly here,
+   same reasoning as the fixed row-1 height above: this quadrant has far
+   less room than .hint's other contexts (Bottom Right, the Game Log). */
+.activate-ability-tr .hint {
+  font-size: 0.75rem;
+}
+/* Sized down from the shared 1.15rem — that size was tuned for the Game
+   Log's much roomier column, not this quadrant's fixed 84px row (see
+   .activate-ability-box's grid-template-rows). Selector specificity
+   (two classes vs. one) is what lets this win over the shared rule
+   despite both using !important. */
+.activate-ability-tr .president-eliminated-line,
+.activate-ability-tr .leader-eliminated-line {
+  font-size: 0.85rem !important;
 }
 .activate-ability-br {
   grid-column: 2;
@@ -718,8 +743,9 @@ h3 {
   text-align: center;
 }
 .current-player-label {
+  font-size: 0.85rem;
   font-weight: 700;
-  margin: 0 0 0.3rem;
+  margin: 0 0 0.2rem;
 }
 .action-log-stack {
   list-style: none;
@@ -727,15 +753,15 @@ h3 {
   padding: 0;
 }
 .action-log-stack li {
-  font-size: 0.8rem;
-  margin: 0 0 0.3rem;
+  font-size: 0.75rem;
+  margin: 0 0 0.25rem;
 }
 .actions-remaining-label {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   margin: 0;
 }
 .actions-remaining-count {
-  font-size: 1.8rem;
+  font-size: 1.3rem;
   font-weight: 700;
   margin: 0;
   color: var(--gold);
