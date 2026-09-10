@@ -346,7 +346,13 @@ function App() {
       }
       right={
         <>
-          <GameLog log={log} humanPlayerId={humanPlayerId} botPlayerIds={botPlayerIds} initialState={session.initialState} />
+          <GameLog
+            log={log}
+            humanPlayerId={humanPlayerId}
+            botPlayerIds={botPlayerIds}
+            initialState={session.initialState}
+            revealedLength={playback.revealedLogLength}
+          />
           <GameChat />
         </>
       }

@@ -275,6 +275,15 @@ export interface TurnPlaybackResult {
   // once playback has finished and a real decision is pending). Null
   // whenever there's no current beat.
   readonly playbackActorId: PlayerId | null;
+  // How many of `log`'s entries have actually been narrated so far — the
+  // Game Log (and anything else reading the raw log directly) should
+  // slice to this instead of log.length, or it reads as "running ahead"
+  // of what playback has actually shown yet, especially noticeable while
+  // paused on awaitingContinue in Check mode (the whole point of pausing
+  // is reviewing one step at a time, not seeing the ending already
+  // spoiled in the log beside it). Equals log.length once playback has
+  // fully caught up.
+  readonly revealedLogLength: number;
   // Increments once per detected turn-start boundary into the human's own
   // turn — callers react to a change in this to reset their own resting
   // view state (Card Viewer selection, City View) to match what the last
@@ -368,6 +377,7 @@ export function useTurnPlayback(
       playbackViewerCardId: null,
       playbackCaption: null,
       playbackActorId: null,
+      revealedLogLength: 0,
       turnStartSignal: turnStartSignalRef.current,
       awaitingContinue: false,
       continueBeat,
@@ -379,6 +389,12 @@ export function useTurnPlayback(
   const isPlaying = beatIndex < beats.length;
   const playbackViewerCardId = currentBeat ? currentBeat.viewerCardId : null;
   const playbackCaption = currentBeat ? currentBeat.caption : null;
+  // Reveal only through whichever entry the *currently shown* beat
+  // belongs to — a beat becomes "current" (and its camera/viewer take
+  // effect) at the same instant its pacing delay starts counting down, so
+  // this line appears in lockstep with that, not ahead of it. Once
+  // playback fully catches up (currentBeat null), reveal everything.
+  const revealedLogLength = currentBeat ? currentBeat.entryIndex + 1 : log.length;
 
   return {
     displayState,
@@ -386,6 +402,7 @@ export function useTurnPlayback(
     playbackViewerCardId,
     playbackCaption,
     playbackActorId,
+    revealedLogLength,
     turnStartSignal: turnStartSignalRef.current,
     awaitingContinue,
     continueBeat,
