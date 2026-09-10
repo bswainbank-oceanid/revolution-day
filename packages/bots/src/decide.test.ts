@@ -440,13 +440,20 @@ describe("decideBotAction: avoids abilities with no legal way to complete", () =
     }
   });
 
-  it("does activate Wife's ability while she's at the President's location", () => {
+  // Co-location alone isn't enough to make this a good move any more: Wife's
+  // win condition ("President eliminated at the Palace") means activating
+  // her elsewhere gains her nothing and forecloses it for good, so
+  // effectivePresidentObjective now suppresses this off-Palace — this test
+  // moved to the Palace so it still exercises "does activate when the
+  // legitimate case is met." The off-Palace case is covered by the
+  // "Wife's location-gated objective" describe block below.
+  it("does activate Wife's ability while she's at the President's location, at the Palace", () => {
     let state = freshGame(["a", "b", "c"]);
     const wife = findByDefRef(state, "Wife");
     const player = state.turn.currentPlayerId;
-    const loc = state.board[0]!.id;
-    state = place(state, wife.id, loc, player);
-    state = { ...state, president: { status: "alive", locationId: loc } };
+    const palace = state.board.find((l) => l.name === "Palace")!.id;
+    state = place(state, wife.id, palace, player);
+    state = { ...state, president: { status: "alive", locationId: palace } };
     state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
     const filtered = filterForPlayer(state, player);
 
@@ -577,5 +584,143 @@ describe("decideBotAction: avoids abilities with no legal way to complete", () =
       const action = decideBotAction(filtered, player, cardData, rng);
       expect(action).not.toMatchObject({ type: "activateAbility", cardId: wife.id });
     }
+  });
+});
+
+describe("decideBotAction: Wife's location-gated objective", () => {
+  it("activates Wife's ability the instant the President is at the Palace, bypassing the normal play/activate coinflip", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = state.turn.currentPlayerId;
+    const palace = state.board.find((l) => l.name === "Palace")!.id;
+    state = place(state, wife.id, palace, player);
+    state = { ...state, president: { status: "alive", locationId: palace } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).toEqual({ type: "activateAbility", cardId: wife.id, abilityIndex: 0 });
+    }
+  });
+
+  it("does not activate Wife's ability when co-located with the President away from the Palace", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = state.turn.currentPlayerId;
+    const notPalace = state.board[0]!.id;
+    state = place(state, wife.id, notPalace, player);
+    state = { ...state, president: { status: "alive", locationId: notPalace } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5, (): number => 0.8]) {
+      const action = decideBotAction(filtered, player, cardData, rng);
+      expect(action).not.toMatchObject({ type: "activateAbility", cardId: wife.id });
+    }
+  });
+
+  it("does not force Wife's activation when she's elsewhere, even with the President at the Palace", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = state.turn.currentPlayerId;
+    const palace = state.board.find((l) => l.name === "Palace")!.id;
+    const elsewhere = state.board[0]!.id;
+    state = place(state, wife.id, elsewhere, player);
+    state = { ...state, president: { status: "alive", locationId: palace } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "activateAbility", cardId: wife.id });
+  });
+
+  it("deploys Wife from hand to the Palace once the President is within the deploy-distance threshold", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const palace = state.board.find((l) => l.name === "Palace")!.id;
+    const nearPalace = state.board[state.board.length - 3]!.id; // 2 steps away
+    state = { ...state, president: { status: "alive", locationId: nearPalace } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero); // zero -> coinFlip picks the "play" branch
+    expect(action).toEqual({ type: "playCard", cardId: wife.id, locationId: palace });
+  });
+
+  it("does not prematurely deploy Wife while the President is still far from the Palace and the deck isn't low", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const farFromPalace = state.board[0]!.id;
+    state = { ...state, president: { status: "alive", locationId: farFromPalace } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playCard", cardId: wife.id, locationId: state.board.find((l) => l.name === "Palace")!.id });
+  });
+
+  it("routes an in-play Regime card toward the President's current location for protection, instead of a random adjacent step", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const presidentLoc = state.board[1]!.id;
+    const guardStart = state.board[0]!.id; // adjacent to presidentLoc, and strictly closer to it than the Palace
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!; // Regime, eliminate-capable
+    state = place(state, guard.id, guardStart, player);
+    state = { ...state, president: { status: "alive", locationId: presidentLoc } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", actionsRemaining: 2 } };
+    // Force the move branch specifically: no playable hand card and no
+    // drawable deck, so play/activate/draw are all unavailable and only
+    // moveCard is left — isolates decideMoveCard's own routing logic.
+    state = {
+      ...state,
+      cards: state.cards.map((c) =>
+        (c.zone === "hand" || c.zone === "deck") && (c.zone !== "hand" || c.controller === player)
+          ? { ...c, zone: "discard" as const }
+          : c,
+      ),
+    };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "moveCard", cardId: guard.id, toLocationId: presidentLoc });
+  });
+
+  // Regression: a genuine self-sabotage bug the live simulation caught —
+  // presidentObjectiveFor collapses Wife's presidentEliminatedAt predicate
+  // to a location-blind "eliminate", so without effectivePresidentObjective
+  // overriding it, a Republican Guard controlled by Wife's own player would
+  // happily snipe the President wherever he happened to be, permanently
+  // foreclosing her actual win condition. A legal, non-President target is
+  // available here, so the Guard should prefer it.
+  it("prefers a non-President target over sniping the President away from the Palace, for Wife's own player", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id; // not the Palace
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const opposingTarget = state.cards.find((c) => c.defRef === "Prominent Citizen")!;
+    state = place(state, guard.id, loc, player);
+    state = place(state, opposingTarget.id, loc, other);
+    state = { ...state, president: { status: "alive", locationId: loc } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: guard.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [opposingTarget.id] });
   });
 });

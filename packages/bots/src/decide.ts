@@ -20,10 +20,12 @@ import type {
   AbilityDefinition,
   AbilityResolutionFrame,
   AlarmResolutionFrame,
+  BoardLayout,
   CardData,
   EffectNode,
   FilteredCardInstance,
   FilteredGameState,
+  LocationInstance,
   MotorcadeInterceptionWindowFrame,
   PlayerId,
   ProtectedTargetingWindowFrame,
@@ -33,6 +35,8 @@ import type {
 } from "@rev-day/engine";
 import type { PresidentObjective } from "./presidentObjective";
 import { presidentObjectiveFor } from "./presidentObjective";
+import type { LeaderLocationObjective } from "./leaderObjective";
+import { computeProtectionTargets, leaderLocationObjectiveFor, shouldDeployLocationLeaderNow, stepToward } from "./leaderObjective";
 import type { Rng } from "./random";
 import { coinFlip, pickN, pickRandom } from "./random";
 
@@ -51,10 +55,11 @@ export function decideBotAction(
   cardData: CardData,
   rng: Rng = Math.random,
 ): Action {
-  const objective = computeObjective(state, playerId);
+  const locationObjective = computeLocationObjective(state, playerId);
+  const objective = effectivePresidentObjective(state, computeObjective(state, playerId), locationObjective);
   const frame = state.resolutionStack[state.resolutionStack.length - 1];
   if (!frame) {
-    return decideTurnAction(state, playerId, cardData, objective, rng);
+    return decideTurnAction(state, playerId, cardData, objective, locationObjective, rng);
   }
   switch (frame.kind) {
     case "abilityResolution":
@@ -74,6 +79,37 @@ function computeObjective(state: FilteredGameState, playerId: PlayerId): Preside
   const leader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
   if (!leader || leader.defRef === null) return "neutral";
   return presidentObjectiveFor(leader.defRef, winConditions);
+}
+
+function computeLocationObjective(state: FilteredGameState, playerId: PlayerId): LeaderLocationObjective {
+  const leader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+  if (!leader || leader.defRef === null) return { eliminateAtLocationId: null };
+  return leaderLocationObjectiveFor(leader.defRef, winConditions, state.board);
+}
+
+// presidentObjectiveFor collapses Wife's presidentEliminatedAt predicate
+// down to a location-blind "eliminate" — every other one of this
+// player's cards then inherits a blanket "kill the President whenever
+// you can" preference (usableActivateAbilities, decideEliminateTargetIds,
+// decideAlarmAction all key off PresidentObjective), which actively
+// sabotages her actual win condition: a Regime card snipes him at, say,
+// HQ, and the game's only shot at "eliminated at the Palace" is gone for
+// good. Overridden here to "protect" (the same passive-avoidance +
+// reactive-defense behavior Head of Security already gets) whenever the
+// President isn't currently at the win location, and left as "eliminate"
+// once he is — which both re-enables Wife's own dedicated ability and
+// encourages her other cards to pile on (the Palace-stacking redundancy
+// from desiredCardLocations). A no-op for every leader without a location
+// objective, so this changes nothing for the rest of the roster.
+function effectivePresidentObjective(
+  state: FilteredGameState,
+  objective: PresidentObjective,
+  locationObjective: LeaderLocationObjective,
+): PresidentObjective {
+  if (!locationObjective.eliminateAtLocationId) return objective;
+  const presidentAtObjectiveLocation =
+    state.president.status === "alive" && state.president.locationId === locationObjective.eliminateAtLocationId;
+  return presidentAtObjectiveLocation ? "eliminate" : "protect";
 }
 
 function abilityTargetsPresident(def: AbilityDefinition): boolean {
@@ -418,6 +454,7 @@ function decideTurnAction(
   playerId: PlayerId,
   cardData: CardData,
   objective: PresidentObjective,
+  locationObjective: LeaderLocationObjective,
   rng: Rng,
 ): Action {
   if (state.turn.phase === "draw") return { type: "draw" };
@@ -451,6 +488,26 @@ function decideTurnAction(
     return { type: "endTurn" };
   }
 
+  // The actual win-clinching move for a location-gated leader (Wife): the
+  // President is right here, right now. This can't be left to the normal
+  // play/activate coinflip below — missing this turn risks him being
+  // moved past this location by the next Motorcade play (by anyone),
+  // which ends the game via "survived" with nothing left to eliminate.
+  // usableActivateAbilities already filters to affordable, currently-legal
+  // abilities, so finding one here guarantees the budget is there too.
+  if (
+    locationObjective.eliminateAtLocationId &&
+    state.president.status === "alive" &&
+    state.president.locationId === locationObjective.eliminateAtLocationId
+  ) {
+    const winningMove = usableActivateAbilities(state, playerId, cardData, objective).find(({ card, abilityIndex }) =>
+      abilityTargetsPresident(getAbilityEffects(card.defRef!, abilityIndex)!),
+    );
+    if (winningMove) {
+      return { type: "activateAbility", cardId: winningMove.card.id, abilityIndex: winningMove.abilityIndex };
+    }
+  }
+
   if (
     state.turn.actionsRemaining <= 0 &&
     activeRestrictedGrant(state, "play") === null &&
@@ -469,17 +526,35 @@ function decideTurnAction(
   // here.
   const canSpendNormal = state.turn.actionsRemaining > 0;
 
+  // "Protect the President/Wife: when you have a Regime card, play it
+  // (routed to wherever protection is needed — see
+  // decidePlayCardOrMotorcade); when you don't, drawing can make sense" —
+  // only for a leader whose win condition actually depends on this
+  // (locationObjective set); other leaders keep the plain coinflip chain
+  // below untouched. Skipped once there's nothing left to protect.
+  if (
+    locationObjective.eliminateAtLocationId &&
+    canSpendNormal &&
+    deckHasCards(state) &&
+    computeProtectionTargets(state, playerId, locationObjective).locationIds.length > 0 &&
+    !state.cards.some((c) => c.zone === "hand" && c.controller === playerId && knownFaction(cardData, c) === "Regime")
+  ) {
+    return { type: "draw" };
+  }
+
   // Priority chain: roll once for which of play/activate to attempt as
   // the primary action (65%/35%), then fall through to draw, then move,
   // whenever the attempted option has no legal targets — never back to
   // the other of play/activate, and never a second roll.
   if (coinFlip(rng, 0.65)) {
-    if (hasPlayableHandCard(state, playerId, cardData)) return decidePlayCardOrMotorcade(state, playerId, cardData, rng);
+    if (hasPlayableHandCard(state, playerId, cardData))
+      return decidePlayCardOrMotorcade(state, playerId, cardData, locationObjective, rng);
   } else if (usableActivateAbilities(state, playerId, cardData, objective).length > 0) {
     return decideActivateAbility(state, playerId, cardData, objective, rng);
   }
   if (canSpendNormal && deckHasCards(state)) return { type: "draw" };
-  if (canSpendNormal && hasMovableOwnCard(state, playerId)) return decideMoveCard(state, playerId, rng);
+  if (canSpendNormal && hasMovableOwnCard(state, playerId))
+    return decideMoveCard(state, playerId, cardData, locationObjective, rng);
 
   // Nothing in the chain was legal — the only real reason left to end
   // the turn early (every step above is gated on the exact same
@@ -488,7 +563,13 @@ function decideTurnAction(
   return { type: "endTurn" };
 }
 
-function decidePlayCardOrMotorcade(state: FilteredGameState, playerId: PlayerId, cardData: CardData, rng: Rng): Action {
+function decidePlayCardOrMotorcade(
+  state: FilteredGameState,
+  playerId: PlayerId,
+  cardData: CardData,
+  locationObjective: LeaderLocationObjective,
+  rng: Rng,
+): Action {
   const hand = state.cards.filter(
     (c) =>
       c.zone === "hand" &&
@@ -496,6 +577,36 @@ function decidePlayCardOrMotorcade(state: FilteredGameState, playerId: PlayerId,
       isHandCardPlayable(state, playerId, c) &&
       canAffordPlayingHandCard(state, cardData, c),
   );
+
+  // Deploy a location-gated leader (Wife) straight to her win location
+  // once the deploy window is open — see shouldDeployLocationLeaderNow.
+  // Takes priority over everything below: getting her into play at all
+  // matters more than any other play this turn.
+  if (locationObjective.eliminateAtLocationId && shouldDeployLocationLeaderNow(state, locationObjective)) {
+    const ownLeader = hand.find((c) => c.kind === "leader");
+    if (ownLeader) {
+      const target = playableTargetLocation(cardData, state.board, ownLeader, [locationObjective.eliminateAtLocationId]);
+      if (target) return { type: "playCard", cardId: ownLeader.id, locationId: target.id };
+    }
+  }
+
+  // Otherwise prefer a hand card that currently has somewhere purposeful
+  // to go — protection coverage for a Regime card, or Palace-stacking
+  // redundancy for an eliminate-capable card once the deploy window is
+  // open — over a blind random pick. See desiredCardLocations.
+  const purposefulPlays = hand
+    .filter((c) => c.kind !== "motorcade")
+    .map((card) => {
+      const desired = desiredCardLocations(state, playerId, cardData, card, locationObjective);
+      const location = playableTargetLocation(cardData, state.board, card, desired);
+      return location ? { card, location } : undefined;
+    })
+    .filter((p): p is { card: FilteredCardInstance; location: LocationInstance } => p !== undefined);
+  if (purposefulPlays.length > 0) {
+    const chosen = pickRandom(rng, purposefulPlays)!;
+    return { type: "playCard", cardId: chosen.card.id, locationId: chosen.location.id };
+  }
+
   const card = pickRandom(rng, hand);
   if (!card) return { type: "endTurn" };
 
@@ -521,7 +632,82 @@ function decidePlayCardOrMotorcade(state: FilteredGameState, playerId: PlayerId,
   return { type: "playCard", cardId: card.id, locationId: location.id };
 }
 
-function decideMoveCard(state: FilteredGameState, playerId: PlayerId, rng: Rng): Action {
+// The first of `desiredLocationIds` (in priority order) that `card` is
+// actually legal to play at (its own allowed location types include that
+// location's type) — shared by the leader-deploy priority above and the
+// purposeful-play scan below, so "desired" and "legally playable" can
+// never drift apart.
+function playableTargetLocation(
+  cardData: CardData,
+  board: BoardLayout,
+  card: FilteredCardInstance,
+  desiredLocationIds: readonly string[],
+): LocationInstance | undefined {
+  const instance = asCardInstance(card);
+  if (!instance) return undefined;
+  const allowedTypes = getAllowedLocationTypes(cardData, instance);
+  for (const id of desiredLocationIds) {
+    const location = board.find((l) => l.id === id);
+    if (location && allowedTypes.includes(location.type)) return location;
+  }
+  return undefined;
+}
+
+// Where `card` should currently be routed, in priority order: the win
+// location itself, for an eliminate-capable card once the deploy window
+// is open (Palace-stacking redundancy — the win condition doesn't require
+// this player's own leader to land the kill, see WinPredicate's
+// presidentEliminatedAt); then wherever Regime protection is currently
+// needed (see computeProtectionTargets). A non-Regime, non-eliminate-
+// capable card gets an empty list and falls through to the existing
+// random placement, unchanged from before this feature.
+function desiredCardLocations(
+  state: FilteredGameState,
+  playerId: PlayerId,
+  cardData: CardData,
+  card: FilteredCardInstance,
+  locationObjective: LeaderLocationObjective,
+): readonly string[] {
+  // Gated on locationObjective.eliminateAtLocationId throughout, not just
+  // for the stacking clause below — this whole routing behavior is scoped
+  // to this player controlling a location-gated leader (currently: Wife).
+  // Every other leader's bot keeps the fully random play/move behavior
+  // this feature started from.
+  if (!locationObjective.eliminateAtLocationId) return [];
+
+  const ids: string[] = [];
+  if (shouldDeployLocationLeaderNow(state, locationObjective) && cardHasAnyEliminateAbility(cardData, card)) {
+    ids.push(locationObjective.eliminateAtLocationId);
+  }
+  if (knownFaction(cardData, card) === "Regime") {
+    for (const id of computeProtectionTargets(state, playerId, locationObjective).locationIds) {
+      if (!ids.includes(id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
+// Whether `card` has any ability (Activate or Response) with an eliminate
+// effect at all — used to decide *where* an eliminate-capable card should
+// be routed once played, not whether any specific target is currently
+// legal (candidateInPlayCards/eliminateCandidatePool answer that once the
+// card is actually in play).
+function cardHasAnyEliminateAbility(cardData: CardData, card: FilteredCardInstance): boolean {
+  const instance = asCardInstance(card);
+  if (!instance) return false;
+  return getAbilities(cardData, instance).some((ability, abilityIndex) => {
+    const def = getAbilityEffects(instance.defRef, abilityIndex);
+    return def ? abilityHasEliminateEffect(def) : false;
+  });
+}
+
+function decideMoveCard(
+  state: FilteredGameState,
+  playerId: PlayerId,
+  cardData: CardData,
+  locationObjective: LeaderLocationObjective,
+  rng: Rng,
+): Action {
   const movable = state.cards.filter(
     (c) =>
       c.zone === "inPlay" &&
@@ -529,6 +715,24 @@ function decideMoveCard(state: FilteredGameState, playerId: PlayerId, rng: Rng):
       c.locationId &&
       adjacentLocationIds(state.board, c.locationId).length > 0,
   );
+  if (movable.length === 0) return { type: "endTurn" };
+
+  // Prefer stepping a card toward wherever it's currently needed
+  // (protection coverage, or Palace-stacking once the deploy window is
+  // open) over a blind random adjacent move — same desiredCardLocations
+  // priority as the play side above.
+  const purposefulMoves = movable
+    .map((card) => {
+      const desired = desiredCardLocations(state, playerId, cardData, card, locationObjective);
+      const toLocationId = desired.length > 0 ? stepToward(state.board, card.locationId!, desired) : undefined;
+      return toLocationId ? { card, toLocationId } : undefined;
+    })
+    .filter((m): m is { card: FilteredCardInstance; toLocationId: string } => m !== undefined);
+  if (purposefulMoves.length > 0) {
+    const chosen = pickRandom(rng, purposefulMoves)!;
+    return { type: "moveCard", cardId: chosen.card.id, toLocationId: chosen.toLocationId };
+  }
+
   const card = pickRandom(rng, movable);
   if (!card?.locationId) return { type: "endTurn" };
   const toLocationId = pickRandom(rng, adjacentLocationIds(state.board, card.locationId))!;
