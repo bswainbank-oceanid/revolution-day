@@ -814,6 +814,12 @@ h3 {
   font-size: 0.75rem;
   margin: 0 0 0.25rem;
 }
+.actions-remaining-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.3rem;
+}
 .actions-remaining-label {
   font-size: 0.65rem;
   margin: 0;
@@ -829,9 +835,10 @@ h3 {
   color: var(--gold);
 }
 .endgame-turns-left {
-  margin: 0.2rem 0 0;
+  font-size: 0.6rem;
   color: var(--gold);
   font-weight: 700;
+  white-space: nowrap;
 }
 /* .hint's own opacity/font-size would otherwise dim this (same specificity,
    .hint comes first) — an explanation of why the last move was rejected

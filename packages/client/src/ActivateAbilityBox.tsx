@@ -178,12 +178,18 @@ export function ActivateAbilityBox({
   const upperLeft = (
     <div className="activate-ability-status">
       <p className="current-player-label">{playerLabel(state, actionPlayerId, humanPlayerId, botPlayerIds)}</p>
-      <p className="actions-remaining-label">ACTIONS REMAINING</p>
+      <div className="actions-remaining-row">
+        <p className="actions-remaining-label">ACTIONS REMAINING</p>
+        {/* Shares the label's own line instead of stacking below it — a
+            separate line pushed this quadrant's content past its fixed
+            84px row height (see .activate-ability-box's own grid-
+            template-rows comment), forcing it to scroll internally. */}
+        {turnsLeftText && <span className="endgame-turns-left">{turnsLeftText}</span>}
+      </div>
       <p className="actions-remaining-count">{state.turn.actionsRemaining}</p>
       {state.turn.restrictedAction && (
         <p className="hint restricted-play-actions">{describeGrant(state.turn.restrictedAction)}</p>
       )}
-      {turnsLeftText && <p className="hint endgame-turns-left">{turnsLeftText}</p>}
     </div>
   );
 
