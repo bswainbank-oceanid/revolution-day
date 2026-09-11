@@ -2040,3 +2040,87 @@ describe("decideBotAction: Opposition Leader's strategy", () => {
     expect(action).toEqual({ type: "playCard", cardId: newcomer.id, locationId: hq });
   });
 });
+
+describe("decideBotAction: Heir Apparent's strategy", () => {
+  it("deploys to a central location once it's escorted (protection available)", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const heirApparent = findByDefRef(state, "Heir Apparent");
+    const player = heirApparent.controller!;
+    const central = state.board[2]!.id; // second Street — board position 3 (1-indexed)
+    const escort = state.cards.find((c) => c.defRef === "Secret Police")!; // Regime, non-Protected
+    state = place(state, escort.id, central, player);
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: heirApparent.id, locationId: central });
+  });
+
+  it("does not prioritize deploying before a central location is escorted", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const heirApparent = findByDefRef(state, "Heir Apparent");
+    const player = heirApparent.controller!;
+    const central = state.board[2]!.id;
+    const otherCentral = state.board[3]!.id; // Arena — board position 4 (1-indexed)
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playCard", cardId: heirApparent.id, locationId: central });
+    expect(action).not.toMatchObject({ type: "playCard", cardId: heirApparent.id, locationId: otherCentral });
+  });
+
+  it("prefers eliminating a rival leader over a non-priority opposing card", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const heirApparent = findByDefRef(state, "Heir Apparent");
+    const player = heirApparent.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const rivalLeader = findByDefRef(state, "Wife"); // Regime, Protected — unescorted here, so legal
+    const decoyTarget = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    state = place(state, heirApparent.id, loc, player);
+    state = place(state, rivalLeader.id, loc, other); // revealed (place defaults faceUp: true)
+    state = place(state, decoyTarget.id, loc, other);
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: heirApparent.id,
+      actingPlayerId: player,
+      abilityIndex: 1,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [rivalLeader.id] });
+  });
+
+  it("prefers eliminating a still-hidden card over a visible non-priority one", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const heirApparent = findByDefRef(state, "Heir Apparent");
+    const player = heirApparent.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const hiddenCard = state.cards.find((c) => c.defRef === "Secret Police")!; // Blend, non-leader
+    const decoyTarget = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    state = place(state, heirApparent.id, loc, player);
+    state = place(state, hiddenCard.id, loc, other, false); // face-down
+    state = place(state, decoyTarget.id, loc, other);
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: heirApparent.id,
+      actingPlayerId: player,
+      abilityIndex: 1,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [hiddenCard.id] });
+  });
+});

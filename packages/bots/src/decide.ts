@@ -378,6 +378,64 @@ function shouldDeployOppositionLeaderNow(state: FilteredGameState, cardData: Car
 // grant needed.
 const OPPOSITION_LEADER_ESCORT_TARGET = 2;
 
+// Heir Apparent's kit ("Gain 2 actions" — a plain, unrestricted budget
+// boost, not a grant — plus an eliminate-1-or-2-at-self with no kind or
+// faction filter at all, both as an Activate/alarm and as a Response) and
+// his win condition (`survives` + `noOtherSurvivingLeaders` — no
+// President angle whatsoever, unlike every leader above) are
+// idiosyncratic the same way the others are — identified by defRef, not
+// derivable from win-condition data alone.
+function computeHeirApparentMode(state: FilteredGameState, playerId: PlayerId): boolean {
+  const leader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+  return leader?.defRef === "Heir Apparent";
+}
+
+// "Play to a central location 3 or 4" — location 3/4 (1-indexed) are
+// board positions index 2 and 3, which the fixed board order (Street,
+// HQ, Street, Arena, Street, Palace) makes the second Street and Arena.
+const HEIR_APPARENT_CENTRAL_LOCATION_INDICES = [2, 3]; // 0-indexed — "location 3 or 4" (1-indexed)
+
+function heirApparentCentralLocations(board: BoardLayout): LocationInstance[] {
+  return HEIR_APPARENT_CENTRAL_LOCATION_INDICES.map((i) => board[i]).filter((l): l is LocationInstance => l !== undefined);
+}
+
+// Whichever of his two central locations is currently escorted, if any —
+// used both as shouldDeployHeirApparentNow's own trigger below and as the
+// preferred deploy target everywhere a leader deploy location is chosen
+// (chooseLeaderDeployLocation's own preferredLocationId parameter),
+// falling back to the first of the two (a mild "central over random"
+// preference) even when neither is currently escorted — e.g. under
+// decideTurnAction's own forced stuckLeader deploy, which can't afford to
+// wait for an escort.
+function preferredHeirApparentLocationId(state: FilteredGameState, cardData: CardData, playerId: PlayerId): string | undefined {
+  const central = heirApparentCentralLocations(state.board);
+  const escorted = central.find((l) => isEscortedLocation(state, cardData, playerId, "Regime", l.id));
+  return (escorted ?? central[0])?.id;
+}
+
+// "...in the early to-mid-game, when he has protection available" —
+// primarily opportunistic (deploy the moment a central location is
+// actually escorted), but with the same deck-low urgency fallback as
+// Head of Security's own trigger (HOS_DECK_LOW_THRESHOLD): his own win
+// condition needs him in play (`survives`) regardless of the President's
+// fate, and simulation showed the President going the whole game without
+// being eliminated often enough that decideTurnAction's stuckLeader
+// backstop (which only fires once he is) left Heir Apparent stranded in
+// hand in well over half of all losses — a real, measured gap, not a
+// hypothetical one. Once this fires without an escort actually
+// available, preferredHeirApparentLocationId's own fallback (central
+// over random, even unescorted) still applies — better exposed at a
+// central spot than never in play at all.
+const HEIR_APPARENT_DECK_LOW_THRESHOLD = 8;
+
+function shouldDeployHeirApparentNow(state: FilteredGameState, cardData: CardData, playerId: PlayerId): boolean {
+  if (heirApparentCentralLocations(state.board).some((l) => isEscortedLocation(state, cardData, playerId, "Regime", l.id))) {
+    return true;
+  }
+  const deckSize = state.cards.filter((c) => c.zone === "deck").length;
+  return deckSize <= HEIR_APPARENT_DECK_LOW_THRESHOLD;
+}
+
 // Where to deploy a leader that needs an escort (see survivalObjective.ts)
 // — prefer a legal location this player already has an escort at, falling
 // back to any legal location when none exists (never fully bricks a
@@ -802,7 +860,9 @@ function decideTurnAction(
           ? findBlendRichLocation(state, playerId)?.id
           : computeGuerrillaCommanderMode(state, playerId) && shouldPrioritizeLocation5ForGuerrillaCommander(state)
             ? stagingLocationId(state.board, findLocationByName(state.board, "Palace")?.id ?? "")
-            : undefined;
+            : computeHeirApparentMode(state, playerId)
+              ? preferredHeirApparentLocationId(state, cardData, playerId)
+              : undefined;
       const location = chooseLeaderDeployLocation(
         state,
         cardData,
@@ -1007,6 +1067,19 @@ function decidePlayCardOrMotorcade(
     }
   }
 
+  // Heir Apparent: "play to a central location 3 or 4... when he has
+  // protection available" — deploy directly there once one of his two
+  // central locations is actually escorted, same forced-deploy-once-
+  // triggered priority shape as every other leader's own branch above.
+  if (computeHeirApparentMode(state, playerId) && shouldDeployHeirApparentNow(state, cardData, playerId)) {
+    const ownLeader = hand.find((c) => c.kind === "leader");
+    const preferredId = preferredHeirApparentLocationId(state, cardData, playerId);
+    if (ownLeader && preferredId) {
+      const target = playableTargetLocation(cardData, state.board, ownLeader, [preferredId]);
+      if (target) return { type: "playCard", cardId: ownLeader.id, locationId: target.id };
+    }
+  }
+
   // A leader whose win condition just wants the President dead somewhere
   // (not a specific location like Wife's) shouldn't blindly play a
   // Motorcade card either — that's a step closer to him running off the
@@ -1112,7 +1185,9 @@ function decidePlayCardOrMotorcade(
     const preferredLocationId =
       computeCommanderGeneralMode(state, playerId) && state.president.status === "eliminated"
         ? findLocationByName(state.board, "HQ")?.id
-        : undefined;
+        : computeHeirApparentMode(state, playerId)
+          ? preferredHeirApparentLocationId(state, cardData, playerId)
+          : undefined;
     const location = chooseLeaderDeployLocation(
       state,
       cardData,
@@ -1717,6 +1792,24 @@ function decideEliminateTargetIds(
       if (regimeOnly.length >= minNeeded) {
         finalPool = regimeOnly;
       }
+    }
+  }
+
+  // Heir Apparent's win condition needs no other leader left surviving
+  // (noOtherSurvivingLeaders), with no President angle at all — his own
+  // eliminate ability (location:"self", no kind or faction filter)
+  // prefers any rival leader unfortunate enough to share his location
+  // (the pool already excludes an escorted Protected one — see
+  // eliminateCandidatePool/isLegalEliminationTargetFiltered — so this
+  // only ever offers a genuinely legal kill) or any still-hidden (Blend)
+  // card there, since several other leaders carry Blend and a card's
+  // true identity doesn't need to be known to target it, only its
+  // location and face-down status.
+  if (computeHeirApparentMode(state, playerId)) {
+    const minNeeded = requiredMinCount(effect.target.count);
+    const priorityTargets = finalPool.filter((c) => c.kind === "leader" || c.faceUp === false);
+    if (priorityTargets.length >= minNeeded) {
+      finalPool = priorityTargets;
     }
   }
 
