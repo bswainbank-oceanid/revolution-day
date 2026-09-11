@@ -60,7 +60,7 @@ interface UseGameResult {
   // Cleared automatically at the start of the next act() call, success or
   // failure, same as `error` above.
   readonly actionError: string | null;
-  readonly startNewGame: () => Promise<void>;
+  readonly startNewGame: (botCount: number) => Promise<void>;
   readonly act: (action: Action) => Promise<void>;
 }
 
@@ -154,12 +154,16 @@ export function useGame(): UseGameResult {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const startNewGame = useCallback(async () => {
+  const startNewGame = useCallback(async (botCount: number) => {
     setLoading(true);
     setError(null);
     try {
       const humanPlayerId = "you";
-      const botPlayerIds = ["bot-1", "bot-2"];
+      // 1-7 bots (2-8 players total) — setupGame's own supported range
+      // (setup.ts throws outside 2-8), clamped here so a bad caller can't
+      // send something the server would just reject.
+      const clampedBotCount = Math.min(7, Math.max(1, Math.round(botCount)));
+      const botPlayerIds = Array.from({ length: clampedBotCount }, (_, i) => `bot-${i + 1}`);
       // Seat order is exactly array order (setup.ts), so who goes first —
       // and thus who the top ribbon starts with — would otherwise always
       // be the human. Shuffle so any seat, human or bot, can lead.

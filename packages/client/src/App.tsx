@@ -50,9 +50,46 @@ function lockedLocationIds(state: FilteredGameState, pick: ActiveCardPick | null
 // over goToLocation/goToCity, since a pending human pick from the *true*
 // final state can already exist while playback is still narrating the
 // bot steps leading up to it).
+const BOT_COUNT_OPTIONS = [1, 2, 3, 4, 5, 6, 7] as const;
+const DEFAULT_BOT_COUNT = 2;
+
+// 1-7 bots, mirroring setupGame's own 2-8-total-player range (setup.ts) —
+// the human always fills one of those seats, so this stops one short of 8.
+function BotCountPicker({
+  botCount,
+  onChange,
+  disabled,
+}: {
+  readonly botCount: number;
+  readonly onChange: (count: number) => void;
+  readonly disabled: boolean;
+}) {
+  return (
+    <div className="bot-count-picker">
+      <span>Bots:</span>
+      {BOT_COUNT_OPTIONS.map((n) => (
+        <button
+          key={n}
+          type="button"
+          className={n === botCount ? "selected" : undefined}
+          onClick={() => onChange(n)}
+          disabled={disabled}
+          aria-pressed={n === botCount}
+        >
+          {n}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function App() {
   const { session, loading, error, actionError, startNewGame, act } = useGame();
   const { view, goToCity, goToLocation } = useViewNavigation();
+  // Persists across a "Play Again" restart (not reset when session clears)
+  // so the lobby remembers the player's last choice instead of silently
+  // reverting to the default every time.
+  const [botCount, setBotCount] = useState(DEFAULT_BOT_COUNT);
   const [viewedCardId, setViewedCardId] = useState<string | null>(null);
   const [draggedCard, setDraggedCard] = useState<FilteredCardInstance | null>(null);
   const [checkOpponentTurns, setCheckOpponentTurns] = useState(false);
@@ -157,9 +194,12 @@ function App() {
     return (
       <main className="new-game">
         <h1>Revolution Day</h1>
-        <p>Solo vs. bots — this session is you plus 2 bots.</p>
+        <p>
+          Solo vs. bots — this session is you plus {botCount} bot{botCount === 1 ? "" : "s"}.
+        </p>
+        <BotCountPicker botCount={botCount} onChange={setBotCount} disabled={loading} />
         {error && <p className="error">{error}</p>}
-        <button type="button" onClick={startNewGame} disabled={loading}>
+        <button type="button" onClick={() => startNewGame(botCount)} disabled={loading}>
           {loading ? "Starting…" : "New Game"}
         </button>
       </main>
@@ -178,7 +218,8 @@ function App() {
           humanPlayerId={session.humanPlayerId}
           botPlayerIds={session.botPlayerIds}
         />
-        <button type="button" onClick={startNewGame} disabled={loading}>
+        <BotCountPicker botCount={botCount} onChange={setBotCount} disabled={loading} />
+        <button type="button" onClick={() => startNewGame(botCount)} disabled={loading}>
           {loading ? "Starting…" : "Play Again"}
         </button>
       </main>
