@@ -273,6 +273,38 @@ function shouldDeployHeadOfSecurityNow(state: FilteredGameState): boolean {
   return index >= HOS_DEPLOY_POSITION_INDEX;
 }
 
+// Puppet-Master's kit ("Play 2 cards" — a plain, unfiltered play grant,
+// unlike every other leader's own grant — plus a genuinely unrestricted
+// remote-activate, "any non-leader card, controlled by any player, at
+// any location", the most permissive in the game) and her win condition
+// (`metaNoOtherPlayerWins` + `survives` — she doesn't care how the game
+// ends, only that nobody else's own condition is also met at the same
+// time) are idiosyncratic the same way the others are — identified by
+// defRef, not derivable from win-condition data alone. Designed to play
+// like Head of Security (same late/opportunistic deploy trigger, same
+// preference for a purposeful remote activation, same motorcade-rushing
+// fallback — see every site below gated on computeHeadOfSecurityMode ||
+// computePuppetMasterMode), since her own "nobody else wins" condition
+// is most directly served the same way his "president survives" one is:
+// keep the President moving and alive. The one genuine rival to that
+// plan is Head of Security himself, whose own win is the *same* outcome
+// (only one of them can be the "no other player wins" case) — see
+// isLeaderInPlay's use in decideEliminateTargetIds and the rushing gate
+// below.
+function computePuppetMasterMode(state: FilteredGameState, playerId: PlayerId): boolean {
+  const leader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+  return leader?.defRef === "Puppet-Master";
+}
+
+// Whether a given leader (by defRef) currently has an in-play card
+// anywhere — both Head of Security and Opposition Leader lack the Blend
+// attribute, so their own defRef is always visible once in play
+// regardless of viewer, making this reliable without any hidden-identity
+// caveat.
+function isLeaderInPlay(state: FilteredGameState, defRef: string): boolean {
+  return state.cards.some((c) => c.zone === "inPlay" && c.kind === "leader" && c.defRef === defRef);
+}
+
 // Commander General's kit (two location:"self" gainActions grants plus a
 // reveal-all-blended, all tied to wherever he personally sits, and a
 // factionMajority-at-HQ win condition on top of PresidentObjective's
@@ -981,6 +1013,7 @@ function decidePlayCardOrMotorcade(
   );
   const { needsEscort, faction: leaderFaction } = computeEscortNeed(state, cardData, playerId);
   const isHeadOfSecurity = computeHeadOfSecurityMode(state, playerId);
+  const isPuppetMaster = computePuppetMasterMode(state, playerId);
 
   // Deploy a location-gated leader (Wife) straight to her win location
   // once the deploy window is open — see shouldDeployLocationLeaderNow.
@@ -1015,8 +1048,10 @@ function decidePlayCardOrMotorcade(
   // priority reasoning as Wife's above, just with no fixed target
   // location: prefer an escorted one (see chooseLeaderDeployLocation),
   // falling back to any legal spot since getting into play at all is
-  // what actually matters here.
-  if (isHeadOfSecurity && shouldDeployHeadOfSecurityNow(state)) {
+  // what actually matters here. Puppet-Master "can play late... to any
+  // protected location" — designed to play like him, so she reuses his
+  // exact trigger and deploy logic verbatim.
+  if ((isHeadOfSecurity || isPuppetMaster) && shouldDeployHeadOfSecurityNow(state)) {
     const ownLeader = hand.find((c) => c.kind === "leader");
     if (ownLeader) {
       const instance = asCardInstance(ownLeader)!;
@@ -1034,8 +1069,16 @@ function decidePlayCardOrMotorcade(
   // failing his own `survives` requirement), prefer a Motorcade card
   // over anything else in hand; the existing motorcade-handling logic
   // below is untouched, this only changes which card gets picked.
-  const isHeadOfSecurityRushing =
-    isHeadOfSecurity && state.cards.some((c) => c.kind === "leader" && c.controller === playerId && c.zone === "inPlay");
+  //
+  // Puppet-Master, "otherwise" (point 5 of her own strategy — after
+  // point 3's own priority below): the President surviving to the end
+  // also satisfies Head of Security's own win condition, the one genuine
+  // rival to her "no other player wins" — rushing is only ever her own
+  // interest while he isn't around to also collect that same outcome
+  // (once actually eliminated per point 3, or if never deployed at all).
+  const isRushingPresident =
+    (isHeadOfSecurity || (isPuppetMaster && !isLeaderInPlay(state, "Head of Security"))) &&
+    state.cards.some((c) => c.kind === "leader" && c.controller === playerId && c.zone === "inPlay");
 
   // Master Assassin "wants to stay in hand" until one of two specific
   // windows opens — pounce directly on the President once he's vulnerable
@@ -1159,7 +1202,7 @@ function decidePlayCardOrMotorcade(
     return { type: "playCard", cardId: chosen.card.id, locationId: chosen.location.id };
   }
 
-  const rushCard = isHeadOfSecurityRushing ? playableHand.find((c) => c.kind === "motorcade") : undefined;
+  const rushCard = isRushingPresident ? playableHand.find((c) => c.kind === "motorcade") : undefined;
   const card = rushCard ?? pickRandom(rng, playableHand);
   if (!card) return { type: "endTurn" };
 
@@ -1597,6 +1640,23 @@ function decideActivateAbility(
     }
   }
 
+  // Puppet-Master: "use her abilities regularly" — same unconditional
+  // own-ability preference as Guerrilla Commander's/Opposition Leader's
+  // own tiers above. Neither of hers is itself a top-level eliminate
+  // verb (her play grant obviously isn't one, and activateRemote is a
+  // distinct verb even when the remotely-activated ability turns out to
+  // be an eliminate — see pickPreferredRemoteActivation's own separate
+  // preference for that, one level down), so the eliminate-capable tier
+  // above never intercepts them either.
+  if (computePuppetMasterMode(state, playerId)) {
+    const ownLeader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+    const ownAbilities = usable.filter(({ card }) => card.id === ownLeader?.id);
+    if (ownAbilities.length > 0) {
+      const chosen = pickRandom(rng, ownAbilities)!;
+      return { type: "activateAbility", cardId: chosen.card.id, abilityIndex: chosen.abilityIndex };
+    }
+  }
+
   const chosen = pickRandom(rng, usable)!;
   return { type: "activateAbility", cardId: chosen.card.id, abilityIndex: chosen.abilityIndex };
 }
@@ -1813,6 +1873,48 @@ function decideEliminateTargetIds(
     }
   }
 
+  // Puppet-Master: "if Head of Security is in play, target him for
+  // elimination" — his own win condition (president survives + he
+  // himself survives) is the one genuine rival to her rush-the-president
+  // fallback (point 5): the President surviving to the end would hand
+  // them BOTH the same outcome, but her own "no other player wins" only
+  // tolerates one winner. Applies regardless of which card is doing the
+  // eliminating — her own, or one she's remotely activated.
+  if (computePuppetMasterMode(state, playerId) && isLeaderInPlay(state, "Head of Security")) {
+    const minNeeded = requiredMinCount(effect.target.count);
+    const hosTarget = finalPool.filter((c) => c.defRef === "Head of Security");
+    if (hosTarget.length >= minNeeded) {
+      finalPool = hosTarget;
+    }
+  }
+
+  // Puppet-Master: "if Opposition Leader is in play, try to remove
+  // rebels from at least 2 locations" — her own rush-the-president plan
+  // otherwise leaves Opposition Leader's locationSpread win condition
+  // completely untouched (it doesn't depend on the President at all,
+  // unlike every eliminate-oriented leader's own win). Prefers a Rebel-
+  // faction candidate whose removal would fully clear known Rebel
+  // presence from its own location — the only kind of removal that
+  // actually knocks a location out of her rival's own count, rather than
+  // just thinning an already-multi-rebel one — falling back to any
+  // Rebel-faction candidate at all. Naturally spreads the sabotage
+  // across turns rather than repeatedly re-clearing the same spot: once
+  // a location has zero known Rebels left, it stops being a "clears a
+  // location" candidate on its own.
+  if (computePuppetMasterMode(state, playerId) && isLeaderInPlay(state, "Opposition Leader")) {
+    const minNeeded = requiredMinCount(effect.target.count);
+    const rebelCandidates = finalPool.filter((c) => knownFaction(cardData, c) === "Rebel");
+    if (rebelCandidates.length >= minNeeded) {
+      const clearsLocation = rebelCandidates.filter(
+        (c) =>
+          state.cards.filter(
+            (other) => other.zone === "inPlay" && other.locationId === c.locationId && knownFaction(cardData, other) === "Rebel",
+          ).length <= 1,
+      );
+      finalPool = clearsLocation.length >= minNeeded ? clearsLocation : rebelCandidates;
+    }
+  }
+
   const count = countToPick(rng, effect.target.count, finalPool.length);
   const chosen = pickN(rng, finalPool, count);
 
@@ -1890,9 +1992,14 @@ function decideActivateRemoteTargets(
   // Head of Security's whole kit is built around this ability ("eliminate
   // blended cards and threats") — prefer a candidate+ability that can
   // actually do one of those over the plain random pick every other
-  // remote-activator (Guerrilla Commander, Puppet-Master) still gets
-  // below.
-  if (computeHeadOfSecurityMode(state, playerId)) {
+  // remote-activator (Guerrilla Commander) still gets below. Puppet-
+  // Master's own remote-activate is the most permissive in the game (any
+  // non-leader, any controller, any location) — "use her abilities
+  // regularly" (point 2 of her own strategy) is best served the same way
+  // his is: a purposeful eliminate-capable pick over blind random, which
+  // also feeds decideEliminateTargetIds' own Puppet-Master-specific
+  // priority tiers (points 3/4) once that ability's targets are chosen.
+  if (computeHeadOfSecurityMode(state, playerId) || computePuppetMasterMode(state, playerId)) {
     const preferred = pickPreferredRemoteActivation(state, cardData, playerId, pool, rng);
     if (preferred) {
       return { type: "chooseTargets", targetIds: [preferred.card.id], remoteAbilityIndex: preferred.abilityIndex };
@@ -1965,12 +2072,15 @@ function decideMoveEffectTargets(
   // The deciding player here is whoever's actually choosing — the
   // original activator under a remote activation too
   // (AbilityResolutionFrame.actingPlayerId, not the card's controller),
-  // so both computeHeadOfSecurityMode and the "eliminate" branch below
+  // so both the rush check below and the "eliminate" branch below it
   // correctly cover Traffic Cop being either this player's own card or
   // one they remotely activated.
   const currentIndex = state.board.findIndex((l) => l.id === state.president.locationId);
   const forwardId = state.board[currentIndex + 1]?.id;
-  if (forwardId && computeHeadOfSecurityMode(state, playerId)) {
+  const isRushingPresident =
+    computeHeadOfSecurityMode(state, playerId) ||
+    (computePuppetMasterMode(state, playerId) && !isLeaderInPlay(state, "Head of Security"));
+  if (forwardId && isRushingPresident) {
     return { type: "chooseTargets", targetIds: [], locationIds: [forwardId] };
   }
 

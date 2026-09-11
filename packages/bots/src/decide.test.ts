@@ -2124,3 +2124,220 @@ describe("decideBotAction: Heir Apparent's strategy", () => {
     expect(action).toEqual({ type: "chooseTargets", targetIds: [hiddenCard.id] });
   });
 });
+
+describe("decideBotAction: Puppet-Master's strategy (plays like Head of Security)", () => {
+  it("deploys once the deck is running low, regardless of the President's position", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const puppetMaster = findByDefRef(state, "Puppet-Master");
+    const player = puppetMaster.controller!;
+    const loc = state.board[0]!.id;
+    const soldier = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    state = place(state, soldier.id, loc, player);
+    state = { ...state, president: { status: "notEntered", locationId: null } };
+    let deckSeen = 0;
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.zone !== "deck") return c;
+        deckSeen += 1;
+        return deckSeen <= 8 ? c : { ...c, zone: "discard" as const };
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: puppetMaster.id, locationId: loc });
+  });
+
+  it("does not prematurely deploy while the President is far off and the deck isn't low", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const puppetMaster = findByDefRef(state, "Puppet-Master");
+    const player = puppetMaster.controller!;
+    state = { ...state, president: { status: "alive", locationId: state.board[0]!.id } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playCard", cardId: puppetMaster.id });
+  });
+
+  it("prefers using her own ability over an unrelated usable one, unconditionally", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const puppetMaster = findByDefRef(state, "Puppet-Master");
+    const player = puppetMaster.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    state = place(state, puppetMaster.id, loc, player);
+    state = place(state, trafficCop.id, loc, other);
+    state = { ...state, president: { status: "alive", locationId: loc } }; // makes Traffic Cop's move usable too
+    state = { ...state, cards: state.cards.map((c) => (c.zone === "deck" ? { ...c, zone: "discard" as const } : c)) };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, near1);
+    expect(action).toMatchObject({ type: "activateAbility", cardId: puppetMaster.id });
+  });
+
+  it("prefers remotely activating an eliminate-capable card over a merely-usable one", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const puppetMaster = findByDefRef(state, "Puppet-Master");
+    const player = puppetMaster.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const thirdParty = state.players.find((p) => p.id !== player && p.id !== other)!.id;
+    const loc = state.board[2]!.id;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const guardTarget = state.cards.find((c) => c.defRef === "Prominent Citizen")!;
+    state = place(state, trafficCop.id, loc, other);
+    state = place(state, guard.id, loc, other);
+    state = place(state, guardTarget.id, loc, thirdParty);
+    state = { ...state, president: { status: "alive", locationId: loc } }; // makes Traffic Cop's move usable too
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: puppetMaster.id,
+      actingPlayerId: player,
+      abilityIndex: 1,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toMatchObject({ type: "chooseTargets", targetIds: [guard.id] });
+  });
+
+  it("prefers eliminating Head of Security when he's in play", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const puppetMaster = findByDefRef(state, "Puppet-Master");
+    const player = puppetMaster.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    // Death Squad is her own card here (not remotely activated) — a
+    // *same-faction* eliminator at Head of Security's own location would
+    // otherwise itself count as his shield (findProtectorCards/
+    // isLegalEliminationTargetFiltered: any other Regime, non-Protected
+    // card there shields a Protected Regime target, unless it's the
+    // acting player's own), making him illegal to target at all. This
+    // exercises decideEliminateTargetIds' own priority tier exactly the
+    // same way a remote activation would (that function doesn't care
+    // whose card is doing the eliminating, only who's deciding).
+    const deathSquad = state.cards.find((c) => c.defRef === "Death Squad")!; // eliminate, no kind/faction filter
+    const hos = findByDefRef(state, "Head of Security");
+    const decoyTarget = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    state = place(state, deathSquad.id, loc, player);
+    state = place(state, hos.id, loc, other);
+    state = place(state, decoyTarget.id, loc, other);
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: deathSquad.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [hos.id] });
+  });
+
+  it("prefers eliminating a Rebel card that fully clears a location's Rebel presence, when Opposition Leader is in play", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const puppetMaster = findByDefRef(state, "Puppet-Master");
+    const player = puppetMaster.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!; // eliminate, kind:nonLeader only
+    const oppositionLeader = findByDefRef(state, "Opposition Leader");
+    const soleRebel = state.cards.find((c) => c.defRef === "Rebel Soldier")!; // only Rebel at this location
+    const regimeDecoy = state.cards.find((c) => c.defRef === "Prominent Citizen")!;
+    state = place(state, guard.id, loc, other);
+    state = place(state, oppositionLeader.id, state.board[1]!.id, other); // elsewhere — just needs to be in play
+    state = place(state, soleRebel.id, loc, other);
+    state = place(state, regimeDecoy.id, loc, other);
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: guard.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [soleRebel.id] });
+  });
+
+  it("prefers playing a Motorcade card once deployed and rushing, when Head of Security isn't in play", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const puppetMaster = findByDefRef(state, "Puppet-Master");
+    const player = puppetMaster.controller!;
+    const loc = state.board[1]!.id; // HQ ("Secure") — no Rebel non-leader card is ever legal there
+    // (none list "Secure" among their own allowed types), so the Rebel Soldier below can't accidentally
+    // become a competing purposeful (self-escort) play the way it would at a "Street" location.
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    const soldier = state.cards.find((c) => c.defRef === "Rebel Soldier")!; // a Rebel card in hand, so
+    // the unrelated "draw when no same-faction card in hand" preference doesn't fire first.
+    state = place(state, puppetMaster.id, loc, player);
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === motorcade.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.id === soldier.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player) return { ...c, zone: "discard" as const };
+        return c;
+      }),
+    };
+    state = { ...state, president: { status: "notEntered", locationId: null } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playMotorcade", cardId: motorcade.id });
+  });
+
+  it("does not force rushing via Motorcade while Head of Security is in play", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const puppetMaster = findByDefRef(state, "Puppet-Master");
+    const player = puppetMaster.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[1]!.id; // HQ — see the comment on the previous test
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    const soldier = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    const hos = findByDefRef(state, "Head of Security");
+    state = place(state, puppetMaster.id, loc, player);
+    state = place(state, hos.id, state.board[3]!.id, other);
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === motorcade.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.id === soldier.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player && c.id !== motorcade.id && c.id !== soldier.id) {
+          return { ...c, zone: "discard" as const };
+        }
+        return c;
+      }),
+    };
+    state = { ...state, president: { status: "notEntered", locationId: null } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    // With the rush gate correctly withheld (Head of Security is in play),
+    // the Motorcade is just one of two equally-unpurposeful plays, not a
+    // forced pick — zero and 0.5 land on the hand's two distinct array
+    // indices (both under the 0.65 play-branch threshold), so at least one
+    // of them must land on the Rebel Soldier instead.
+    const mid = (): number => 0.5;
+    const results = [zero, mid].map((rng) => decideBotAction(filtered, player, cardData, rng));
+    expect(results.some((a) => !("cardId" in a) || a.cardId !== motorcade.id)).toBe(true);
+  });
+});
