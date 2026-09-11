@@ -1683,3 +1683,230 @@ describe("decideBotAction: Wife's Motorcade discipline", () => {
     expect(action).not.toMatchObject({ type: "playMotorcade" });
   });
 });
+
+describe("decideBotAction: Guerrilla Commander's strategy", () => {
+  it("deploys at the staging spot before the Palace once the mid-game trigger fires (deck low)", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const guerrillaCommander = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrillaCommander.controller!;
+    const palaceIndex = state.board.findIndex((l) => l.name === "Palace");
+    const staging = state.board[palaceIndex - 1]!.id;
+    let deckSeen = 0;
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.zone !== "deck") return c;
+        deckSeen += 1;
+        return deckSeen <= 14 ? c : { ...c, zone: "discard" as const };
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: guerrillaCommander.id, locationId: staging });
+  });
+
+  it("does not prioritize deploying before her mid-game trigger fires", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const guerrillaCommander = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrillaCommander.controller!;
+    const palaceIndex = state.board.findIndex((l) => l.name === "Palace");
+    const staging = state.board[palaceIndex - 1]!.id;
+    state = { ...state, president: { status: "alive", locationId: state.board[0]!.id } }; // position 1, deck full
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playCard", cardId: guerrillaCommander.id, locationId: staging });
+  });
+
+  it("routes a Rebel card to the staging spot once the mid-game trigger fires", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const guerrillaCommander = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrillaCommander.controller!;
+    const rebelSoldier = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    const palaceIndex = state.board.findIndex((l) => l.name === "Palace");
+    const staging = state.board[palaceIndex - 1]!.id;
+    let deckSeen = 0;
+    // Already in play, not in hand, so she's out of the hand-play
+    // competition — isolates the "any Rebel card" routing from her own
+    // dedicated deploy priority above.
+    state = place(state, guerrillaCommander.id, state.board[0]!.id, player);
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === rebelSoldier.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player && c.id !== rebelSoldier.id) return { ...c, zone: "discard" as const };
+        if (c.zone === "deck") {
+          deckSeen += 1;
+          return deckSeen <= 14 ? c : { ...c, zone: "discard" as const };
+        }
+        return c;
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: rebelSoldier.id, locationId: staging });
+  });
+
+  it("moves an already in-play Rebel card toward the Palace via the staging spot", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const rebelSoldier = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    const guerrillaCommander = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrillaCommander.controller!;
+    const palaceIndex = state.board.findIndex((l) => l.name === "Palace");
+    const staging = state.board[palaceIndex - 1]!.id;
+    const startLoc = state.board[palaceIndex - 2]!.id; // two steps before the Palace
+    state = place(state, rebelSoldier.id, startLoc, player);
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.zone === "hand" && c.controller === player) return { ...c, zone: "discard" as const };
+        if (c.zone === "deck") return { ...c, zone: "discard" as const };
+        return c;
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", actionsRemaining: 2 } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "moveCard", cardId: rebelSoldier.id, toLocationId: staging });
+  });
+
+  it("prefers using her own ability over an unrelated usable one, unconditionally", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const guerrillaCommander = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrillaCommander.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    const hiddenCard = state.cards.find((c) => c.defRef === "Secret Police")!;
+    state = place(state, guerrillaCommander.id, loc, player);
+    state = place(state, trafficCop.id, loc, player);
+    state = place(state, hiddenCard.id, loc, other, false); // makes her own reveal ability usable
+    state = { ...state, president: { status: "alive", locationId: loc } }; // makes Traffic Cop's move usable too
+    state = { ...state, cards: state.cards.map((c) => (c.zone === "deck" ? { ...c, zone: "discard" as const } : c)) };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, near1);
+    expect(action).toMatchObject({ type: "activateAbility", cardId: guerrillaCommander.id });
+  });
+
+  it("prefers eliminating Heir Apparent over a non-priority opposing card", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const guerrillaCommander = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrillaCommander.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const eliminator = state.cards.find((c) => c.defRef === "Assassin")!; // Rebel, unfiltered eliminate
+    const heirApparent = findByDefRef(state, "Heir Apparent");
+    // Rebel decoy — can't shield a Regime target (Heir Apparent), unlike
+    // a Regime decoy would, so there's no ambiguity about which one wins.
+    const decoyTarget = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    state = place(state, eliminator.id, loc, player);
+    state = place(state, heirApparent.id, loc, other);
+    state = place(state, decoyTarget.id, loc, other);
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: eliminator.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [heirApparent.id] });
+  });
+
+  it("prefers eliminating Wife over a non-priority opposing card", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const guerrillaCommander = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrillaCommander.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const eliminator = state.cards.find((c) => c.defRef === "Assassin")!;
+    const wife = findByDefRef(state, "Wife");
+    const decoyTarget = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    state = place(state, eliminator.id, loc, player);
+    state = place(state, wife.id, loc, other); // revealed (place defaults faceUp: true)
+    state = place(state, decoyTarget.id, loc, other);
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: eliminator.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [wife.id] });
+  });
+
+  it("prefers eliminating a still-hidden card at the Palace over a visible non-priority one", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const guerrillaCommander = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrillaCommander.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const palace = state.board.find((l) => l.name === "Palace")!.id;
+    const eliminator = state.cards.find((c) => c.defRef === "Assassin")!;
+    const hiddenCard = state.cards.find((c) => c.defRef === "Secret Police")!; // Regime, Blend
+    const decoyTarget = state.cards.find((c) => c.defRef === "Republican Guard")!; // visible, no priority
+    state = place(state, eliminator.id, palace, player);
+    state = place(state, hiddenCard.id, palace, other, false); // still blended
+    state = place(state, decoyTarget.id, palace, other);
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: eliminator.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: palace,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [hiddenCard.id] });
+  });
+
+  it("prefers a Regime-faction target when striking from the Palace itself", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const guerrillaCommander = findByDefRef(state, "Guerrilla Commander");
+    const player = guerrillaCommander.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const palace = state.board.find((l) => l.name === "Palace")!.id;
+    const eliminator = state.cards.find((c) => c.defRef === "Assassin")!;
+    const regimeTarget = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const rebelDecoy = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    state = place(state, eliminator.id, palace, player);
+    state = place(state, regimeTarget.id, palace, other);
+    state = place(state, rebelDecoy.id, palace, other);
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: eliminator.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: palace,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [regimeTarget.id] });
+  });
+});

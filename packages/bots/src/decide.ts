@@ -287,6 +287,40 @@ function findLocationByName(board: BoardLayout, name: string): LocationInstance 
   return board.find((l) => l.name === name);
 }
 
+// Guerrilla Commander's kit (a Rebel-only mirror of Head of Security's
+// remote-activate, plus a self-contained reveal-then-resolve that can
+// eliminate a Regime card or defect a Rebel one in a single ability, no
+// separate target-selection step) and her win condition (President
+// eliminated, no Regime leader wins, Rebels outnumber Regime cards at the
+// Palace) are idiosyncratic the same way the others are — identified by
+// defRef, not derivable from win-condition data alone.
+function computeGuerrillaCommanderMode(state: FilteredGameState, playerId: PlayerId): boolean {
+  const leader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+  return leader?.defRef === "Guerrilla Commander";
+}
+
+// Two independent triggers for Guerrilla Commander to start prioritizing
+// the staging spot before the Palace (board position 5) for herself and
+// her own Rebel cards, mirroring shouldDeployHeadOfSecurityNow's own
+// shape: the deck getting low (a lower bar than Head of Security's own —
+// her win condition needs actual Rebel *numbers* built up at the Palace
+// by game end, which takes longer to arrange than his simple "be in
+// play") or the President having gotten far enough along that the
+// endgame could plausibly be approaching. Unlike every other leader's own
+// deploy trigger, she has no urgency before this fires at all — "she can
+// be played at any time, or not at all" — so nothing else in her own
+// strategy treats getting into play as time-sensitive.
+const GUERRILLA_COMMANDER_DECK_LOW_THRESHOLD = 15;
+const GUERRILLA_COMMANDER_PRESIDENT_POSITION_INDEX = 1; // 0-indexed — "the President at 2" (1-indexed)
+
+function shouldPrioritizeLocation5ForGuerrillaCommander(state: FilteredGameState): boolean {
+  const deckSize = state.cards.filter((c) => c.zone === "deck").length;
+  if (deckSize < GUERRILLA_COMMANDER_DECK_LOW_THRESHOLD) return true;
+  if (state.president.status !== "alive" || !state.president.locationId) return false;
+  const index = state.board.findIndex((l) => l.id === state.president.locationId);
+  return index >= GUERRILLA_COMMANDER_PRESIDENT_POSITION_INDEX;
+}
+
 // Where to deploy a leader that needs an escort (see survivalObjective.ts)
 // — prefer a legal location this player already has an escort at, falling
 // back to any legal location when none exists (never fully bricks a
@@ -697,12 +731,21 @@ function decideTurnAction(
       // masterAssassinNeedsBackupLeaderKills's own comment; once secured
       // (or unreachable, having killed the President himself) he has
       // nothing left to gain by seeking one out, so this correctly falls
-      // through to an ordinary escort/random pick instead.
+      // through to an ordinary escort/random pick instead. Guerrilla
+      // Commander's own mid-game trigger can still independently be true
+      // here (it doesn't require the President still being alive — deck
+      // running low alone is enough), in which case she prefers the
+      // staging spot before the Palace, same as everywhere else in her
+      // own strategy — she can never legally deploy onto the Palace
+      // itself directly (it's "Secure"; her own allowed types are
+      // "Public"/"Street" only), so there's no point offering it here.
       const preferredLocationId = computeCommanderGeneralMode(state, playerId)
         ? findLocationByName(state.board, "HQ")?.id
         : computeMasterAssassinMode(state, playerId) && masterAssassinNeedsBackupLeaderKills(state, playerId)
           ? findBlendRichLocation(state, playerId)?.id
-          : undefined;
+          : computeGuerrillaCommanderMode(state, playerId) && shouldPrioritizeLocation5ForGuerrillaCommander(state)
+            ? stagingLocationId(state.board, findLocationByName(state.board, "Palace")?.id ?? "")
+            : undefined;
       const location = chooseLeaderDeployLocation(
         state,
         cardData,
@@ -830,6 +873,22 @@ function decidePlayCardOrMotorcade(
     const ownLeader = hand.find((c) => c.kind === "leader");
     if (ownLeader) {
       const target = playableTargetLocation(cardData, state.board, ownLeader, [locationObjective.eliminateAtLocationId]);
+      if (target) return { type: "playCard", cardId: ownLeader.id, locationId: target.id };
+    }
+  }
+
+  // Guerrilla Commander "can be played at any time, or not at all" — no
+  // urgency of her own — but once her mid-game trigger fires (see
+  // shouldPrioritizeLocation5ForGuerrillaCommander), the staging spot
+  // before the Palace (and the Palace itself, if somehow already legal)
+  // becomes her own priority destination too, same as it is for any
+  // Rebel card she controls (desiredCardLocations).
+  if (computeGuerrillaCommanderMode(state, playerId) && shouldPrioritizeLocation5ForGuerrillaCommander(state)) {
+    const ownLeader = hand.find((c) => c.kind === "leader");
+    const palace = findLocationByName(state.board, "Palace");
+    if (ownLeader && palace) {
+      const staging = stagingLocationId(state.board, palace.id);
+      const target = playableTargetLocation(cardData, state.board, ownLeader, staging ? [palace.id, staging] : [palace.id]);
       if (target) return { type: "playCard", cardId: ownLeader.id, locationId: target.id };
     }
   }
@@ -1122,6 +1181,28 @@ function desiredCardLocations(
     }
   }
 
+  // Guerrilla Commander's win condition needs actual Rebel numbers built
+  // up at the Palace by game end — once her own mid-game trigger fires
+  // (see shouldPrioritizeLocation5ForGuerrillaCommander), route any Rebel
+  // card she controls toward it. Same "win location first, staging spot
+  // right before it second" shape the mob-interceptor clause above uses,
+  // and for the same reason: most Rebel non-leader cards can't legally
+  // deploy directly onto the Palace ("Secure") either, so
+  // playableTargetLocation's first-legal-match scan falls through to
+  // staging for an initial hand play, while stepToward walks an
+  // already-staged card the rest of the way in once "already there"
+  // drops out of its own candidate set.
+  if (computeGuerrillaCommanderMode(state, playerId) && knownFaction(cardData, card) === "Rebel") {
+    if (shouldPrioritizeLocation5ForGuerrillaCommander(state)) {
+      const palace = findLocationByName(state.board, "Palace");
+      if (palace) {
+        if (!ids.includes(palace.id)) ids.push(palace.id);
+        const staging = stagingLocationId(state.board, palace.id);
+        if (staging && !ids.includes(staging)) ids.push(staging);
+      }
+    }
+  }
+
   return ids;
 }
 
@@ -1279,6 +1360,25 @@ function decideActivateAbility(
     }
   }
 
+  // Guerrilla Commander: "when in play, her abilities should be
+  // priorities for activations" — unlike Commander General's own tier
+  // above, no location gate at all, since both of hers are already
+  // location-unrestricted in their own right (remote-activate reaches
+  // any location; the reveal-and-resolve just uses wherever she
+  // currently is). Neither shows up in the eliminate-capable tier above
+  // even when it would eliminate something: the reveal's own eliminate
+  // is nested inside an "if" following the reveal, not a top-level
+  // effect (same shape as Secret Police's identical ability), so this is
+  // genuinely the only place that prefers it.
+  if (computeGuerrillaCommanderMode(state, playerId)) {
+    const ownLeader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+    const ownAbilities = usable.filter(({ card }) => card.id === ownLeader?.id);
+    if (ownAbilities.length > 0) {
+      const chosen = pickRandom(rng, ownAbilities)!;
+      return { type: "activateAbility", cardId: chosen.card.id, abilityIndex: chosen.abilityIndex };
+    }
+  }
+
   const chosen = pickRandom(rng, usable)!;
   return { type: "activateAbility", cardId: chosen.card.id, abilityIndex: chosen.abilityIndex };
 }
@@ -1425,6 +1525,55 @@ function decideEliminateTargetIds(
     const leadersOnly = finalPool.filter((c) => c.kind === "leader");
     if (leadersOnly.length >= minNeeded) {
       finalPool = leadersOnly;
+    }
+  }
+
+  // Guerrilla Commander prefers the President, Heir Apparent, Commander
+  // General, or Wife specifically: her own win condition needs no Regime
+  // leader to win alongside her (metaNoFactionLeaderWins). Head of
+  // Security's own win is already structurally impossible the moment the
+  // President is eliminated (his needs the opposite), but the other
+  // three's own conditions are all genuinely independent of hers and
+  // could easily trigger alongside it — eliminating any of them
+  // permanently breaks their own `survives` requirement and removes the
+  // risk for good. Wife's specifically was a real, simulation-caught gap:
+  // she's the single most common Regime co-winner in practice, since her
+  // own win (President eliminated at the Palace) converges on exactly
+  // the same endgame location Guerrilla Commander's own strategy already
+  // pushes toward. Also prefers any still-hidden (Blend) card already at
+  // the Palace, win-location or not — a wildcard that could itself be a
+  // disguised Wife (or any other Blend leader) not yet revealed, or just
+  // a Regime non-leader padding the count her own Rebel-majority
+  // condition needs to beat; a card doesn't need to be identifiable to
+  // be targeted by an unfiltered eliminate selector, only its location
+  // and face-down status (always visible regardless of identity).
+  const palace = findLocationByName(state.board, "Palace");
+  if (computeGuerrillaCommanderMode(state, playerId)) {
+    const minNeeded = requiredMinCount(effect.target.count);
+    const priorityTargets = finalPool.filter(
+      (c) =>
+        c.id === PRESIDENT_TARGET_ID ||
+        c.defRef === "Heir Apparent" ||
+        c.defRef === "Commander General" ||
+        c.defRef === "Wife" ||
+        (palace !== undefined && c.locationId === palace.id && c.faceUp === false),
+    );
+    if (priorityTargets.length >= minNeeded) {
+      finalPool = priorityTargets;
+    }
+
+    // Once striking from the Palace itself (see
+    // shouldPrioritizeLocation5ForGuerrillaCommander's own routing),
+    // prefer a Regime-faction target there specifically — removing one
+    // directly swings her own win condition's Rebel-majority-at-Palace
+    // ratio, the same reasoning as Commander General's own Rebel
+    // preference but the opposite faction and gated to this one location
+    // instead of applying everywhere.
+    if (palace && sourceCard.locationId === palace.id) {
+      const regimeOnly = finalPool.filter((c) => c.id === PRESIDENT_TARGET_ID || knownFaction(cardData, c) === "Regime");
+      if (regimeOnly.length >= minNeeded) {
+        finalPool = regimeOnly;
+      }
     }
   }
 
