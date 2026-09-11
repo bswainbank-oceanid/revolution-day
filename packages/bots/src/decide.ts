@@ -321,6 +321,63 @@ function shouldPrioritizeLocation5ForGuerrillaCommander(state: FilteredGameState
   return index >= GUERRILLA_COMMANDER_PRESIDENT_POSITION_INDEX;
 }
 
+// Opposition Leader's kit (a play grant that places up to 2 Rebel cards
+// anywhere ignoring location restrictions, a plain card-draw, and a
+// reveal-any-blended-card-with-conditional-recruit) and her two win
+// conditions (`survives` + `locationSpread`: Rebels present at 5+ of the
+// board's 6 locations) are idiosyncratic the same way the others are —
+// identified by defRef, not derivable from win-condition data alone.
+function computeOppositionLeaderMode(state: FilteredGameState, playerId: PlayerId): boolean {
+  const leader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+  return leader?.defRef === "Opposition Leader";
+}
+
+// No raw turn counter exists anywhere in engine state (TurnState only
+// tracks the current player/phase/budget — see state/game.ts), so "turn
+// 3" from her own strategy spec is approximated from how much the deck
+// has shrunk since the opening deal: every card that ever leaves the
+// deck does so via a draw (the only zone transition out of "deck" — see
+// reducer.ts), so (starting size - current size) / player count is a
+// reasonable proxy for "rounds completed", on the same not-literally-
+// exact-but-good-enough footing as shouldDeployHeadOfSecurityNow's own
+// deck-size threshold.
+function startingDeckSize(cardData: CardData, playerCount: number): number {
+  const nonLeaderTotal = cardData.non_leader_cards.reduce((sum, c) => sum + c.copies, 0);
+  const dealt = playerCount < 6 ? 4 * playerCount : 0;
+  return nonLeaderTotal + cardData.motorcade.count_in_deck - dealt;
+}
+
+function estimatedRoundsElapsed(state: FilteredGameState, cardData: CardData): number {
+  const playerCount = state.players.length;
+  if (playerCount === 0) return 0;
+  const currentDeckSize = state.cards.filter((c) => c.zone === "deck").length;
+  const drawn = startingDeckSize(cardData, playerCount) - currentDeckSize;
+  return Math.floor(drawn / playerCount);
+}
+
+// "Play her to 4 early (turn 3 or earlier if 3+ rebels in hand)" — two
+// independent triggers, whichever fires first: a hand already rich in
+// Rebels (an exact, no-approximation check — nothing to estimate there)
+// or the deck-shrinkage-based round estimate above reaching her own
+// deploy round.
+const OPPOSITION_LEADER_DEPLOY_ROUND = 2; // 0-indexed — "by turn 3" (1-indexed)
+const OPPOSITION_LEADER_HAND_REBEL_THRESHOLD = 3;
+
+function shouldDeployOppositionLeaderNow(state: FilteredGameState, cardData: CardData, playerId: PlayerId): boolean {
+  const rebelsInHand = state.cards.filter(
+    (c) => c.zone === "hand" && c.controller === playerId && knownFaction(cardData, c) === "Rebel",
+  ).length;
+  if (rebelsInHand >= OPPOSITION_LEADER_HAND_REBEL_THRESHOLD) return true;
+  return estimatedRoundsElapsed(state, cardData) >= OPPOSITION_LEADER_DEPLOY_ROUND;
+}
+
+// "Play her to 4" — location 4 (1-indexed) is board position index 3,
+// which the fixed board order (locations_in_order: Street, HQ, Street,
+// Arena, Street, Palace) makes "Arena" — a type she can already legally
+// enter on her own (Public is one of her two allowed location types), no
+// grant needed.
+const OPPOSITION_LEADER_ESCORT_TARGET = 2;
+
 // Where to deploy a leader that needs an escort (see survivalObjective.ts)
 // — prefer a legal location this player already has an escort at, falling
 // back to any legal location when none exists (never fully bricks a
@@ -937,6 +994,19 @@ function decidePlayCardOrMotorcade(
     }
   }
 
+  // Opposition Leader: "play her to 4 early (turn 3 or earlier if 3+
+  // rebels in hand)" — same forced-deploy-once-triggered priority shape
+  // as Wife's/Head of Security's own branches above, targeting Arena
+  // specifically (see OPPOSITION_LEADER_ESCORT_TARGET's own comment).
+  if (computeOppositionLeaderMode(state, playerId) && shouldDeployOppositionLeaderNow(state, cardData, playerId)) {
+    const ownLeader = hand.find((c) => c.kind === "leader");
+    const arena = findLocationByName(state.board, "Arena");
+    if (ownLeader && arena) {
+      const target = playableTargetLocation(cardData, state.board, ownLeader, [arena.id]);
+      if (target) return { type: "playCard", cardId: ownLeader.id, locationId: target.id };
+    }
+  }
+
   // A leader whose win condition just wants the President dead somewhere
   // (not a specific location like Wife's) shouldn't blindly play a
   // Motorcade card either — that's a step closer to him running off the
@@ -991,11 +1061,23 @@ function decidePlayCardOrMotorcade(
   // redundancy for an eliminate-capable card once the deploy window is
   // open, or a mob heading for the Palace — over a blind random pick. See
   // desiredCardLocations.
+  //
+  // A currently-active "play" grant with ignoreLocationRestrictions
+  // (Opposition Leader's own "place 2 rebels at any locations") bypasses
+  // a qualifying card's own location-type restriction entirely once it's
+  // actually played this way (reducer.ts's applyPlayCard mirrors this
+  // exactly) — without threading that through here too, playableTargetLocation
+  // would keep rejecting the very spread-to-a-Secure-location destinations
+  // (desiredCardLocations' own Opposition Leader clause) this grant exists
+  // to reach directly, even though the server would accept them.
+  const playGrant = activeRestrictedGrant(state, "play");
   const purposefulPlays = playableHand
     .filter((c) => c.kind !== "motorcade")
     .map((card) => {
       const desired = desiredCardLocations(state, playerId, cardData, card, locationObjective, needsEscort, leaderFaction, objective);
-      const location = playableTargetLocation(cardData, state.board, card, desired);
+      const bypassLocationType =
+        playGrant?.ignoreLocationRestrictions === true && handCardQualifiesForPlayGrant(cardData, playGrant, card);
+      const location = playableTargetLocation(cardData, state.board, card, desired, bypassLocationType);
       return location ? { card, location } : undefined;
     })
     .filter((p): p is { card: FilteredCardInstance; location: LocationInstance } => p !== undefined);
@@ -1061,18 +1143,25 @@ function decidePlayCardOrMotorcade(
 // location's type) — shared by the leader-deploy priority above and the
 // purposeful-play scan below, so "desired" and "legally playable" can
 // never drift apart.
+// `ignoreTypeRestrictions` — set when a covering "play" grant with its
+// own ignoreLocationRestrictions is active for this specific card (see
+// the caller in decidePlayCardOrMotorcade) — skips the allowed-location-
+// type check entirely, mirroring reducer.ts's applyPlayCard exactly.
+// Defaults to false so every other call site (leader deploys, which never
+// go through a grant) is unaffected.
 function playableTargetLocation(
   cardData: CardData,
   board: BoardLayout,
   card: FilteredCardInstance,
   desiredLocationIds: readonly string[],
+  ignoreTypeRestrictions = false,
 ): LocationInstance | undefined {
   const instance = asCardInstance(card);
   if (!instance) return undefined;
   const allowedTypes = getAllowedLocationTypes(cardData, instance);
   for (const id of desiredLocationIds) {
     const location = board.find((l) => l.id === id);
-    if (location && allowedTypes.includes(location.type)) return location;
+    if (location && (ignoreTypeRestrictions || allowedTypes.includes(location.type))) return location;
   }
   return undefined;
 }
@@ -1140,10 +1229,49 @@ function desiredCardLocations(
   }
 
   // Self-escort: matches the LEADER's own faction (a same-faction card is
-  // what shields the leader specifically).
+  // what shields the leader specifically). Uncapped for most needs-escort
+  // leaders — piling up extra escort never hurts — except Opposition
+  // Leader, whose own second win condition (locationSpread) actively
+  // competes with an uncapped escort for the same pool of Rebel cards:
+  // "keep 2+ rebels at her location for protection... spread the others
+  // out" caps this clause's own claim on newly-played/moved Rebel cards
+  // once that floor is already met, so the spread clause below gets a
+  // turn at them instead.
+  const isOppositionLeader = computeOppositionLeaderMode(state, playerId);
   if (leaderFaction && needsEscort && knownFaction(cardData, card) === leaderFaction) {
     const leaderCard = state.cards.find((c) => c.zone === "inPlay" && c.controller === playerId && c.kind === "leader");
-    if (leaderCard?.locationId && !ids.includes(leaderCard.locationId)) ids.push(leaderCard.locationId);
+    const escortCount =
+      isOppositionLeader && leaderCard?.locationId
+        ? state.cards.filter(
+            (c) =>
+              c.zone === "inPlay" &&
+              c.controller === playerId &&
+              c.locationId === leaderCard.locationId &&
+              c.id !== leaderCard.id &&
+              knownFaction(cardData, c) === leaderFaction,
+          ).length
+        : 0;
+    const underCap = !isOppositionLeader || escortCount < OPPOSITION_LEADER_ESCORT_TARGET;
+    if (leaderCard?.locationId && underCap && !ids.includes(leaderCard.locationId)) ids.push(leaderCard.locationId);
+  }
+
+  // Opposition Leader's own locationSpread win condition (Rebels present
+  // at 5+ of the board's 6 locations) — once her own escort floor above
+  // is already met, route further Rebel cards (hers or anyone else's,
+  // played or moved — desiredCardLocations feeds both decidePlayCardOrMotorcade
+  // and decideMoveCard, and moveCard has no location-type restriction at
+  // all, so this reaches Secure locations like HQ/Palace too — see
+  // decideMoveCard) toward whichever locations don't yet have any known
+  // Rebel presence, rather than stacking redundantly where she already
+  // stands.
+  if (isOppositionLeader && leaderFaction && knownFaction(cardData, card) === leaderFaction) {
+    const present = new Set<string>();
+    for (const c of state.cards) {
+      if (c.zone === "inPlay" && c.locationId && knownFaction(cardData, c) === leaderFaction) present.add(c.locationId);
+    }
+    for (const l of state.board) {
+      if (!present.has(l.id) && !ids.includes(l.id)) ids.push(l.id);
+    }
   }
 
   // Protect the President: independent of the leader's own faction — the
@@ -1371,6 +1499,21 @@ function decideActivateAbility(
   // effect (same shape as Secret Police's identical ability), so this is
   // genuinely the only place that prefers it.
   if (computeGuerrillaCommanderMode(state, playerId)) {
+    const ownLeader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+    const ownAbilities = usable.filter(({ card }) => card.id === ownLeader?.id);
+    if (ownAbilities.length > 0) {
+      const chosen = pickRandom(rng, ownAbilities)!;
+      return { type: "activateAbility", cardId: chosen.card.id, abilityIndex: chosen.abilityIndex };
+    }
+  }
+
+  // Opposition Leader: "once she's in play, she can just use her
+  // abilities every turn" — same unconditional own-ability preference as
+  // Guerrilla Commander's own tier above, and for the same reason none of
+  // hers show up in the eliminate-capable tier either: her reveal's own
+  // gainControl is nested inside an "if" following the reveal, not a
+  // top-level eliminate/effect.
+  if (computeOppositionLeaderMode(state, playerId)) {
     const ownLeader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
     const ownAbilities = usable.filter(({ card }) => card.id === ownLeader?.id);
     if (ownAbilities.length > 0) {

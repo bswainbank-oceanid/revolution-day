@@ -1910,3 +1910,133 @@ describe("decideBotAction: Guerrilla Commander's strategy", () => {
     expect(action).toEqual({ type: "chooseTargets", targetIds: [regimeTarget.id] });
   });
 });
+
+describe("decideBotAction: Opposition Leader's strategy", () => {
+  it("deploys to Arena once the hand-rebel trigger fires (3+ rebels in hand)", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const oppositionLeader = findByDefRef(state, "Opposition Leader");
+    const player = oppositionLeader.controller!;
+    const arena = state.board.find((l) => l.name === "Arena")!.id;
+    const rebels = state.cards
+      .filter((c) => c.zone === "deck" && ["Mr. Lucky", "Gunman", "Assassin"].includes(c.defRef!))
+      .slice(0, 3);
+    expect(rebels).toHaveLength(3);
+    state = {
+      ...state,
+      cards: state.cards.map((c) =>
+        rebels.some((r) => r.id === c.id) ? { ...c, zone: "hand" as const, controller: player } : c,
+      ),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: oppositionLeader.id, locationId: arena });
+  });
+
+  it("deploys to Arena once the round-estimate trigger fires (deck shrunk enough)", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const oppositionLeader = findByDefRef(state, "Opposition Leader");
+    const player = oppositionLeader.controller!;
+    const arena = state.board.find((l) => l.name === "Arena")!.id;
+    let deckSeen = 0;
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.zone !== "deck") return c;
+        deckSeen += 1;
+        return deckSeen <= 19 ? c : { ...c, zone: "discard" as const };
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: oppositionLeader.id, locationId: arena });
+  });
+
+  it("does not prioritize deploying before either trigger fires", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const oppositionLeader = findByDefRef(state, "Opposition Leader");
+    const player = oppositionLeader.controller!;
+    const arena = state.board.find((l) => l.name === "Arena")!.id;
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playCard", cardId: oppositionLeader.id, locationId: arena });
+  });
+
+  it("prefers using her own ability over an unrelated usable one, unconditionally", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const oppositionLeader = findByDefRef(state, "Opposition Leader");
+    const player = oppositionLeader.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    state = place(state, oppositionLeader.id, loc, player);
+    state = place(state, trafficCop.id, loc, other);
+    state = { ...state, president: { status: "alive", locationId: loc } }; // makes Traffic Cop's move usable too
+    state = { ...state, cards: state.cards.map((c) => (c.zone === "deck" ? { ...c, zone: "discard" as const } : c)) };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, near1);
+    expect(action).toMatchObject({ type: "activateAbility", cardId: oppositionLeader.id });
+  });
+
+  it("caps her own location's escort at 2 rebels, then routes further ones toward a location without Rebel presence", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const oppositionLeader = findByDefRef(state, "Opposition Leader");
+    const player = oppositionLeader.controller!;
+    const home = state.board[0]!.id; // Street
+    const nextStreet = state.board[2]!.id; // Street — first non-Secure location lacking Rebel presence
+    const escort1 = state.cards.find((c) => c.defRef === "Mr. Lucky")!;
+    const escort2 = state.cards.find((c) => c.defRef === "Gunman")!;
+    const newcomer = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    state = place(state, oppositionLeader.id, home, player);
+    state = place(state, escort1.id, home, player);
+    state = place(state, escort2.id, home, player);
+    state = {
+      ...state,
+      cards: state.cards.map((c) => (c.id === newcomer.id ? { ...c, zone: "hand" as const, controller: player } : c)),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: newcomer.id, locationId: nextStreet });
+  });
+
+  it("exploits her active play grant to place a Rebel card directly at a Secure location", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const oppositionLeader = findByDefRef(state, "Opposition Leader");
+    const player = oppositionLeader.controller!;
+    const home = state.board[0]!.id; // Street
+    const hq = state.board.find((l) => l.name === "HQ")!.id;
+    const escort1 = state.cards.find((c) => c.defRef === "Mr. Lucky")!;
+    const escort2 = state.cards.find((c) => c.defRef === "Gunman")!;
+    const newcomer = state.cards.find((c) => c.defRef === "Rebel Soldier")!; // Street/Public only — normally can't reach HQ
+    state = place(state, oppositionLeader.id, home, player); // escort cap already met, so self-escort doesn't intercept
+    state = place(state, escort1.id, home, player);
+    state = place(state, escort2.id, home, player);
+    state = {
+      ...state,
+      cards: state.cards.map((c) => (c.id === newcomer.id ? { ...c, zone: "hand" as const, controller: player } : c)),
+    };
+    state = {
+      ...state,
+      turn: {
+        ...state.turn,
+        currentPlayerId: player,
+        phase: "action",
+        actionsRemaining: 0,
+        restrictedAction: { kind: "play", amount: 2, faction: "Rebel", locationId: null, ignoreLocationRestrictions: true },
+      },
+    };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: newcomer.id, locationId: hq });
+  });
+});
