@@ -1108,3 +1108,215 @@ describe("decideBotAction: Head of Security's strategy", () => {
     expect(action).toMatchObject({ type: "chooseTargets", targetIds: [secretPolice.id] });
   });
 });
+
+describe("decideBotAction: generic 'eliminate the President' Motorcade/Traffic Cop discipline", () => {
+  it("does not play a Motorcade card when the next location isn't a trap", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const commanderGeneral = findByDefRef(state, "Commander General");
+    const player = commanderGeneral.controller!;
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    state = { ...state, president: { status: "alive", locationId: state.board[0]!.id } };
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === motorcade.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player) return { ...c, zone: "discard" as const };
+        if (c.zone === "deck") return { ...c, zone: "discard" as const };
+        return c;
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playMotorcade" });
+  });
+
+  it("plays a Motorcade card once the next location already has a trap set", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const commanderGeneral = findByDefRef(state, "Commander General");
+    const player = commanderGeneral.controller!;
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const trapLoc = state.board[1]!.id;
+    state = place(state, guard.id, trapLoc, player);
+    state = { ...state, president: { status: "alive", locationId: state.board[0]!.id } };
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === motorcade.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player) return { ...c, zone: "discard" as const };
+        if (c.zone === "deck") return { ...c, zone: "discard" as const };
+        return c;
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playMotorcade", cardId: motorcade.id });
+  });
+
+  it("pushes the President backward via Traffic Cop when the next location isn't a trap", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const commanderGeneral = findByDefRef(state, "Commander General");
+    const player = commanderGeneral.controller!;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    const loc = state.board[2]!.id; // interior — both neighbors exist, neither is a trap
+    state = place(state, trafficCop.id, loc, player);
+    state = { ...state, president: { status: "alive", locationId: loc } };
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: trafficCop.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [], locationIds: [state.board[1]!.id] });
+  });
+
+  it("pushes the President forward via Traffic Cop when the next location already has a trap", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const commanderGeneral = findByDefRef(state, "Commander General");
+    const player = commanderGeneral.controller!;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard" && c.id !== trafficCop.id)!;
+    const loc = state.board[2]!.id;
+    const trapLoc = state.board[3]!.id;
+    state = place(state, trafficCop.id, loc, player);
+    state = place(state, guard.id, trapLoc, player);
+    state = { ...state, president: { status: "alive", locationId: loc } };
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: trafficCop.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [], locationIds: [trapLoc] });
+  });
+});
+
+describe("decideBotAction: Commander General's strategy", () => {
+  it("routes an eliminate-capable Regime card to the President's location when playing from hand", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const commanderGeneral = findByDefRef(state, "Commander General");
+    const player = commanderGeneral.controller!;
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const presidentLoc = state.board[1]!.id; // "HQ" — a legal ("Secure") location for the Guard too
+    state = { ...state, president: { status: "alive", locationId: presidentLoc } };
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === guard.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player && c.id !== commanderGeneral.id) return { ...c, zone: "discard" as const };
+        return c;
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: guard.id, locationId: presidentLoc });
+  });
+
+  it("routes an already in-play eliminate-capable Regime card toward the President via movement", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const commanderGeneral = findByDefRef(state, "Commander General");
+    const player = commanderGeneral.controller!;
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const presidentLoc = state.board[1]!.id;
+    const guardStart = state.board[0]!.id;
+    state = place(state, guard.id, guardStart, player);
+    state = { ...state, president: { status: "alive", locationId: presidentLoc } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", actionsRemaining: 2 } };
+    state = {
+      ...state,
+      cards: state.cards.map((c) =>
+        (c.zone === "hand" || c.zone === "deck") && (c.zone !== "hand" || c.controller === player)
+          ? { ...c, zone: "discard" as const }
+          : c,
+      ),
+    };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "moveCard", cardId: guard.id, toLocationId: presidentLoc });
+  });
+
+  it("deploys at HQ once the President is eliminated, preferring an escorted spot", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const commanderGeneral = findByDefRef(state, "Commander General");
+    const player = commanderGeneral.controller!;
+    const hq = state.board.find((l) => l.name === "HQ")!.id;
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    state = place(state, guard.id, hq, player);
+    state = { ...state, president: { status: "eliminated", locationId: null, eliminatedAtLocationId: state.board[3]!.id } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", actionsRemaining: 2 } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: commanderGeneral.id, locationId: hq });
+  });
+
+  it("prefers eliminating a Rebel-faction target over an equally-opposing Regime one", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const commanderGeneral = findByDefRef(state, "Commander General");
+    const player = commanderGeneral.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const eliminator = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const rebelTarget = state.cards.find((c) => c.defRef === "Rebel Soldier")!;
+    const regimeTarget = state.cards.find((c) => c.defRef === "Republican Guard" && c.id !== eliminator.id)!;
+    state = place(state, eliminator.id, loc, player);
+    state = place(state, rebelTarget.id, loc, other);
+    state = place(state, regimeTarget.id, loc, other);
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: eliminator.id,
+      actingPlayerId: player,
+      abilityIndex: 0,
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [rebelTarget.id] });
+  });
+
+  it("prefers using his own abilities once at HQ, over an unrelated usable ability elsewhere", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const commanderGeneral = findByDefRef(state, "Commander General");
+    const player = commanderGeneral.controller!;
+    const hq = state.board.find((l) => l.name === "HQ")!.id;
+    const elsewhere = state.board[3]!.id;
+    const trafficCop = state.cards.find((c) => c.defRef === "Traffic Cop")!;
+    state = place(state, commanderGeneral.id, hq, player);
+    state = place(state, trafficCop.id, elsewhere, player);
+    state = { ...state, president: { status: "alive", locationId: elsewhere } };
+    // Empty the deck so the "draw when no same-faction card in hand"
+    // preference (which doesn't know or care about HQ) can't fire first
+    // regardless of what this game's random deal happened to put in hand.
+    state = { ...state, cards: state.cards.map((c) => (c.zone === "deck" ? { ...c, zone: "discard" as const } : c)) };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, near1);
+    expect(action).toMatchObject({ type: "activateAbility", cardId: commanderGeneral.id });
+  });
+});
