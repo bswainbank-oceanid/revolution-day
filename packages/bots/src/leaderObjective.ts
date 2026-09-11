@@ -87,19 +87,23 @@ export interface ProtectionTargets {
   readonly locationIds: readonly string[];
 }
 
-// Where this player's Regime cards should currently be routed to keep
-// findProtectorCards coverage live (targeting.ts: a Protected leader is
-// shielded by other active, visible, same-faction, non-Protected cards at
-// their own location) — the President's own location plus his single
+// Where this player's same-faction cards should currently be routed to
+// keep findProtectorCards coverage live (targeting.ts: a Protected leader
+// is shielded by other active, visible, same-faction, non-Protected cards
+// at their own location) — the President's own location plus his single
 // predicted next stop (covers "before he arrives" as well as "he's here
-// now"), and this player's own location-gated leader's location once
-// she's actually in play there. Recomputed fresh every decision: both the
-// President's position and whether the leader has been deployed yet can
-// change every turn.
+// now"), and, when `includeOwnLeaderLocation` is set, wherever this
+// player's own leader currently sits in play. Not gated to any one
+// leader's own win condition — Wife's controller wants this to keep the
+// President alive long enough to reach the Palace; a leader who simply
+// needs to personally survive (see survivalObjective.ts) wants the same
+// routing for their own escort, without caring where the President is
+// headed. Recomputed fresh every decision: both the President's position
+// and whether/where the leader has been deployed can change every turn.
 export function computeProtectionTargets(
   state: FilteredGameState,
   playerId: PlayerId,
-  objective: LeaderLocationObjective,
+  includeOwnLeaderLocation: boolean,
 ): ProtectionTargets {
   const ids = new Set<string>();
   if (state.president.status === "alive" && state.president.locationId) {
@@ -108,15 +112,11 @@ export function computeProtectionTargets(
     const next = index === -1 ? undefined : state.board[index + 1];
     if (next) ids.add(next.id);
   }
-  if (objective.eliminateAtLocationId) {
-    const leaderHere = state.cards.some(
-      (c) =>
-        c.zone === "inPlay" &&
-        c.controller === playerId &&
-        c.kind === "leader" &&
-        c.locationId === objective.eliminateAtLocationId,
+  if (includeOwnLeaderLocation) {
+    const leaderCard = state.cards.find(
+      (c) => c.zone === "inPlay" && c.controller === playerId && c.kind === "leader",
     );
-    if (leaderHere) ids.add(objective.eliminateAtLocationId);
+    if (leaderCard?.locationId) ids.add(leaderCard.locationId);
   }
   return { locationIds: [...ids] };
 }

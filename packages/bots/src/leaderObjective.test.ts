@@ -129,12 +129,12 @@ describe("computeProtectionTargets", () => {
     const player = state.turn.currentPlayerId;
     const index = 1;
     const withPresident = { ...state, president: { status: "alive" as const, locationId: state.board[index]!.id } };
-    const targets = computeProtectionTargets(withPresident, player, { eliminateAtLocationId: null });
+    const targets = computeProtectionTargets(withPresident, player, false);
     expect(targets.locationIds).toContain(state.board[index]!.id);
     expect(targets.locationIds).toContain(state.board[index + 1]!.id);
   });
 
-  it("includes the location-gated leader's own location once she's in play there", () => {
+  it("includes this player's own leader's location once it's in play there, when requested", () => {
     const state = freshGame();
     const player = state.turn.currentPlayerId;
     const palace = state.board.find((l) => l.name === "Palace")!.id;
@@ -146,15 +146,31 @@ describe("computeProtectionTargets", () => {
         c.id === wife.id ? { ...c, zone: "inPlay" as const, locationId: palace, controller: player, faceUp: false } : c,
       ),
     };
-    const targets = computeProtectionTargets(withWifeDeployed, player, { eliminateAtLocationId: palace });
+    const targets = computeProtectionTargets(withWifeDeployed, player, true);
     expect(targets.locationIds).toContain(palace);
+  });
+
+  it("doesn't include the leader's own location when not requested", () => {
+    const state = freshGame();
+    const player = state.turn.currentPlayerId;
+    const palace = state.board.find((l) => l.name === "Palace")!.id;
+    const wife = state.cards.find((c) => c.defRef === "Wife")!;
+    const withWifeDeployed = {
+      ...state,
+      president: { status: "notEntered" as const, locationId: null },
+      cards: state.cards.map((c) =>
+        c.id === wife.id ? { ...c, zone: "inPlay" as const, locationId: palace, controller: player, faceUp: false } : c,
+      ),
+    };
+    const targets = computeProtectionTargets(withWifeDeployed, player, false);
+    expect(targets.locationIds).toEqual([]);
   });
 
   it("is empty when the President hasn't entered and no leader is deployed", () => {
     const state = freshGame();
     const player = state.turn.currentPlayerId;
     const withPresident = { ...state, president: { status: "notEntered" as const, locationId: null } };
-    const targets = computeProtectionTargets(withPresident, player, { eliminateAtLocationId: null });
+    const targets = computeProtectionTargets(withPresident, player, true);
     expect(targets.locationIds).toEqual([]);
   });
 });

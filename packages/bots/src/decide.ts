@@ -6,6 +6,7 @@ import {
   getAbilities,
   getAbilityEffects,
   getAllowedLocationTypes,
+  getFaction,
   getPassive,
   isLegalEliminationTargetFiltered,
   knownFaction,
@@ -23,9 +24,11 @@ import type {
   BoardLayout,
   CardData,
   EffectNode,
+  Faction,
   FilteredCardInstance,
   FilteredGameState,
   LocationInstance,
+  LocationType,
   MotorcadeInterceptionWindowFrame,
   PlayerId,
   ProtectedTargetingWindowFrame,
@@ -43,6 +46,7 @@ import {
   stagingLocationId,
   stepToward,
 } from "./leaderObjective";
+import { isEscortedLocation, leaderNeedsEscort } from "./survivalObjective";
 import type { Rng } from "./random";
 import { coinFlip, pickN, pickRandom } from "./random";
 
@@ -116,6 +120,82 @@ function effectivePresidentObjective(
   const presidentAtObjectiveLocation =
     state.president.status === "alive" && state.president.locationId === locationObjective.eliminateAtLocationId;
   return presidentAtObjectiveLocation ? "eliminate" : "protect";
+}
+
+// Head of Security's whole kit (a location-unrestricted "activate any
+// Regime non-leader card" plus a reactive local eliminate) is idiosyncratic
+// enough — wanting the game to end quickly via the President surviving,
+// specifically preferring to remote-activate eliminate/reveal-blended
+// abilities — that it isn't derivable from win-condition data the same way
+// PresidentObjective/LeaderLocationObjective are. Identified by defRef,
+// like leaderLocationObjectiveFor's own board lookup is identified by
+// leader name, just with no generic predicate to key off here.
+function computeHeadOfSecurityMode(state: FilteredGameState, playerId: PlayerId): boolean {
+  const leader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+  return leader?.defRef === "Head of Security";
+}
+
+// Whether this player's own leader needs an escort to survive (Protected
+// + a `survives` win condition — see survivalObjective.ts), and that
+// leader's own faction (needed to know which of this player's other cards
+// would actually count as an escort). Recomputed fresh per decision, same
+// as computeObjective/computeLocationObjective — cheap, and simpler than
+// threading a leader-identity object through every call site that only
+// needs one or two of these functions.
+function computeEscortNeed(
+  state: FilteredGameState,
+  cardData: CardData,
+  playerId: PlayerId,
+): { needsEscort: boolean; faction: Faction | undefined } {
+  const leader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+  if (!leader || leader.defRef === null) return { needsEscort: false, faction: undefined };
+  return {
+    needsEscort: leaderNeedsEscort(cardData, winConditions, leader.defRef),
+    faction: getFaction(cardData, asCardInstance(leader)!),
+  };
+}
+
+// Two independent triggers for Head of Security to stop sitting in hand,
+// mirroring shouldDeployLocationLeaderNow's own shape but for a leader
+// with no target location at all — he can be played anytime, but
+// `survives` is checked as `zone === "inPlay"` at game end, so he must be
+// in play before the game can end: once the deck is getting low (the
+// same forced-empty-deck unpredictability Wife's own trigger guards
+// against) or the President's gotten far enough along that the game
+// could plausibly end soon, waiting any longer risks him still being in
+// hand when it does.
+const HOS_DECK_LOW_THRESHOLD = 8;
+const HOS_DEPLOY_POSITION_INDEX = 2; // 0-indexed — "the President reaches 3" (1-indexed)
+
+function shouldDeployHeadOfSecurityNow(state: FilteredGameState): boolean {
+  const deckSize = state.cards.filter((c) => c.zone === "deck").length;
+  if (deckSize <= HOS_DECK_LOW_THRESHOLD) return true;
+  if (state.president.status !== "alive" || !state.president.locationId) return false;
+  const index = state.board.findIndex((l) => l.id === state.president.locationId);
+  return index >= HOS_DEPLOY_POSITION_INDEX;
+}
+
+// Where to deploy a leader that needs an escort (see survivalObjective.ts)
+// — prefer a legal location this player already has an escort at, falling
+// back to any legal location when none exists (never fully bricks a
+// forced play: the stuck-leader rule and Head of Security's own deploy
+// trigger both need to deploy regardless). A no-op — plain random among
+// legal locations — for a leader that doesn't need one.
+function chooseLeaderDeployLocation(
+  state: FilteredGameState,
+  cardData: CardData,
+  playerId: PlayerId,
+  needsEscort: boolean,
+  leaderFaction: Faction | undefined,
+  allowedTypes: readonly LocationType[],
+  rng: Rng,
+): LocationInstance | undefined {
+  const legal = state.board.filter((l) => allowedTypes.includes(l.type));
+  if (needsEscort && leaderFaction) {
+    const escorted = legal.filter((l) => isEscortedLocation(state, cardData, playerId, leaderFaction, l.id));
+    if (escorted.length > 0) return pickRandom(rng, escorted);
+  }
+  return pickRandom(rng, legal);
 }
 
 function abilityTargetsPresident(def: AbilityDefinition): boolean {
@@ -482,10 +562,8 @@ function decideTurnAction(
     if (state.turn.actionsRemaining > 0) {
       const instance = asCardInstance(stuckLeader)!;
       const allowedTypes = getAllowedLocationTypes(cardData, instance);
-      const location = pickRandom(
-        rng,
-        state.board.filter((l) => allowedTypes.includes(l.type)),
-      );
+      const { needsEscort, faction: leaderFaction } = computeEscortNeed(state, cardData, playerId);
+      const location = chooseLeaderDeployLocation(state, cardData, playerId, needsEscort, leaderFaction, allowedTypes, rng);
       if (location) return { type: "playCard", cardId: stuckLeader.id, locationId: location.id };
     }
     // Out of actions (or, in a scenario the real card data shouldn't ever
@@ -532,18 +610,27 @@ function decideTurnAction(
   // here.
   const canSpendNormal = state.turn.actionsRemaining > 0;
 
-  // "Protect the President/Wife: when you have a Regime card, play it
-  // (routed to wherever protection is needed — see
+  // "Protect the President/Wife/yourself: when you have a same-faction
+  // card, play it (routed to wherever protection is needed — see
   // decidePlayCardOrMotorcade); when you don't, drawing can make sense" —
-  // only for a leader whose win condition actually depends on this
-  // (locationObjective set); other leaders keep the plain coinflip chain
-  // below untouched. Skipped once there's nothing left to protect.
+  // three independent reasons this can apply: Wife's own location-gated
+  // protection need, this leader needing an escort to survive itself
+  // (see survivalObjective.ts), or this leader's own win condition
+  // wanting the President protected (Head of Security's "protect"
+  // objective). Every other leader keeps the plain coinflip chain below
+  // untouched. Skipped once there's nothing left to protect, or this
+  // leader's own faction isn't known (still in hand with no identity to
+  // match against — not reachable in practice, but keeps this safe).
+  const { needsEscort, faction: leaderFaction } = computeEscortNeed(state, cardData, playerId);
+  const locationProtectionNeeded =
+    locationObjective.eliminateAtLocationId !== null &&
+    computeProtectionTargets(state, playerId, true).locationIds.length > 0;
   if (
-    locationObjective.eliminateAtLocationId &&
+    (locationProtectionNeeded || needsEscort || objective === "protect") &&
     canSpendNormal &&
     deckHasCards(state) &&
-    computeProtectionTargets(state, playerId, locationObjective).locationIds.length > 0 &&
-    !state.cards.some((c) => c.zone === "hand" && c.controller === playerId && knownFaction(cardData, c) === "Regime")
+    leaderFaction !== undefined &&
+    !state.cards.some((c) => c.zone === "hand" && c.controller === playerId && knownFaction(cardData, c) === leaderFaction)
   ) {
     return { type: "draw" };
   }
@@ -583,6 +670,8 @@ function decidePlayCardOrMotorcade(
       isHandCardPlayable(state, playerId, c) &&
       canAffordPlayingHandCard(state, cardData, c),
   );
+  const { needsEscort, faction: leaderFaction } = computeEscortNeed(state, cardData, playerId);
+  const isHeadOfSecurity = computeHeadOfSecurityMode(state, playerId);
 
   // Deploy a location-gated leader (Wife) straight to her win location
   // once the deploy window is open — see shouldDeployLocationLeaderNow.
@@ -596,14 +685,58 @@ function decidePlayCardOrMotorcade(
     }
   }
 
+  // Head of Security "can be played anytime... but needs to be in play
+  // before the game ends" — deploy once his own trigger fires, same
+  // priority reasoning as Wife's above, just with no fixed target
+  // location: prefer an escorted one (see chooseLeaderDeployLocation),
+  // falling back to any legal spot since getting into play at all is
+  // what actually matters here.
+  if (isHeadOfSecurity && shouldDeployHeadOfSecurityNow(state)) {
+    const ownLeader = hand.find((c) => c.kind === "leader");
+    if (ownLeader) {
+      const instance = asCardInstance(ownLeader)!;
+      const allowedTypes = getAllowedLocationTypes(cardData, instance);
+      const location = chooseLeaderDeployLocation(state, cardData, playerId, needsEscort, leaderFaction, allowedTypes, rng);
+      if (location) return { type: "playCard", cardId: ownLeader.id, locationId: location.id };
+    }
+  }
+
+  // Head of Security wants the President through quickly — the game
+  // ending via "survived" locks in his win, and every turn spent
+  // otherwise is a turn something could still go wrong. Once he's
+  // actually deployed (per the ordering above — rushing before that
+  // risks the game ending with his own leader still stuck in hand,
+  // failing his own `survives` requirement), prefer a Motorcade card
+  // over anything else in hand; the existing motorcade-handling logic
+  // below is untouched, this only changes which card gets picked.
+  const isHeadOfSecurityRushing =
+    isHeadOfSecurity && state.cards.some((c) => c.kind === "leader" && c.controller === playerId && c.zone === "inPlay");
+
+  // A leader needing an escort (see survivalObjective.ts) shouldn't be
+  // opportunistically deployed into an unescorted spot just because it
+  // happened to be the random pick below — excluded here rather than
+  // filtered out of `hand` entirely, since the two priority branches
+  // above (which both know how to fall back to an unescorted location
+  // when actually forced to deploy) still need to see it.
+  const playableHand = hand.filter((c) => {
+    if (c.kind !== "leader" || !needsEscort || !leaderFaction) return true;
+    const instance = asCardInstance(c);
+    if (!instance) return true;
+    const allowedTypes = getAllowedLocationTypes(cardData, instance);
+    return state.board.some(
+      (l) => allowedTypes.includes(l.type) && isEscortedLocation(state, cardData, playerId, leaderFaction, l.id),
+    );
+  });
+
   // Otherwise prefer a hand card that currently has somewhere purposeful
-  // to go — protection coverage for a Regime card, or Palace-stacking
+  // to go — protection coverage for a same-faction card, Palace-stacking
   // redundancy for an eliminate-capable card once the deploy window is
-  // open — over a blind random pick. See desiredCardLocations.
-  const purposefulPlays = hand
+  // open, or a mob heading for the Palace — over a blind random pick. See
+  // desiredCardLocations.
+  const purposefulPlays = playableHand
     .filter((c) => c.kind !== "motorcade")
     .map((card) => {
-      const desired = desiredCardLocations(state, playerId, cardData, card, locationObjective);
+      const desired = desiredCardLocations(state, playerId, cardData, card, locationObjective, needsEscort, leaderFaction, computeObjective(state, playerId));
       const location = playableTargetLocation(cardData, state.board, card, desired);
       return location ? { card, location } : undefined;
     })
@@ -613,7 +746,8 @@ function decidePlayCardOrMotorcade(
     return { type: "playCard", cardId: chosen.card.id, locationId: chosen.location.id };
   }
 
-  const card = pickRandom(rng, hand);
+  const rushCard = isHeadOfSecurityRushing ? playableHand.find((c) => c.kind === "motorcade") : undefined;
+  const card = rushCard ?? pickRandom(rng, playableHand);
   if (!card) return { type: "endTurn" };
 
   if (card.kind === "motorcade") {
@@ -624,6 +758,17 @@ function decidePlayCardOrMotorcade(
       return { type: "playMotorcade", cardId: card.id, moveOwnCardId: moving.id, moveToLocationId: location.id };
     }
     return { type: "playMotorcade", cardId: card.id };
+  }
+
+  // If this is a needs-escort leader (reached only via the branches
+  // above finding no purposeful/priority play — i.e. it's not urgent
+  // enough yet to force), route it the same way chooseLeaderDeployLocation
+  // does rather than a blind board-wide random pick.
+  if (card.kind === "leader" && needsEscort) {
+    const instance = asCardInstance(card)!;
+    const allowedTypes = getAllowedLocationTypes(cardData, instance);
+    const location = chooseLeaderDeployLocation(state, cardData, playerId, needsEscort, leaderFaction, allowedTypes, rng);
+    if (location) return { type: "playCard", cardId: card.id, locationId: location.id };
   }
 
   // If only a restricted grant with a forced location (Commander
@@ -659,59 +804,80 @@ function playableTargetLocation(
   return undefined;
 }
 
-// Where `card` should currently be routed, in priority order: the win
-// location (and its staging spot as a fallback), unconditionally, for a
-// Motorcade interceptor; then the win location itself, for an
-// eliminate-capable card once the deploy window is open (Palace-stacking
-// redundancy — the win condition doesn't require this player's own
-// leader to land the kill, see WinPredicate's presidentEliminatedAt);
-// then wherever Regime protection is currently needed (see
-// computeProtectionTargets). A non-interceptor, non-Regime,
-// non-eliminate-capable card gets an empty list and falls through to the
-// existing random placement, unchanged from before this feature.
+// Where `card` should currently be routed. Two independent groups of
+// clauses, each a no-op unless its own gating condition applies to this
+// player's own leader, so any mix of leaders' needs combines safely:
+//
+// Wife-style, gated on locationObjective.eliminateAtLocationId (currently
+// only Wife has one): the win location (and its staging spot as a
+// fallback), unconditionally, for a Motorcade interceptor; then the win
+// location itself, for an eliminate-capable card once the deploy window
+// is open (Palace-stacking redundancy — the win condition doesn't
+// require this player's own leader to land the kill).
+//
+// General, gated on this player's own leader needing an escort to
+// survive (survivalObjective.ts) or wanting the President protected
+// (PresidentObjective "protect", e.g. Head of Security): a same-faction
+// card gets routed to wherever this leader itself is (self-escort) and/or
+// the President's current/predicted-next location (see
+// computeProtectionTargets).
+//
+// A card matching none of the above gets an empty list and falls through
+// to the existing random placement, unchanged from before this feature.
 function desiredCardLocations(
   state: FilteredGameState,
   playerId: PlayerId,
   cardData: CardData,
   card: FilteredCardInstance,
   locationObjective: LeaderLocationObjective,
+  needsEscort: boolean,
+  leaderFaction: Faction | undefined,
+  objective: PresidentObjective,
 ): readonly string[] {
-  // Gated on locationObjective.eliminateAtLocationId throughout, not just
-  // for the stacking clause below — this whole routing behavior is scoped
-  // to this player controlling a location-gated leader (currently: Wife).
-  // Every other leader's bot keeps the fully random play/move behavior
-  // this feature started from.
-  if (!locationObjective.eliminateAtLocationId) return [];
-
   const ids: string[] = [];
 
-  // Motorcade interceptors ("mobs" — Throng of Admirers / Angry Mob) are
-  // the actual defense against the President just sailing past the win
-  // location once he arrives (see decideInterceptAction's own comment) —
-  // get one positioned early, well before the deploy window below opens,
-  // since holding the line is anticipatory, not last-minute. Neither
-  // card's own allowed location types include the win location itself
-  // (it's "Secure"; they're "Public"/"Street" only), so this lists the
-  // win location first and the staging spot right before it second:
-  // playableTargetLocation's first-legal-match scan naturally falls
-  // through to staging for an initial hand play (the win location fails
-  // its own type check), while stepToward's nearest-of-all-desired scan
-  // naturally walks an already-staged mob the rest of the way in, since
-  // "already there" drops out of its own candidate set.
-  if (cardHasMotorcadeInterceptionPassive(card)) {
-    ids.push(locationObjective.eliminateAtLocationId);
-    const staging = stagingLocationId(state.board, locationObjective.eliminateAtLocationId);
-    if (staging) ids.push(staging);
-  }
+  if (locationObjective.eliminateAtLocationId) {
+    // Motorcade interceptors ("mobs" — Throng of Admirers / Angry Mob) are
+    // the actual defense against the President just sailing past the win
+    // location once he arrives (see decideInterceptAction's own comment) —
+    // get one positioned early, well before the deploy window below
+    // opens, since holding the line is anticipatory, not last-minute.
+    // Neither card's own allowed location types include the win location
+    // itself (it's "Secure"; they're "Public"/"Street" only), so this
+    // lists the win location first and the staging spot right before it
+    // second: playableTargetLocation's first-legal-match scan naturally
+    // falls through to staging for an initial hand play (the win location
+    // fails its own type check), while stepToward's nearest-of-all-desired
+    // scan naturally walks an already-staged mob the rest of the way in,
+    // since "already there" drops out of its own candidate set.
+    if (cardHasMotorcadeInterceptionPassive(card)) {
+      ids.push(locationObjective.eliminateAtLocationId);
+      const staging = stagingLocationId(state.board, locationObjective.eliminateAtLocationId);
+      if (staging) ids.push(staging);
+    }
 
-  if (shouldDeployLocationLeaderNow(state, locationObjective) && cardHasAnyEliminateAbility(cardData, card)) {
-    if (!ids.includes(locationObjective.eliminateAtLocationId)) ids.push(locationObjective.eliminateAtLocationId);
-  }
-  if (knownFaction(cardData, card) === "Regime") {
-    for (const id of computeProtectionTargets(state, playerId, locationObjective).locationIds) {
-      if (!ids.includes(id)) ids.push(id);
+    if (shouldDeployLocationLeaderNow(state, locationObjective) && cardHasAnyEliminateAbility(cardData, card)) {
+      if (!ids.includes(locationObjective.eliminateAtLocationId)) ids.push(locationObjective.eliminateAtLocationId);
+    }
+    if (knownFaction(cardData, card) === "Regime") {
+      for (const id of computeProtectionTargets(state, playerId, true).locationIds) {
+        if (!ids.includes(id)) ids.push(id);
+      }
     }
   }
+
+  if (leaderFaction && knownFaction(cardData, card) === leaderFaction) {
+    if (needsEscort) {
+      const leaderCard = state.cards.find((c) => c.zone === "inPlay" && c.controller === playerId && c.kind === "leader");
+      if (leaderCard?.locationId && !ids.includes(leaderCard.locationId)) ids.push(leaderCard.locationId);
+    }
+    if (objective === "protect") {
+      for (const id of computeProtectionTargets(state, playerId, false).locationIds) {
+        if (!ids.includes(id)) ids.push(id);
+      }
+    }
+  }
+
   return ids;
 }
 
@@ -749,13 +915,16 @@ function decideMoveCard(
   );
   if (movable.length === 0) return { type: "endTurn" };
 
+  const { needsEscort, faction: leaderFaction } = computeEscortNeed(state, cardData, playerId);
+  const objective = computeObjective(state, playerId);
+
   // Prefer stepping a card toward wherever it's currently needed
-  // (protection coverage, or Palace-stacking once the deploy window is
-  // open) over a blind random adjacent move — same desiredCardLocations
-  // priority as the play side above.
+  // (protection coverage, self-escort, or Palace-stacking once the
+  // deploy window is open) over a blind random adjacent move — same
+  // desiredCardLocations priority as the play side above.
   const purposefulMoves = movable
     .map((card) => {
-      const desired = desiredCardLocations(state, playerId, cardData, card, locationObjective);
+      const desired = desiredCardLocations(state, playerId, cardData, card, locationObjective, needsEscort, leaderFaction, objective);
       const toLocationId = desired.length > 0 ? stepToward(state.board, card.locationId!, desired) : undefined;
       return toLocationId ? { card, toLocationId } : undefined;
     })
@@ -765,10 +934,28 @@ function decideMoveCard(
     return { type: "moveCard", cardId: chosen.card.id, toLocationId: chosen.toLocationId };
   }
 
-  const card = pickRandom(rng, movable);
-  if (!card?.locationId) return { type: "endTurn" };
-  const toLocationId = pickRandom(rng, adjacentLocationIds(state.board, card.locationId))!;
-  return { type: "moveCard", cardId: card.id, toLocationId };
+  // A leader needing an escort should never voluntarily move somewhere
+  // unescorted — restrict its own candidate destinations to escorted
+  // ones, and drop it from consideration entirely when none exist among
+  // its adjacent locations. Unlike deploying (where the stuck-leader rule
+  // can force an unescorted play), staying exactly where it is remains a
+  // perfectly safe option here, so there's no need to ever fall back.
+  const safeMovable = movable
+    .map((card) => {
+      if (card.kind !== "leader" || !needsEscort || !leaderFaction) {
+        return { card, destinations: adjacentLocationIds(state.board, card.locationId!) };
+      }
+      const escorted = adjacentLocationIds(state.board, card.locationId!).filter((id) =>
+        isEscortedLocation(state, cardData, playerId, leaderFaction, id),
+      );
+      return escorted.length > 0 ? { card, destinations: escorted } : undefined;
+    })
+    .filter((m): m is { card: FilteredCardInstance; destinations: string[] } => m !== undefined);
+  if (safeMovable.length === 0) return { type: "endTurn" };
+
+  const chosen = pickRandom(rng, safeMovable)!;
+  const toLocationId = pickRandom(rng, chosen.destinations)!;
+  return { type: "moveCard", cardId: chosen.card.id, toLocationId };
 }
 
 function decideActivateAbility(
@@ -827,7 +1014,7 @@ function decideChooseTargets(
     case "activateRemote":
       return decideActivateRemoteTargets(state, playerId, cardData, sourceCard, effect, rng);
     case "move":
-      return decideMoveEffectTargets(state, rng);
+      return decideMoveEffectTargets(state, playerId, rng);
     case "triggerAlarm":
       return decideTriggerAlarmTargets(effect, state, rng);
     case "gainControl":
@@ -973,9 +1160,21 @@ function decideActivateRemoteTargets(
   const pool = candidateInPlayCards(state, cardData, effect.target, sourceCard).filter(
     (c) => c.defRef !== null && cardHasUsableActivateAbility(state, cardData, c, playerId),
   );
-  const chosenCard = pickRandom(rng, pool);
-  if (!chosenCard) return { type: "chooseTargets", targetIds: [] }; // "no more" for an unbounded queue, or just fails/retries
+  if (pool.length === 0) return { type: "chooseTargets", targetIds: [] };
 
+  // Head of Security's whole kit is built around this ability ("eliminate
+  // blended cards and threats") — prefer a candidate+ability that can
+  // actually do one of those over the plain random pick every other
+  // remote-activator (Guerrilla Commander, Puppet-Master) still gets
+  // below.
+  if (computeHeadOfSecurityMode(state, playerId)) {
+    const preferred = pickPreferredRemoteActivation(state, cardData, playerId, pool, rng);
+    if (preferred) {
+      return { type: "chooseTargets", targetIds: [preferred.card.id], remoteAbilityIndex: preferred.abilityIndex };
+    }
+  }
+
+  const chosenCard = pickRandom(rng, pool)!;
   const instance = asCardInstance(chosenCard)!;
   const activatable = getAbilities(cardData, instance)
     .map((ability, abilityIndex) => ({ ability, abilityIndex }))
@@ -991,9 +1190,57 @@ function decideActivateRemoteTargets(
   return { type: "chooseTargets", targetIds: [chosenCard.id], remoteAbilityIndex: chosenAbility.abilityIndex };
 }
 
-function decideMoveEffectTargets(state: FilteredGameState, rng: Rng): Action {
+// Across every candidate in `pool`, prefer an Activate ability that can
+// eliminate something over one that can merely reveal a blended card
+// (still useful — uncovers a hidden threat for later — but less directly
+// so), falling back to whatever's usable at all. Mirrors
+// decideActivateAbility's own eliminate-capable preference, just applied
+// across remote candidates instead of this player's own in-play cards.
+function pickPreferredRemoteActivation(
+  state: FilteredGameState,
+  cardData: CardData,
+  playerId: PlayerId,
+  pool: readonly FilteredCardInstance[],
+  rng: Rng,
+): { card: FilteredCardInstance; abilityIndex: number } | undefined {
+  const options: { card: FilteredCardInstance; abilityIndex: number; hasEliminate: boolean; hasRevealBlended: boolean }[] = [];
+  for (const card of pool) {
+    const instance = asCardInstance(card)!;
+    for (const [abilityIndex, ability] of getAbilities(cardData, instance).entries()) {
+      if (ability.type !== "Activate") continue;
+      if (state.turn.usedAbilities.includes(`${card.id}#${abilityIndex}`)) continue;
+      const def = getAbilityEffects(instance.defRef, abilityIndex);
+      if (!def) continue;
+      if (!abilityHasAvailableFirstTarget(state, cardData, card, def, playerId)) continue;
+      options.push({
+        card,
+        abilityIndex,
+        hasEliminate: abilityHasEliminateEffect(def),
+        hasRevealBlended: def.effects.some((e) => e.verb === "reveal"),
+      });
+    }
+  }
+  const eliminateOptions = options.filter((o) => o.hasEliminate);
+  if (eliminateOptions.length > 0) return pickRandom(rng, eliminateOptions);
+  const revealOptions = options.filter((o) => o.hasRevealBlended);
+  if (revealOptions.length > 0) return pickRandom(rng, revealOptions);
+  return pickRandom(rng, options);
+}
+
+function decideMoveEffectTargets(state: FilteredGameState, playerId: PlayerId, rng: Rng): Action {
   if (state.president.status !== "alive" || !state.president.locationId) {
     return { type: "chooseTargets", targetIds: [] };
+  }
+  // Head of Security wants the President through quickly (see
+  // decidePlayCardOrMotorcade's own comment) — this is the deciding
+  // player regardless of whether Traffic Cop is their own card or one
+  // they remotely activated (AbilityResolutionFrame.actingPlayerId is the
+  // original activator, not the card's controller), so this correctly
+  // covers both. Every other leader keeps today's plain random pick.
+  const currentIndex = state.board.findIndex((l) => l.id === state.president.locationId);
+  const forwardId = state.board[currentIndex + 1]?.id;
+  if (forwardId && computeHeadOfSecurityMode(state, playerId)) {
+    return { type: "chooseTargets", targetIds: [], locationIds: [forwardId] };
   }
   const adjacent = adjacentLocationIds(state.board, state.president.locationId);
   const chosen = pickRandom(rng, adjacent);
