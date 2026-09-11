@@ -66,7 +66,12 @@ export function decideBotAction(
   rng: Rng = Math.random,
 ): Action {
   const locationObjective = computeLocationObjective(state, playerId);
-  const objective = effectivePresidentObjective(state, computeObjective(state, playerId), locationObjective);
+  const objective = computeMasterAssassinEffectiveObjective(
+    state,
+    cardData,
+    playerId,
+    effectivePresidentObjective(state, computeObjective(state, playerId), locationObjective),
+  );
   const frame = state.resolutionStack[state.resolutionStack.length - 1];
   if (!frame) {
     return decideTurnAction(state, playerId, cardData, objective, locationObjective, rng);
@@ -120,6 +125,99 @@ function effectivePresidentObjective(
   const presidentAtObjectiveLocation =
     state.president.status === "alive" && state.president.locationId === locationObjective.eliminateAtLocationId;
   return presidentAtObjectiveLocation ? "eliminate" : "protect";
+}
+
+// Master Assassin's win condition needs the President eliminated
+// specifically *by a card he controls* (or, failing that, 2 leaders he
+// controls) — presidentObjectiveFor still reads this as a location-blind
+// "eliminate" (same collapse Wife's own predicate suffered from), which
+// would happily have his other cards snipe the President the moment
+// anyone gets a legal shot, even when Master Assassin himself isn't the
+// one taking it — attribution wouldn't go to him, and the game's only
+// shot at his first win branch is gone for good. Overridden to "protect"
+// (routes Regime cards to shield the President from *other* players —
+// see desiredCardLocations, and note this needs the President's own
+// Regime-for-rules faction, not Master Assassin's actual Rebel one) until
+// this player has an eliminate-capable card of their own already at his
+// location, ready to take the shot themselves.
+function computeMasterAssassinMode(state: FilteredGameState, playerId: PlayerId): boolean {
+  const leader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+  return leader?.defRef === "Master Assassin";
+}
+
+function computeMasterAssassinEffectiveObjective(
+  state: FilteredGameState,
+  cardData: CardData,
+  playerId: PlayerId,
+  objective: PresidentObjective,
+): PresidentObjective {
+  if (!computeMasterAssassinMode(state, playerId)) return objective;
+  if (state.president.status !== "alive" || !state.president.locationId) return objective;
+  return hasEliminateReadyCardAt(state, cardData, playerId, state.president.locationId) ? "eliminate" : "protect";
+}
+
+// Whether the CURRENT player's turn (this is only ever meaningful called
+// for whoever's own turn it actually is — decideActivateAbility is only
+// reached with no resolution frame active, i.e. playerId === state.turn.
+// currentPlayerId) is their last one before the game ends —
+// endgameTurnsRemaining decrements by 1 every time *any* player ends a
+// turn (reducer.ts's applyEndTurn), so with N players it only cycles back
+// to any one of them every N decrements. If what's left now wouldn't
+// survive N-1 other players' turns plus this player's own, the game ends
+// before it ever comes back around to them.
+function isFinalTurnForCurrentPlayer(state: FilteredGameState): boolean {
+  const remaining = state.turn.endgameTurnsRemaining;
+  if (remaining === null) return false;
+  return remaining <= state.players.length;
+}
+
+// The first board location (in board order — no particular significance
+// beyond determinism) with an opposing, currently-hidden (Blend,
+// face-down) card in play — Master Assassin's own hunting-for-other-
+// leaders heuristic (point 4/5 of his strategy) has no way to know which
+// hidden card is actually a leader without finding out, so "any hidden
+// opposing card at all" is the closest observable proxy.
+function findBlendRichLocation(state: FilteredGameState, playerId: PlayerId): LocationInstance | undefined {
+  return state.board.find((l) =>
+    state.cards.some((c) => c.zone === "inPlay" && c.locationId === l.id && c.faceUp === false && c.controller !== playerId),
+  );
+}
+
+// Whether Master Assassin's controller still actually needs the backup
+// win branch (2 leaders eliminated by cards they control) — false once
+// the President was eliminated by a card of their own (the first branch
+// is a permanent, already-satisfied fact — state.president.
+// eliminatedByPlayerId never changes after the fact — so hunting for
+// leaders is pure unnecessary risk against his own "survives"
+// requirement) or once they've already reached 2. Backs every piece of
+// his own "hunt other leaders" behavior (deploying/moving toward hidden
+// cards, preferring his own return-to-hand ability) — without this,
+// he'd keep restlessly relocating turn after turn with nothing left to
+// gain from it, purely adding exposure.
+function masterAssassinNeedsBackupLeaderKills(state: FilteredGameState, playerId: PlayerId): boolean {
+  if (state.president.status !== "eliminated") return false;
+  if (state.president.eliminatedByPlayerId === playerId) return false;
+  const leadersKilled = state.cards.filter(
+    (c) => c.kind === "leader" && c.zone === "eliminated" && c.eliminatedByPlayerId === playerId,
+  ).length;
+  return leadersKilled < 2;
+}
+
+// Point 5 of Master Assassin's own strategy ("pounce on an unprotected
+// President once he reaches [board position 4]") combined with point 4
+// ("once he's eliminated, hunt for other leaders among hidden cards") —
+// mutually exclusive on the President's status, so one function covers
+// both: whichever applies right now names where he should actually be.
+const MASTER_ASSASSIN_DEPLOY_POSITION_INDEX = 3; // 0-indexed — "position 4" (1-indexed)
+
+function findMasterAssassinDeployTarget(state: FilteredGameState, cardData: CardData, playerId: PlayerId): string | undefined {
+  if (state.president.status === "eliminated") {
+    return masterAssassinNeedsBackupLeaderKills(state, playerId) ? findBlendRichLocation(state, playerId)?.id : undefined;
+  }
+  if (state.president.status !== "alive" || !state.president.locationId) return undefined;
+  const index = state.board.findIndex((l) => l.id === state.president.locationId);
+  if (index < MASTER_ASSASSIN_DEPLOY_POSITION_INDEX) return undefined;
+  return presidentIsLegalTarget(state, cardData, playerId, false, true) ? state.president.locationId : undefined;
 }
 
 // Head of Security's whole kit (a location-unrestricted "activate any
@@ -593,10 +691,18 @@ function decideTurnAction(
       const { needsEscort, faction: leaderFaction } = computeEscortNeed(state, cardData, playerId);
       // stuckLeader only ever applies once the President is already
       // eliminated, so Commander General's own "play at HQ" preference
-      // (point 2 of his strategy) always applies here.
+      // (point 2 of his strategy) always applies here. Master Assassin's
+      // "hunt other leaders among hidden cards" preference (point 4) only
+      // applies while he still needs that backup win branch — see
+      // masterAssassinNeedsBackupLeaderKills's own comment; once secured
+      // (or unreachable, having killed the President himself) he has
+      // nothing left to gain by seeking one out, so this correctly falls
+      // through to an ordinary escort/random pick instead.
       const preferredLocationId = computeCommanderGeneralMode(state, playerId)
         ? findLocationByName(state.board, "HQ")?.id
-        : undefined;
+        : computeMasterAssassinMode(state, playerId) && masterAssassinNeedsBackupLeaderKills(state, playerId)
+          ? findBlendRichLocation(state, playerId)?.id
+          : undefined;
       const location = chooseLeaderDeployLocation(
         state,
         cardData,
@@ -653,28 +759,28 @@ function decideTurnAction(
   // here.
   const canSpendNormal = state.turn.actionsRemaining > 0;
 
-  // "Protect the President/Wife/yourself: when you have a same-faction
-  // card, play it (routed to wherever protection is needed — see
+  // "Protect the President/Wife/yourself: when you have a useful card,
+  // play it (routed to wherever protection is needed — see
   // decidePlayCardOrMotorcade); when you don't, drawing can make sense" —
-  // three independent reasons this can apply: Wife's own location-gated
-  // protection need, this leader needing an escort to survive itself
-  // (see survivalObjective.ts), or this leader's own win condition
-  // wanting the President protected (Head of Security's "protect"
-  // objective). Every other leader keeps the plain coinflip chain below
-  // untouched. Skipped once there's nothing left to protect, or this
-  // leader's own faction isn't known (still in hand with no identity to
-  // match against — not reachable in practice, but keeps this safe).
+  // two independently-gated reasons, each wanting a *different* faction
+  // in hand: protecting the President (Wife's own location-gated need, or
+  // this leader's own win condition wanting him alive — Head of
+  // Security's "protect" objective, or Master Assassin's while he isn't
+  // ready to strike himself) always needs a Regime card specifically —
+  // he counts as Regime for protection purposes regardless of who's doing
+  // the protecting (same fix as desiredCardLocations's own protect
+  // clause) — while self-escort (survivalObjective.ts) needs a card
+  // matching *this leader's own* faction instead. Every other leader
+  // keeps the plain coinflip chain below untouched.
   const { needsEscort, faction: leaderFaction } = computeEscortNeed(state, cardData, playerId);
   const locationProtectionNeeded =
     locationObjective.eliminateAtLocationId !== null &&
     computeProtectionTargets(state, playerId, true).locationIds.length > 0;
-  if (
-    (locationProtectionNeeded || needsEscort || objective === "protect") &&
-    canSpendNormal &&
-    deckHasCards(state) &&
-    leaderFaction !== undefined &&
-    !state.cards.some((c) => c.zone === "hand" && c.controller === playerId && knownFaction(cardData, c) === leaderFaction)
-  ) {
+  const hasHandCardOfFaction = (faction: Faction): boolean =>
+    state.cards.some((c) => c.zone === "hand" && c.controller === playerId && knownFaction(cardData, c) === faction);
+  const wantsRegimeCard = (locationProtectionNeeded || objective === "protect") && !hasHandCardOfFaction("Regime");
+  const wantsOwnFactionCard = needsEscort && leaderFaction !== undefined && !hasHandCardOfFaction(leaderFaction);
+  if ((wantsRegimeCard || wantsOwnFactionCard) && canSpendNormal && deckHasCards(state)) {
     return { type: "draw" };
   }
 
@@ -755,6 +861,23 @@ function decidePlayCardOrMotorcade(
   const isHeadOfSecurityRushing =
     isHeadOfSecurity && state.cards.some((c) => c.kind === "leader" && c.controller === playerId && c.zone === "inPlay");
 
+  // Master Assassin "wants to stay in hand" until one of two specific
+  // windows opens — pounce directly on the President once he's vulnerable
+  // (point 5), or, once he's already eliminated, hunt for other leaders
+  // among hidden cards (point 4). Neither is a timing threshold he waits
+  // out passively like Wife's/Head of Security's own deploy triggers —
+  // both name an exact destination, so both are handled as one combined
+  // priority branch: deploy directly there the instant either applies.
+  const isMasterAssassin = computeMasterAssassinMode(state, playerId);
+  const masterAssassinTarget = isMasterAssassin ? findMasterAssassinDeployTarget(state, cardData, playerId) : undefined;
+  if (masterAssassinTarget) {
+    const ownLeader = hand.find((c) => c.kind === "leader");
+    if (ownLeader) {
+      const target = playableTargetLocation(cardData, state.board, ownLeader, [masterAssassinTarget]);
+      if (target) return { type: "playCard", cardId: ownLeader.id, locationId: target.id };
+    }
+  }
+
   // A leader whose win condition just wants the President dead somewhere
   // (not a specific location like Wife's) shouldn't blindly play a
   // Motorcade card either — that's a step closer to him running off the
@@ -765,16 +888,36 @@ function decidePlayCardOrMotorcade(
   const objective = computeObjective(state, playerId);
   const isGenericEliminator = !locationObjective.eliminateAtLocationId && objective === "eliminate";
 
+  // Wife's own relationship with Motorcade cards is the opposite of the
+  // above, not a variant of it: she actively *wants* the President to
+  // advance (he has to reach the Palace at all before her win condition
+  // can even apply), and someone else eliminating him anywhere else
+  // first is what loses her the game — there's no "trap" concept for her
+  // to wait on. What she does need to avoid is being the one who pushes
+  // him forward while exposed, since advancing an unprotected President
+  // just delivers him to whoever's waiting at the next stop instead of
+  // her. So she plays Motorcades early and freely, but only while he's
+  // currently protected at his own location (see isPresidentCurrentlyProtected).
+  const isWife = locationObjective.eliminateAtLocationId !== null;
+
   // A leader needing an escort (see survivalObjective.ts) shouldn't be
   // opportunistically deployed into an unescorted spot just because it
   // happened to be the random pick below — excluded here rather than
   // filtered out of `hand` entirely, since the two priority branches
   // above (which both know how to fall back to an unescorted location
-  // when actually forced to deploy) still need to see it.
+  // when actually forced to deploy) still need to see it. Master
+  // Assassin gets the same treatment for a different reason: no escort
+  // need of his own (Blend, not Protected), but he'd rather stay hidden
+  // in hand than commit to some arbitrary spot outside his own two
+  // windows above — reached this filter, neither currently applies.
   const playableHand = hand.filter((c) => {
     if (c.kind === "motorcade" && isGenericEliminator && !shouldPlayMotorcadeForElimination(state, cardData, playerId)) {
       return false;
     }
+    if (c.kind === "motorcade" && isWife && !isPresidentCurrentlyProtected(state, cardData, playerId)) {
+      return false;
+    }
+    if (c.kind === "leader" && isMasterAssassin) return false;
     if (c.kind !== "leader" || !needsEscort || !leaderFaction) return true;
     const instance = asCardInstance(c);
     if (!instance) return true;
@@ -937,31 +1080,45 @@ function desiredCardLocations(
     }
   }
 
-  if (leaderFaction && knownFaction(cardData, card) === leaderFaction) {
-    if (needsEscort) {
-      const leaderCard = state.cards.find((c) => c.zone === "inPlay" && c.controller === playerId && c.kind === "leader");
-      if (leaderCard?.locationId && !ids.includes(leaderCard.locationId)) ids.push(leaderCard.locationId);
-    }
-    if (objective === "protect") {
-      for (const id of computeProtectionTargets(state, playerId, false).locationIds) {
-        if (!ids.includes(id)) ids.push(id);
-      }
+  // Self-escort: matches the LEADER's own faction (a same-faction card is
+  // what shields the leader specifically).
+  if (leaderFaction && needsEscort && knownFaction(cardData, card) === leaderFaction) {
+    const leaderCard = state.cards.find((c) => c.zone === "inPlay" && c.controller === playerId && c.kind === "leader");
+    if (leaderCard?.locationId && !ids.includes(leaderCard.locationId)) ids.push(leaderCard.locationId);
+  }
+
+  // Protect the President: independent of the leader's own faction — the
+  // President always counts as Regime for protection purposes (card_data
+  // .json's additional_rulings; see presidentIsLegalTarget's own hardcoded
+  // "Regime" check), so a Rebel leader wanting him shielded (Master
+  // Assassin, while he isn't ready to take the shot himself — see
+  // computeMasterAssassinEffectiveObjective) still needs Regime cards
+  // specifically, not cards matching their own faction. Head of
+  // Security's own faction happens to already be Regime, so this reads
+  // as a no-op change for him.
+  if (objective === "protect" && knownFaction(cardData, card) === "Regime") {
+    for (const id of computeProtectionTargets(state, playerId, false).locationIds) {
+      if (!ids.includes(id)) ids.push(id);
     }
   }
 
-  // Commander General's point 1: a Regime card with an eliminate-capable
-  // ability gets routed to the President's current or predicted-next
-  // location — the same computeProtectionTargets query Head of Security
-  // uses to keep him alive, repurposed here for the opposite goal (a
-  // waiting trap, not an escort), since Commander General actively wants
-  // him dead rather than merely surviving.
-  if (
-    computeCommanderGeneralMode(state, playerId) &&
-    knownFaction(cardData, card) === "Regime" &&
-    cardHasAnyEliminateAbility(cardData, card)
-  ) {
-    for (const id of computeProtectionTargets(state, playerId, false).locationIds) {
-      if (!ids.includes(id)) ids.push(id);
+  // A generic "eliminate the President" leader routes an eliminate-
+  // capable card of their own toward his current or predicted-next
+  // location — the same computeProtectionTargets query used to protect
+  // him above, repurposed as a waiting trap instead of an escort.
+  // Commander General restricts this to his own Regime cards (matches
+  // his flavor and his separate Rebel-preference on the target side);
+  // Master Assassin's win condition only cares who *controls* the
+  // eliminating card, not its faction, so no such restriction applies to
+  // him.
+  const isCommanderGeneral = computeCommanderGeneralMode(state, playerId);
+  const isMasterAssassin = computeMasterAssassinMode(state, playerId);
+  if ((isCommanderGeneral || isMasterAssassin) && cardHasAnyEliminateAbility(cardData, card)) {
+    const factionOk = isMasterAssassin || knownFaction(cardData, card) === "Regime";
+    if (factionOk) {
+      for (const id of computeProtectionTargets(state, playerId, false).locationIds) {
+        if (!ids.includes(id)) ids.push(id);
+      }
     }
   }
 
@@ -1005,7 +1162,10 @@ function decideMoveCard(
   const { needsEscort, faction: leaderFaction } = computeEscortNeed(state, cardData, playerId);
   const objective = computeObjective(state, playerId);
   const isCommanderGeneral = computeCommanderGeneralMode(state, playerId);
+  const isMasterAssassin = computeMasterAssassinMode(state, playerId);
   const hq = findLocationByName(state.board, "HQ");
+  const blendRichLocation =
+    isMasterAssassin && masterAssassinNeedsBackupLeaderKills(state, playerId) ? findBlendRichLocation(state, playerId) : undefined;
 
   // One pass per card computing both (a) which of its adjacent locations
   // are actually safe to move to — unrestricted, except a needs-escort
@@ -1033,6 +1193,9 @@ function decideMoveCard(
       let desired = desiredCardLocations(state, playerId, cardData, card, locationObjective, needsEscort, leaderFaction, objective);
       if (isOwnLeader && isCommanderGeneral && state.president.status === "eliminated" && hq) {
         desired = [...desired, hq.id];
+      }
+      if (isOwnLeader && blendRichLocation) {
+        desired = [...desired, blendRichLocation.id];
       }
       const toLocationId = desired.length > 0 ? stepToward(state.board, card.locationId!, desired) : undefined;
       const purposeful = toLocationId && destinations.includes(toLocationId) ? toLocationId : undefined;
@@ -1090,6 +1253,29 @@ function decideActivateAbility(
         const chosen = pickRandom(rng, ownAbilities)!;
         return { type: "activateAbility", cardId: chosen.card.id, abilityIndex: chosen.abilityIndex };
       }
+    }
+  }
+
+  // Master Assassin, once actually hunting other leaders — still needs
+  // the backup win branch (see masterAssassinNeedsBackupLeaderKills: the
+  // President's death wasn't his own doing, and he hasn't reached 2 leader
+  // kills yet) — prefers his own "return to hand and play" ability over
+  // anything else usable but unrelated: it's what lets him relocate
+  // toward a fresh blend-rich area (see findBlendRichLocation, threaded
+  // through decidePlayCardOrMotorcade's own deploy priority and
+  // decideMoveCard's routing) rather than sitting still. Without that
+  // gate he'd keep restlessly bouncing in and out of hand turn after
+  // turn even once his win is already secure (or unreachable via this
+  // branch) — pure unnecessary exposure against his own `survives`
+  // requirement, for nothing left to gain. Skipped on his own final
+  // turn too — see isFinalTurnForCurrentPlayer's own comment — since
+  // spending it there would just strand him back in hand with no further
+  // turn to redeploy on.
+  if (computeMasterAssassinMode(state, playerId) && masterAssassinNeedsBackupLeaderKills(state, playerId) && !isFinalTurnForCurrentPlayer(state)) {
+    const ownLeader = state.cards.find((c) => c.kind === "leader" && c.controller === playerId);
+    const returnAbility = usable.find(({ card, abilityIndex }) => card.id === ownLeader?.id && abilityIndex === 0);
+    if (returnAbility) {
+      return { type: "activateAbility", cardId: returnAbility.card.id, abilityIndex: returnAbility.abilityIndex };
     }
   }
 
@@ -1225,6 +1411,20 @@ function decideEliminateTargetIds(
     );
     if (rebelOrPresident.length >= minNeeded) {
       finalPool = rebelOrPresident;
+    }
+  }
+
+  // Master Assassin's backup win branch, once the President is gone and
+  // (per computeMasterAssassinEffectiveObjective) it clearly wasn't by a
+  // card of his — eliminate 2 leaders with cards he controls instead.
+  // The President himself is never in `finalPool` any more at this point
+  // (eliminateCandidatePool only ever includes him while still "alive"),
+  // so there's no equivalent swap-in concern to preserve here.
+  if (computeMasterAssassinMode(state, playerId) && state.president.status === "eliminated") {
+    const minNeeded = requiredMinCount(effect.target.count);
+    const leadersOnly = finalPool.filter((c) => c.kind === "leader");
+    if (leadersOnly.length >= minNeeded) {
+      finalPool = leadersOnly;
     }
   }
 
@@ -1442,6 +1642,18 @@ function shouldPlayMotorcadeForElimination(state: FilteredGameState, cardData: C
   const nextLocation = state.board[currentIndex + 1];
   if (!nextLocation) return false; // the last location — playing this would make him "survive"
   return hasEliminateReadyCardAt(state, cardData, playerId, nextLocation.id);
+}
+
+// Whether the President is currently shielded at his own location — the
+// same check isLegalEliminationTarget/findProtectorCards would make for
+// an actual elimination attempt against him right now (presidentIsLegal
+// Target with ignoreProtection:false), reused here for a completely
+// different purpose: Wife wants to know it's currently *safe* to advance
+// him via a Motorcade card, not whether he's a legal target for her own
+// ability (unrelated — hers requires ignoreProtected regardless).
+function isPresidentCurrentlyProtected(state: FilteredGameState, cardData: CardData, playerId: PlayerId): boolean {
+  if (state.president.status !== "alive" || !state.president.locationId) return false;
+  return !presidentIsLegalTarget(state, cardData, playerId, false, true);
 }
 
 function decideTriggerAlarmTargets(

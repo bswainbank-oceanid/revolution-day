@@ -1320,3 +1320,366 @@ describe("decideBotAction: Commander General's strategy", () => {
     expect(action).toMatchObject({ type: "activateAbility", cardId: commanderGeneral.id });
   });
 });
+
+describe("decideBotAction: Master Assassin's strategy", () => {
+  it("protects the President by routing a Regime card to his location when not ready to strike himself", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const presidentLoc = state.board[1]!.id; // "HQ" — legal ("Secure") for the Guard too
+    state = { ...state, president: { status: "alive", locationId: presidentLoc } };
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === guard.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player && c.id !== masterAssassin.id) return { ...c, zone: "discard" as const };
+        return c;
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: guard.id, locationId: presidentLoc });
+  });
+
+  it("routes an eliminate-capable card of any faction toward the President, not restricted to Regime", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const assassinCard = state.cards.find((c) => c.defRef === "Assassin")!; // Rebel, eliminate-capable
+    const presidentLoc = state.board[0]!.id; // "Street" — legal for the Assassin too
+    state = { ...state, president: { status: "alive", locationId: presidentLoc } };
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === assassinCard.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player && c.id !== masterAssassin.id) return { ...c, zone: "discard" as const };
+        // Neither Master Assassin nor the Assassin card is Regime, so with
+        // nothing Regime in hand the "draw to look for a protector"
+        // preference would otherwise fire first — empty the deck so it
+        // can't, regardless of what this game's random deal put in hand.
+        if (c.zone === "deck") return { ...c, zone: "discard" as const };
+        return c;
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: assassinCard.id, locationId: presidentLoc });
+  });
+
+  it("does not deploy to pounce on the President before he reaches board position 4", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    state = { ...state, president: { status: "alive", locationId: state.board[2]!.id } }; // position 3
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playCard", cardId: masterAssassin.id });
+  });
+
+  it("deploys directly onto the President once he's unprotected at board position 4", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const pounceLoc = state.board[3]!.id; // position 4
+    state = { ...state, president: { status: "alive", locationId: pounceLoc } };
+    // No Regime card in hand for a Rebel leader — see the previous test's
+    // own comment on why the deck needs to be empty here too.
+    state = { ...state, cards: state.cards.map((c) => (c.zone === "deck" ? { ...c, zone: "discard" as const } : c)) };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: masterAssassin.id, locationId: pounceLoc });
+  });
+
+  it("does not pounce on the President at position 4 when he's protected", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const pounceLoc = state.board[3]!.id;
+    const protector = state.cards.find((c) => c.defRef === "Republican Guard")!; // Regime, non-Protected
+    state = place(state, protector.id, pounceLoc, other);
+    state = { ...state, president: { status: "alive", locationId: pounceLoc } };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playCard", cardId: masterAssassin.id, locationId: pounceLoc });
+  });
+
+  it("deploys to a blend-rich location once the President is eliminated", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const hiddenLoc = state.board[2]!.id;
+    const hiddenCard = state.cards.find((c) => c.defRef === "Secret Police")!; // Regime, Blend
+    state = place(state, hiddenCard.id, hiddenLoc, other, false);
+    state = {
+      ...state,
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: state.board[0]!.id, eliminatedByPlayerId: other },
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", actionsRemaining: 2 } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playCard", cardId: masterAssassin.id, locationId: hiddenLoc });
+  });
+
+  it("moves toward a blend-rich location once the President is eliminated", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const startLoc = state.board[0]!.id;
+    const hiddenLoc = state.board[1]!.id;
+    const hiddenCard = state.cards.find((c) => c.defRef === "Secret Police")!;
+    state = place(state, masterAssassin.id, startLoc, player);
+    state = place(state, hiddenCard.id, hiddenLoc, other, false);
+    state = {
+      ...state,
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: state.board[3]!.id, eliminatedByPlayerId: other },
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", actionsRemaining: 2 } };
+    state = {
+      ...state,
+      cards: state.cards.map((c) =>
+        (c.zone === "hand" || c.zone === "deck") && (c.zone !== "hand" || c.controller === player)
+          ? { ...c, zone: "discard" as const }
+          : c,
+      ),
+    };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "moveCard", cardId: masterAssassin.id, toLocationId: hiddenLoc });
+  });
+
+  it("prefers returning to hand once hunting other leaders, when it isn't his final turn", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    state = place(state, masterAssassin.id, loc, player);
+    state = {
+      ...state,
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: state.board[3]!.id, eliminatedByPlayerId: other },
+    };
+    state = {
+      ...state,
+      turn: { ...state.turn, currentPlayerId: player, phase: "action", endgameTurnsRemaining: 20 }, // well above players.length (8) — not his final turn
+    };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, near1);
+    expect(action).toEqual({ type: "activateAbility", cardId: masterAssassin.id, abilityIndex: 0 });
+  });
+
+  it("does not force returning to hand on his own final turn, when something else is usable", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const angryMob = state.cards.find((c) => c.defRef === "Angry Mob")!; // unrelated but always-usable Activate ability
+    state = place(state, masterAssassin.id, loc, player);
+    state = place(state, angryMob.id, loc, player);
+    state = {
+      ...state,
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: state.board[3]!.id, eliminatedByPlayerId: other },
+    };
+    state = {
+      ...state,
+      turn: { ...state.turn, currentPlayerId: player, phase: "action", endgameTurnsRemaining: 8 }, // === players.length (8) — his final turn
+    };
+    const filtered = filterForPlayer(state, player);
+
+    // rng chosen to land on the *second* of the two usable (own leader,
+    // Angry Mob) options if the final-turn suppression is actually
+    // working — if it weren't, this would always come back as Master
+    // Assassin's own return-to-hand ability regardless.
+    const pickSecond: Rng = () => 0.9;
+    const action = decideBotAction(filtered, player, cardData, pickSecond);
+    expect(action).toEqual({ type: "activateAbility", cardId: angryMob.id, abilityIndex: 0 });
+  });
+
+  it("prefers eliminating another leader over a non-leader card once the President is eliminated", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const otherLeader = state.cards.find((c) => c.kind === "leader" && c.controller === other)!;
+    // Whichever faction otherLeader *isn't* — some leaders are Protected,
+    // and a same-faction non-Protected card at the same location would
+    // shield them, silently removing them from the candidate pool. Using
+    // the opposite faction for the non-leader decoy guarantees that can
+    // never happen, regardless of which leader "other" was actually dealt.
+    const otherLeaderFaction = cardData.leaders.find((l) => l.name === otherLeader.defRef)!.faction;
+    const decoyFaction = otherLeaderFaction === "Regime" ? "Rebel Soldier" : "Prominent Citizen";
+    const nonLeaderTarget = state.cards.find((c) => c.defRef === decoyFaction)!;
+    state = place(state, masterAssassin.id, loc, player);
+    state = place(state, otherLeader.id, loc, other);
+    state = place(state, nonLeaderTarget.id, loc, other);
+    state = {
+      ...state,
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: state.board[3]!.id, eliminatedByPlayerId: other },
+    };
+
+    const frame: AbilityResolutionFrame = {
+      kind: "abilityResolution",
+      sourceCardId: masterAssassin.id,
+      actingPlayerId: player,
+      abilityIndex: 1, // "Eliminate a target and blend"
+      locationId: loc,
+      targetIds: null,
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "chooseTargets", targetIds: [otherLeader.id] });
+  });
+
+  it("stops preferring the return-to-hand ability once he's already secured his backup win (2 leaders)", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const angryMob = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    const otherLeaders = state.cards.filter((c) => c.kind === "leader" && c.controller !== player).slice(0, 2);
+    state = {
+      ...state,
+      cards: state.cards.map((c) =>
+        otherLeaders.some((l) => l.id === c.id) ? { ...c, zone: "eliminated" as const, eliminatedByPlayerId: player } : c,
+      ),
+    };
+    state = place(state, masterAssassin.id, loc, player);
+    state = place(state, angryMob.id, loc, player);
+    state = {
+      ...state,
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: state.board[3]!.id, eliminatedByPlayerId: other },
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", endgameTurnsRemaining: 20 } }; // not his final turn
+    const filtered = filterForPlayer(state, player);
+
+    // rng chosen to land on the *second* of the two usable options — if
+    // the backup-win-secured gate weren't working, this would still come
+    // back as Master Assassin's own return-to-hand ability regardless.
+    const pickSecond: Rng = () => 0.9;
+    const action = decideBotAction(filtered, player, cardData, pickSecond);
+    expect(action).toEqual({ type: "activateAbility", cardId: angryMob.id, abilityIndex: 0 });
+  });
+
+  it("does not deploy toward blend-rich areas once he's already secured his backup win", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const hiddenLoc = state.board[2]!.id;
+    const hiddenCard = state.cards.find((c) => c.defRef === "Secret Police")!;
+    const otherLeaders = state.cards.filter((c) => c.kind === "leader" && c.controller !== player).slice(0, 2);
+    state = {
+      ...state,
+      cards: state.cards.map((c) =>
+        otherLeaders.some((l) => l.id === c.id) ? { ...c, zone: "eliminated" as const, eliminatedByPlayerId: player } : c,
+      ),
+    };
+    state = place(state, hiddenCard.id, hiddenLoc, other, false);
+    state = {
+      ...state,
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: state.board[0]!.id, eliminatedByPlayerId: other },
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", actionsRemaining: 2 } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playCard", cardId: masterAssassin.id, locationId: hiddenLoc });
+  });
+
+  it("does not hunt other leaders once he eliminated the President himself (first branch already satisfied)", () => {
+    let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    const masterAssassin = findByDefRef(state, "Master Assassin");
+    const player = masterAssassin.controller!;
+    const loc = state.board[0]!.id;
+    const angryMob = state.cards.find((c) => c.defRef === "Angry Mob")!;
+    state = place(state, masterAssassin.id, loc, player);
+    state = place(state, angryMob.id, loc, player);
+    state = {
+      ...state,
+      president: { status: "eliminated", locationId: null, eliminatedAtLocationId: state.board[3]!.id, eliminatedByPlayerId: player },
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action", endgameTurnsRemaining: 20 } };
+    const filtered = filterForPlayer(state, player);
+
+    const pickSecond: Rng = () => 0.9;
+    const action = decideBotAction(filtered, player, cardData, pickSecond);
+    expect(action).toEqual({ type: "activateAbility", cardId: angryMob.id, abilityIndex: 0 });
+  });
+});
+
+describe("decideBotAction: Wife's Motorcade discipline", () => {
+  it("plays a Motorcade card while the President is currently protected", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    const loc = state.board[0]!.id;
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    const protector = state.cards.find((c) => c.defRef === "Republican Guard")!; // Regime, non-Protected — shields him
+    state = place(state, protector.id, loc, other);
+    state = { ...state, president: { status: "alive", locationId: loc } };
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === motorcade.id) return { ...c, zone: "hand" as const, controller: player };
+        // Wife's own card, still in hand, would otherwise pick up its own
+        // purposeful "protect the President" routing here (she's Regime
+        // herself) and get played instead — discard it along with
+        // everything else, and empty the deck too so the resulting
+        // Regime-less hand doesn't trigger the unrelated draw preference.
+        if (c.zone === "hand" && c.controller === player) return { ...c, zone: "discard" as const };
+        if (c.zone === "deck") return { ...c, zone: "discard" as const };
+        return c;
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).toEqual({ type: "playMotorcade", cardId: motorcade.id });
+  });
+
+  it("does not play a Motorcade card while the President is currently unprotected", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const wife = findByDefRef(state, "Wife");
+    const player = wife.controller ?? state.turn.currentPlayerId;
+    const loc = state.board[0]!.id;
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    state = { ...state, president: { status: "alive", locationId: loc } };
+    state = {
+      ...state,
+      cards: state.cards.map((c) => {
+        if (c.id === motorcade.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player) return { ...c, zone: "discard" as const };
+        if (c.zone === "deck") return { ...c, zone: "discard" as const };
+        return c;
+      }),
+    };
+    state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
+    const filtered = filterForPlayer(state, player);
+
+    const action = decideBotAction(filtered, player, cardData, zero);
+    expect(action).not.toMatchObject({ type: "playMotorcade" });
+  });
+});
