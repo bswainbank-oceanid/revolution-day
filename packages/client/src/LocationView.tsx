@@ -98,13 +98,22 @@ export function LocationView({
     pickModeActive,
   };
 
+  // A card-pick only needs to pin the human here when it's actually
+  // location-bound (self/adjacent/selfOrAdjacent/specific) — one with no
+  // location constraint at all (locationScope undefined, or an explicit
+  // "any", e.g. activateRemote's own "any location" pick) shouldn't lock
+  // navigation, since the whole point is letting the human roam the board
+  // to find a candidate elsewhere. Same "any means free" convention
+  // App.tsx's own lockedLocationIds already uses for the camera.
+  const pickLocksNavigation = pickModeActive && !!cardPick?.locationScope && cardPick.locationScope.mode !== "any";
+
   // Whether a click on the actually-uncovered parts of this pane (the
   // header strip above the grid, and the gap cell directly under the
   // board image — the board image/seats themselves stop propagation, see
   // location-image-wrap/Seat below) does anything — gates the header
   // strip's own clickable styling so it never promises a click that
   // wouldn't do anything.
-  const backgroundClickable = !pickModeActive && !!onBackgroundClick;
+  const backgroundClickable = !pickLocksNavigation && !!onBackgroundClick;
 
   // bl/br sit in the row directly under the image (row 2) — reserved at
   // a 100px floor (see .location-view-grid's own comment) so a stacked
@@ -125,7 +134,7 @@ export function LocationView({
   const row2Empty = !seatHasCards("bl") && !seatHasCards("br");
 
   return (
-    <div className="location-view-bg" onClick={pickModeActive ? undefined : onBackgroundClick}>
+    <div className="location-view-bg" onClick={pickLocksNavigation ? undefined : onBackgroundClick}>
       {/* The *entire* strip above the grid is what actually sends you back
           (h2 and the button below both have no stopPropagation of their
           own, so a click anywhere in this div's own background bubbles up

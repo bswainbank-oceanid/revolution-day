@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { candidateHandCards, cardData, getAbilityEffects } from "@rev-day/engine";
 import type { Action, FilteredCardInstance, FilteredGameState, LocationScope, PlayerId, TargetCount } from "@rev-day/engine";
-import { computePendingRealChoice, computeResponseCandidates } from "./targetDecision";
+import { computePendingRealChoice, computeResponseCandidates, usableActivateAbilities } from "./targetDecision";
 
 export interface ActiveCardPick {
   readonly candidates: readonly FilteredCardInstance[];
@@ -24,6 +24,18 @@ export interface ActiveLocationPick {
   readonly choose: (locationId: string) => void;
 }
 
+// Stage 2 of an activateRemote choice (see useTargetSelection's own
+// handling below): once a remote card is picked, this is that card's own
+// usable-ability list — `choose` submits both halves of the choice
+// together (`chooseTargets` with both targetIds and remoteAbilityIndex),
+// `cancel` returns to stage 1 (re-picking a different card).
+export interface ActiveRemoteAbilityPick {
+  readonly card: FilteredCardInstance;
+  readonly abilities: { readonly abilityIndex: number; readonly text: string }[];
+  readonly choose: (abilityIndex: number) => void;
+  readonly cancel: () => void;
+}
+
 interface UseTargetSelectionResult {
   readonly cardPick: ActiveCardPick | null;
   readonly locationPick: ActiveLocationPick | null;
@@ -36,6 +48,11 @@ interface UseTargetSelectionResult {
   readonly viewCardsMode: boolean;
   readonly setViewCardsMode: (v: boolean) => void;
   readonly unsupportedAbility: boolean;
+  readonly remoteAbilityPick: ActiveRemoteAbilityPick | null;
+  // True only during stage 1 of an activateRemote choice (picking which
+  // card to activate) — lets ActivateAbilityBox show a distinct header
+  // instead of the generic "CHOOSE TARGETS" one every other cardPick uses.
+  readonly isPickingRemoteCard: boolean;
 }
 
 // The live UI state for step 6 (BUILD_PLAN.md): given the current
@@ -56,6 +73,10 @@ export function useTargetSelection(
   const [selectedTargetIds, setSelectedTargetIds] = useState<readonly string[]>([]);
   const [respondingWith, setRespondingWith] = useState<{ cardId: string; abilityIndex: number } | null>(null);
   const [viewCardsMode, setViewCardsMode] = useState(false);
+  // Stage 1->2 of an activateRemote choice: which remote card was picked,
+  // if any (see the "cards" handling below). Reset alongside the other
+  // per-decision state on a fresh frame.
+  const [pendingRemoteCardId, setPendingRemoteCardId] = useState<string | null>(null);
 
   const topFrame = state ? (state.resolutionStack[state.resolutionStack.length - 1] ?? null) : null;
 
@@ -78,6 +99,7 @@ export function useTargetSelection(
   useEffect(() => {
     setSelectedTargetIds([]);
     setViewCardsMode(false);
+    setPendingRemoteCardId(null);
     if (!topFrame || topFrame.kind !== "alarmResolution") setRespondingWith(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameSignature]);
@@ -98,6 +120,8 @@ export function useTargetSelection(
   let cardPick: ActiveCardPick | null = null;
   let locationPick: ActiveLocationPick | null = null;
   let unsupportedAbility = false;
+  let remoteAbilityPick: ActiveRemoteAbilityPick | null = null;
+  let isPickingRemoteCard = false;
 
   if (state && humanPlayerId) {
     if (topFrame?.kind === "abilityResolution") {
@@ -116,6 +140,39 @@ export function useTargetSelection(
         );
         if (!pending) {
           unsupportedAbility = true;
+        } else if (pending.kind === "cards" && effect.verb === "activateRemote" && !pendingRemoteCardId) {
+          // Stage 1: pick which card to activate. Submitting sets
+          // pendingRemoteCardId instead of dispatching an action — the
+          // real chooseTargets action needs the ability choice too (see
+          // stage 2 below), and both go out together in one call.
+          isPickingRemoteCard = true;
+          cardPick = buildCardPick(pending.candidates, pending.count, pending.locationScope, sourceCard.locationId, selectedTargetIds, toggle, (ids) => {
+            setPendingRemoteCardId(ids[0] ?? null);
+          });
+        } else if (pending.kind === "cards" && effect.verb === "activateRemote" && pendingRemoteCardId) {
+          // Stage 2: pick one of that card's own usable Activate
+          // abilities. usableActivateAbilities doesn't assume the card is
+          // controlled by the acting player — it's already generic.
+          const remoteCard = state.cards.find((c) => c.id === pendingRemoteCardId);
+          if (remoteCard) {
+            remoteAbilityPick = {
+              card: remoteCard,
+              abilities: usableActivateAbilities(state, remoteCard, state.turn.usedAbilities, humanPlayerId),
+              choose: (abilityIndex) => {
+                act({ type: "chooseTargets", targetIds: [remoteCard.id], remoteAbilityIndex: abilityIndex });
+                setPendingRemoteCardId(null);
+              },
+              cancel: () => {
+                setPendingRemoteCardId(null);
+                // Must also clear the stage-1 selection — buildCardPick's
+                // own toggle wrapper silently ignores further clicks once
+                // selectedIds.length reaches this effect's count (always 1
+                // here), so without this reset, cancelling would
+                // permanently block picking a different card.
+                setSelectedTargetIds([]);
+              },
+            };
+          }
         } else if (pending.kind === "cards") {
           cardPick = buildCardPick(pending.candidates, pending.count, pending.locationScope, sourceCard.locationId, selectedTargetIds, toggle, (ids) => {
             act({ type: "chooseTargets", targetIds: ids });
@@ -170,7 +227,17 @@ export function useTargetSelection(
     }
   }
 
-  return { cardPick, locationPick, respondingWith, startResponse, viewCardsMode, setViewCardsMode, unsupportedAbility };
+  return {
+    cardPick,
+    locationPick,
+    respondingWith,
+    startResponse,
+    viewCardsMode,
+    setViewCardsMode,
+    unsupportedAbility,
+    remoteAbilityPick,
+    isPickingRemoteCard,
+  };
 }
 
 function buildCardPick(

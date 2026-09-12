@@ -8,14 +8,21 @@
 // Scope (deliberately not full DSL generality — see BUILD_PLAN.md):
 // covered are eliminate/reveal/peek/gainControl/returnToHand/blend (all
 // location/count modes), play with location "self", move/triggerAlarm's
-// single-location-pick cases (Traffic Cop, Anarchist), and the always-
-// simple-eliminate-at-self Response abilities. Explicitly unsupported:
-// activateRemote (nested card+ability picking) and play with
+// single-location-pick cases (Traffic Cop, Anarchist), activateRemote
+// (nested card+ability picking — see computePendingRealChoice's own case
+// and useTargetSelection.ts's two-stage handling of it), and the always-
+// simple-eliminate-at-self Response abilities. activateRemote carries one
+// narrower, deliberate sub-gap: a still-face-down (Blend) card not
+// controlled by the acting player can never be offered as a candidate,
+// since the client can't know a hidden card's own abilities before the
+// one atomic action that both picks and reveals it — there's no
+// "reveal-then-choose" frame for this verb (see the candidate filter in
+// computePendingRealChoice's own case). Explicitly unsupported: play with
 // location:"any" for a multi-target ability (Opposition Leader's "place 2
-// rebels at any locations" — per-target location pairing) — both are
-// gated off at the ability-button level (see abilityIsUsable) so the
-// human can never enter an unsupported resolution state through their own
-// choice; bots are unaffected since they decide these independently.
+// rebels at any locations" — per-target location pairing) — gated off at
+// the ability-button level (see abilityIsUsable) so the human can never
+// enter an unsupported resolution state through their own choice; bots
+// are unaffected since they decide these independently.
 import {
   asCardInstance,
   candidateHandCards,
@@ -143,7 +150,7 @@ export function computeTrivialChooseTargets(
     case "triggerAlarm":
       return effect.location.mode === "self" ? { targetIds: [] } : null;
     case "activateRemote":
-      return null; // out of scope — the activating ability button is disabled instead
+      return null; // always a real two-stage choice (pick a card, then pick its ability) — see computePendingRealChoice
     case "move": {
       // Only a president-targeted, forwardOrBackward move exists in the
       // current data (Traffic Cop) — always a real location choice.
@@ -250,6 +257,26 @@ export function computePendingRealChoice(
     case "triggerAlarm":
       if (effect.location.mode !== "any") return null;
       return { kind: "location", candidateLocationIds: state.board.map((l) => l.id) };
+    case "activateRemote": {
+      if (effect.target.ref !== "filter") return null;
+      // Only exact-one is interpreted so far — matches every current card
+      // (activateRemoteNonLeader always hardcodes count:{exact,1}) and
+      // mirrors reducer.ts's own applyActivateRemote guard; forward-safe
+      // if a future card ever used "unbounded" instead.
+      if (effect.count.mode !== "exact" || effect.count.value !== 1) return null;
+      // Excludes both genuine dead ends (no usable ability of its own —
+      // usableActivateAbilities already applies this same abilityIsUsable
+      // gate) AND, via the same c.defRef !== null check, any still-face-
+      // down card not controlled by the acting player: the client can't
+      // know a hidden card's own abilities before the one atomic action
+      // that both picks and reveals it (there's no "reveal-then-choose"
+      // frame for this verb) — a deliberate, narrower sub-gap, not an
+      // accident (see this module's own doc comment).
+      const candidates = candidateInPlayCards(state, cardData, effect.target, sourceCard).filter(
+        (c) => c.defRef !== null && usableActivateAbilities(state, c, state.turn.usedAbilities, actingPlayerId).length > 0,
+      );
+      return { kind: "cards", candidates, count: effect.count, locationScope: undefined, poolSource: "inPlay" };
+    }
     default:
       return null;
   }
@@ -293,7 +320,20 @@ export function abilityIsUsable(
 ): boolean {
   const effect = def.effects[0];
   if (!effect) return false;
-  if (effect.verb === "activateRemote") return false; // out of scope
+  if (effect.verb === "activateRemote") {
+    // Same candidate computation as computePendingRealChoice's own case —
+    // the ability button itself should only ever appear when a real,
+    // known-identity, non-dead-end remote activation actually exists.
+    // Bounded to one level of recursion by the current data shape: a
+    // legal candidate is always kind:"nonLeader" (the selector requires
+    // it), and activateRemote only exists on leader cards, so a candidate
+    // can never itself carry another activateRemote ability.
+    if (effect.target.ref !== "filter") return false;
+    if (effect.count.mode !== "exact" || effect.count.value !== 1) return false;
+    return candidateInPlayCards(state, cardData, effect.target, sourceCard).some(
+      (c) => c.defRef !== null && usableActivateAbilities(state, c, state.turn.usedAbilities, actingPlayerId).length > 0,
+    );
+  }
   if (effect.verb === "play" && effect.target.ref === "filter" && effect.location.mode === "any") {
     return false; // out of scope (Opposition Leader's per-target location pairing)
   }

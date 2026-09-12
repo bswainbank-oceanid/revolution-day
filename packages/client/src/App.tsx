@@ -150,6 +150,18 @@ function App() {
     },
     [goToLocation],
   );
+
+  // Stage 2 of an activateRemote choice (see useTargetSelection.ts): once
+  // a remote card is picked, follow it the same way a manual selectCard
+  // click would — otherwise the human would be choosing that card's
+  // ability while still looking at wherever they last were.
+  useEffect(() => {
+    const remoteCard = selection.remoteAbilityPick?.card;
+    if (!remoteCard) return;
+    setViewedCardId(remoteCard.id);
+    if (remoteCard.zone === "inPlay" && remoteCard.locationId) goToLocation(remoteCard.locationId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection.remoteAbilityPick?.card.id]);
   const stopDragging = useCallback(() => setDraggedCard(null), []);
 
   // As soon as an alarm's Response window opens for the human, show

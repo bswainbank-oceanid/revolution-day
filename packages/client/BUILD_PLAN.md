@@ -81,17 +81,30 @@ Navigation auto-follows a single-location-locked pick and force-shows
 City View for a location-only pick (Traffic Cop's destination,
 Anarchist's alarm location).
 
+`activateRemote` (Head of Security's 1st ability, Guerrilla Commander's
+1st, Puppet-Master's 2nd — nested card+ability picking: pick any eligible
+card anywhere on the board, then pick one of *that card's* own usable
+Activate abilities, submitted together as one `chooseTargets` action with
+both `targetIds` and `remoteAbilityIndex`) is now supported, as a two-stage
+pick within `useTargetSelection.ts` (stage 1 reuses the normal `cardPick`
+machinery; stage 2 shows the picked card's own ability buttons via
+`usableActivateAbilities`, which doesn't assume `card.controller ===
+actingPlayerId`). It carries one narrower, deliberate remaining sub-gap: a
+still-face-down (Blend) card not controlled by the acting player can never
+be offered as a candidate, since the client can't know a hidden card's own
+abilities before the one atomic action that both picks and reveals it —
+there's no "reveal-then-choose" frame for this verb. Bots are unaffected
+(they see unfiltered state).
+
 Deliberately out of scope, gated off at the ability-button level so the
 human can never reach an unsupported resolution state through their own
-choice (bots are unaffected — they decide these independently):
-`activateRemote` (Head of Security, Puppet-Master's 2nd ability,
-Guerrilla Commander's 1st, Commander General's 2nd — nested card+ability
-picking) and Opposition Leader's "place 2 rebels at any locations" (its
-1st ability — per-target location pairing). Every other Activate/Response
-ability in the current 28-card set is fully interactive, including
-multi-effect sequences (Master Assassin, Secret Police, Suicide Bomber)
-and every resolution-stack window (alarm response, protected-targeting
-reveal, Motorcade interception, reactive-passive play).
+choice (bots are unaffected — they decide these independently): Opposition
+Leader's "place 2 rebels at any locations" (its 1st ability — per-target
+location pairing). Every other Activate/Response ability in the current
+28-card set is fully interactive, including multi-effect sequences
+(Master Assassin, Secret Police, Suicide Bomber) and every resolution-stack
+window (alarm response, protected-targeting reveal, Motorcade interception,
+reactive-passive play).
 
 Verified live via extended Playwright runs playing many real turns against
 bots: multiple real ability activations resolving correctly end to end
@@ -192,9 +205,10 @@ killing them. Zero console errors in every clean run.
 playable end to end: draw, play, move, activate abilities, respond to
 alarms, navigate the board, watch bot turns play out with real
 camera/Card-Viewer choreography, and reach a properly-labeled Game Over
-screen. Known, deliberately-scoped-out gaps remain documented above
-(`activateRemote`, Opposition Leader's per-target "any location" play) —
-both are gated off at the ability-button level rather than half-built.
+screen. `activateRemote` support was added later (see above). One
+deliberately-scoped-out gap remains documented above (Opposition Leader's
+per-target "any location" play) — gated off at the ability-button level
+rather than half-built.
 
 ## Context
 

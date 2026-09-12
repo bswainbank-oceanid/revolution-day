@@ -8,7 +8,7 @@ import type {
   ResolutionFrame,
   RestrictedActionGrant,
 } from "@rev-day/engine";
-import { describeEntry, endgameTurnsLeftText, leaderEliminatedInEntry, locationName, presidentEliminatedInEntry } from "./gameText";
+import { cardName, describeEntry, endgameTurnsLeftText, leaderEliminatedInEntry, locationName, presidentEliminatedInEntry } from "./gameText";
 import { playerColorFor, playerLabel } from "./players";
 import { usableActivateAbilities, usableResponseAbilities } from "./targetDecision";
 import type { useTargetSelection } from "./useTargetSelection";
@@ -156,7 +156,17 @@ export function ActivateAbilityBox({
   onStartMove,
   actionError,
 }: ActivateAbilityBoxProps) {
-  const { cardPick, locationPick, respondingWith, startResponse, viewCardsMode, setViewCardsMode, unsupportedAbility } = selection;
+  const {
+    cardPick,
+    locationPick,
+    respondingWith,
+    startResponse,
+    viewCardsMode,
+    setViewCardsMode,
+    unsupportedAbility,
+    remoteAbilityPick,
+    isPickingRemoteCard,
+  } = selection;
   const topFrame = state.resolutionStack[state.resolutionStack.length - 1] ?? null;
   const actionColor = playerColorFor(state, actionPlayerId);
 
@@ -277,11 +287,36 @@ export function ActivateAbilityBox({
     bottomRight = <p className="hint">Watching the turn play out…</p>;
   } else if (unsupportedAbility) {
     bottomRight = <p className="hint">This ability isn't supported by the client yet.</p>;
+  } else if (remoteAbilityPick) {
+    bottomRight = (
+      <>
+        <h3>CHOOSE AN ABILITY</h3>
+        <p className="hint">Activating {cardName(state, remoteAbilityPick.card.id)}'s ability:</p>
+        {remoteAbilityPick.abilities.length === 0 ? (
+          <p className="hint">No usable ability on this card right now.</p>
+        ) : (
+          remoteAbilityPick.abilities.map((a) => (
+            <button
+              key={a.abilityIndex}
+              type="button"
+              className="ability-button"
+              disabled={disabled}
+              onClick={() => remoteAbilityPick.choose(a.abilityIndex)}
+            >
+              {a.text}
+            </button>
+          ))
+        )}
+        <button type="button" className="flow-button" disabled={disabled} onClick={remoteAbilityPick.cancel}>
+          Choose a different card
+        </button>
+      </>
+    );
   } else if (cardPick || locationPick) {
     const selectedCount = cardPick?.selectedIds.length ?? 0;
     bottomRight = (
       <>
-        <h3>{respondingWith ? "RESPOND" : "CHOOSE TARGETS"}</h3>
+        <h3>{respondingWith ? "RESPOND" : isPickingRemoteCard ? "CHOOSE A CARD TO ACTIVATE" : "CHOOSE TARGETS"}</h3>
         {cardPick && (
           <>
             <p className="hint">
