@@ -132,10 +132,14 @@ function computeBeatCaption(
   isSourceCard: boolean,
   humanPlayerId: PlayerId,
   botPlayerIds: readonly PlayerId[],
+  startingPlayerId: PlayerId,
 ): string {
-  if (isSourceCard) return describeEntry(entry, priorState, humanPlayerId, botPlayerIds);
+  if (isSourceCard) return describeEntry(entry, priorState, humanPlayerId, botPlayerIds, startingPlayerId);
   const { action, resultingState, actingPlayerId } = entry;
-  const who = actingPlayerId === humanPlayerId ? "You" : playerLabel(resultingState, actingPlayerId, humanPlayerId, botPlayerIds);
+  const who =
+    actingPlayerId === humanPlayerId
+      ? "You"
+      : playerLabel(resultingState, actingPlayerId, humanPlayerId, botPlayerIds, startingPlayerId);
   const targetName = cardName(resultingState, viewerCardId);
   const how = describeHow(action, priorState, resultingState);
   return how ? `${who} targeting ${targetName} — ${how}.` : `${who} targeting ${targetName}.`;
@@ -174,6 +178,7 @@ function buildBeats(
   fromIndex: number,
   humanPlayerId: PlayerId,
   botPlayerIds: readonly PlayerId[],
+  startingPlayerId: PlayerId,
   chainStack: Chain[],
   // The true state before log[0] — there's no log[-1] to fall back on, so
   // without this, the very first logged entry (almost always the
@@ -201,7 +206,7 @@ function buildBeats(
       if (idx === 0) entryInitiatorCardId = viewerCardId;
       const isSourceCard = viewerCardId !== null && action.type !== "chooseTargets" && idx === 0;
       const caption = viewerCardId
-        ? computeBeatCaption(entry, priorState, viewerCardId, isSourceCard, humanPlayerId, botPlayerIds)
+        ? computeBeatCaption(entry, priorState, viewerCardId, isSourceCard, humanPlayerId, botPlayerIds, startingPlayerId)
         : null;
       beats.push({
         entryIndex: i,
@@ -309,6 +314,7 @@ export function useTurnPlayback(
   finalState: FilteredGameState | null,
   humanPlayerId: PlayerId | null,
   botPlayerIds: readonly PlayerId[] | null,
+  startingPlayerId: PlayerId | null,
   onCamera: (target: CameraTarget) => void,
   // "Watch" (false) keeps every beat — human's and opponents' — on the
   // same timed pace as always. "Check" (true) leaves the human's own
@@ -330,12 +336,13 @@ export function useTurnPlayback(
   // Append newly-arrived log entries as fresh beats during render — safe
   // under StrictMode's double-invoke since consumedLogLengthRef makes this
   // idempotent for the same log.
-  if (log && humanPlayerId && botPlayerIds && initialState && log.length > consumedLogLengthRef.current) {
+  if (log && humanPlayerId && botPlayerIds && startingPlayerId && initialState && log.length > consumedLogLengthRef.current) {
     const { beats: newBeats, turnStartCount } = buildBeats(
       log,
       consumedLogLengthRef.current,
       humanPlayerId,
       botPlayerIds,
+      startingPlayerId,
       chainStackRef.current,
       initialState,
     );

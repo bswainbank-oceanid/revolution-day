@@ -6,14 +6,15 @@ interface GameOverScreenProps {
   readonly state: FilteredGameState;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  readonly startingPlayerId: PlayerId;
 }
 
 // Step 9 (BUILD_PLAN.md): carried over from the first slice largely as-is,
 // per the plan — the one real change is player labels ("Player N"/"Bot N"
 // via the shared playerLabel helper, matching every other screen) instead
 // of raw player IDs.
-export function GameOverScreen({ gameOver, state, humanPlayerId, botPlayerIds }: GameOverScreenProps) {
-  const label = (playerId: PlayerId) => playerLabel(state, playerId, humanPlayerId, botPlayerIds);
+export function GameOverScreen({ gameOver, state, humanPlayerId, botPlayerIds, startingPlayerId }: GameOverScreenProps) {
+  const label = (playerId: PlayerId) => playerLabel(state, playerId, humanPlayerId, botPlayerIds, startingPlayerId);
 
   return (
     <div className="game-over">

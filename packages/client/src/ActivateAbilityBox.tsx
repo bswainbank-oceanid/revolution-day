@@ -44,8 +44,9 @@ function describeFrame(
   frame: ResolutionFrame,
   humanPlayerId: PlayerId,
   botPlayerIds: readonly PlayerId[],
+  startingPlayerId: PlayerId,
 ): string {
-  const who = (id: PlayerId) => (id === humanPlayerId ? "You" : playerLabel(state, id, humanPlayerId, botPlayerIds));
+  const who = (id: PlayerId) => (id === humanPlayerId ? "You" : playerLabel(state, id, humanPlayerId, botPlayerIds, startingPlayerId));
   const cardName = (id: string) => state.cards.find((c) => c.id === id)?.defRef ?? "a card";
   switch (frame.kind) {
     case "abilityResolution":
@@ -68,6 +69,10 @@ interface ActivateAbilityBoxProps {
   readonly state: FilteredGameState;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  // Whoever the engine's own random roll picked to go first this game —
+  // needed to number every other player by turn order (see players.ts's
+  // playerLabel), not raw seatIndex.
+  readonly startingPlayerId: PlayerId;
   // For the Upper Right quadrant's "most recent action" fallback once the
   // resolution stack is empty — see describeFrame's own comment for the
   // stack-non-empty case.
@@ -140,6 +145,7 @@ export function ActivateAbilityBox({
   state,
   humanPlayerId,
   botPlayerIds,
+  startingPlayerId,
   log,
   initialState,
   act,
@@ -187,7 +193,7 @@ export function ActivateAbilityBox({
   // of it.
   const upperLeft = (
     <div className="activate-ability-status">
-      <p className="current-player-label">{playerLabel(state, actionPlayerId, humanPlayerId, botPlayerIds)}</p>
+      <p className="current-player-label">{playerLabel(state, actionPlayerId, humanPlayerId, botPlayerIds, startingPlayerId)}</p>
       <div className="actions-remaining-row">
         <p className="actions-remaining-label">ACTIONS REMAINING</p>
         {/* Shares the label's own line instead of stacking below it — a
@@ -254,7 +260,7 @@ export function ActivateAbilityBox({
       <ul className="action-log-stack">
         {state.resolutionStack.map((frame, i) => (
           <li key={i} style={{ color: playerColorFor(state, frameActorId(frame)) }}>
-            {describeFrame(state, frame, humanPlayerId, botPlayerIds)}
+            {describeFrame(state, frame, humanPlayerId, botPlayerIds, startingPlayerId)}
           </li>
         ))}
       </ul>
@@ -270,7 +276,7 @@ export function ActivateAbilityBox({
         className={specialClass ? `hint ${specialClass}` : "hint"}
         style={specialClass ? undefined : { color: playerColorFor(lastEntry.resultingState, lastEntry.actingPlayerId) }}
       >
-        {describeEntry(lastEntry, priorState, humanPlayerId, botPlayerIds)}
+        {describeEntry(lastEntry, priorState, humanPlayerId, botPlayerIds, startingPlayerId)}
       </p>
     ) : (
       <p className="hint">No actions yet.</p>

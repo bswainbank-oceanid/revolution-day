@@ -186,10 +186,14 @@ export function describeEntry(
   priorState: FilteredGameState,
   humanPlayerId: PlayerId,
   botPlayerIds: readonly PlayerId[],
+  startingPlayerId: PlayerId,
 ): string {
   // "You" reads more naturally than "Player 1" in first-person log
   // narration; other players still use the Player/Bot N scheme.
-  const who = entry.actingPlayerId === humanPlayerId ? "You" : playerLabel(entry.resultingState, entry.actingPlayerId, humanPlayerId, botPlayerIds);
+  const who =
+    entry.actingPlayerId === humanPlayerId
+      ? "You"
+      : playerLabel(entry.resultingState, entry.actingPlayerId, humanPlayerId, botPlayerIds, startingPlayerId);
   const { action, resultingState } = entry;
   return baseDescription(who, action, resultingState, priorState) + describeEliminations(priorState, resultingState, action);
 }

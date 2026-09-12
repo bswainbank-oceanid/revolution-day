@@ -556,23 +556,45 @@ h3 {
 }
 .location-view-grid {
   display: grid;
-  grid-template-columns: 1fr 2fr 1fr;
+  /* The middle column used to be "2fr" (~590px, far wider than the
+     square location image actually renders at) — the image centered
+     inside it, leaving a ~125px gap of empty column on each side before
+     even reaching the flanking columns' own edge. Fixed to exactly row
+     1's own height (340px, since every location image is a 1:1 square —
+     see the img's own max-width/max-height) so the flanking columns'
+     inner edge lands exactly at the image's real edge, not partway
+     across empty column space — see .location-corner's own comment for
+     why that match matters. */
+  grid-template-columns: 1fr 340px 1fr;
   /* Row 1 (the location image) used to be plain "auto", capped only by
      the img's own max-height (416px) — with a ~540px total budget, that
      left the bl/br/bottomCenter rows entirely dependent on grid's
-     leftover-space stretch to get any height at all. Stretch only kicks
-     in when those rows are otherwise empty, which is why cards looked
-     fine at empty locations but fell off the bottom the moment a
-     location actually had real card clusters — and even when it didn't
-     overflow, the stretch-derived row height (and so the cards' vertical
-     position) varied by how much was in each row, not fixed. A large,
-     fixed row 1 plus a fixed *floor* (not plain "auto") for rows 2/3
-     makes the image fill most of the pane, and every location's card row
-     sits at the same position immediately under it — rows 2/3 only grow
-     past that floor in the rare case a seat needs to stack more than one
-     player's cards (see .mini-card's own width for the matching budget). */
-  grid-template-rows: 380px minmax(100px, auto) minmax(100px, auto);
-  gap: 0;
+     leftover-space stretch to get any height at all, which varied by
+     location and could overflow. A large, fixed row 1 fixed that, but
+     row 2 (bl/br, in an earlier version of this layout) still pushed
+     bottomCenter down by however much its own content needed — varying
+     by location, and forcing this pane to scroll once occupied at all
+     (340+100+100=540px already at the ~540px budget's own edge with
+     nothing to spare). bl/br now stack inside the flanking columns
+     alongside tl/tr instead (see the JSX and .location-corner below), so
+     there's only one row below the image, and it starts at a small fixed
+     gap from it regardless of who's seated anywhere else. */
+  grid-template-rows: 340px auto;
+  /* Grid's default align-content ("normal") behaves as "stretch" — with
+     row 2 sized "auto" and this container's own height (92% of a ~635px
+     pane) leaving well over 100px of genuine leftover space beyond what
+     340px + row-gap + row 2's own content actually needs, row 2's track
+     was silently stretching to absorb all of it, and
+     .location-seat-bottomCenter's own align-items:center (inherited from
+     .location-seat) then centered the label+cards *within* that inflated
+     track — landing them roughly half the leftover space below row 1,
+     not merely row-gap below it. Pinning content to the start of the
+     grid's own box stops row 2 from stretching at all, so it sizes to
+     exactly its own content and row-gap becomes the real, only distance
+     between the image and the label above the cards. */
+  align-content: start;
+  row-gap: 20px;
+  column-gap: 0;
   height: 92%;
   cursor: default;
 }
@@ -586,7 +608,7 @@ h3 {
   align-items: flex-start;
   justify-content: center;
   /* Grid items stretch to fill their cell's block size by default, so
-     this matches row 1's own 240px track — no need to repeat the number. */
+     this matches row 1's own 340px track — no need to repeat the number. */
   height: 100%;
 }
 .location-image-wrap img {
@@ -605,6 +627,28 @@ h3 {
   left: 50%;
   transform: translate(-50%, -50%) rotate(-6deg);
   border-radius: 2px;
+}
+/* tl+bl (or tr+br) stacked in one flanking column (see the JSX) —
+   aligned to the column's *inner* edge (the one bordering the now
+   image-width-matched middle column — see .location-view-grid's own
+   comment) rather than centered, so a card cluster sits close to the
+   image's real edge instead of the middle of a much wider column. The
+   small explicit padding is the only gap left to close, safely under
+   the "≤25px from the image" target. */
+.location-corner {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+.location-corner-left {
+  align-items: flex-end;
+  padding-right: 15px;
+}
+.location-corner-right {
+  align-items: flex-start;
+  padding-left: 15px;
 }
 .location-seat {
   display: flex;

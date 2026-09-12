@@ -8,6 +8,7 @@ interface GameLogProps {
   readonly log: readonly LogEntry[];
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  readonly startingPlayerId: PlayerId;
   // The pristine pre-game state — same role as buildBeats' own use of it
   // in useTurnPlayback.ts: describeEntry needs each entry's *prior* state
   // (e.g. to report the President's location before a Motorcade moved
@@ -22,7 +23,7 @@ interface GameLogProps {
   readonly revealedLength?: number;
 }
 
-export function GameLog({ log, humanPlayerId, botPlayerIds, initialState, revealedLength }: GameLogProps) {
+export function GameLog({ log, humanPlayerId, botPlayerIds, startingPlayerId, initialState, revealedLength }: GameLogProps) {
   const linesRef = useRef<HTMLDivElement>(null);
   const revealed = log.slice(0, revealedLength ?? log.length);
 
@@ -60,7 +61,7 @@ export function GameLog({ log, humanPlayerId, botPlayerIds, initialState, reveal
             // game-defining event that should read as louder than the
             // normal per-player color-coding.
             <p key={globalIndex} className={specialClass} style={specialClass ? undefined : { color: playerColorFor(entry.resultingState, entry.actingPlayerId) }}>
-              {describeEntry(entry, priorState, humanPlayerId, botPlayerIds)}
+              {describeEntry(entry, priorState, humanPlayerId, botPlayerIds, startingPlayerId)}
             </p>
           );
         })}

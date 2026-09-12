@@ -37,6 +37,10 @@ interface LocationViewProps {
   readonly locationId: string;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  // Whoever the engine's own random roll picked to go first this game —
+  // needed to number every other player by turn order (see players.ts's
+  // playerLabel), not raw seatIndex.
+  readonly startingPlayerId: PlayerId;
   readonly onBackgroundClick?: () => void;
   readonly onSelectCard?: (card: FilteredCardInstance) => void;
   // Step 5: an in-play MiniCard the human controls is itself a drag
@@ -60,6 +64,7 @@ export function LocationView({
   locationId,
   humanPlayerId,
   botPlayerIds,
+  startingPlayerId,
   onBackgroundClick,
   onSelectCard,
   canDrag,
@@ -90,6 +95,7 @@ export function LocationView({
     locationId,
     humanPlayerId,
     botPlayerIds,
+    startingPlayerId,
     onSelectCard,
     canDrag,
     onCardDragStart,
@@ -115,24 +121,6 @@ export function LocationView({
   // wouldn't do anything.
   const backgroundClickable = !pickLocksNavigation && !!onBackgroundClick;
 
-  // bl/br sit in the row directly under the image (row 2) — reserved at
-  // a 100px floor (see .location-view-grid's own comment) so a stacked
-  // cluster never gets clipped. But the *far* more common case is nobody
-  // at bl/br at all (most locations only ever fill bottomCenter, row 3),
-  // and a bare 100px floor with nothing in it just reads as "the cards
-  // are oddly far from the location" — collapse it to 0 whenever both are
-  // genuinely empty, so bottomCenter's cards sit right under the image.
-  // seats.get(...) is a rotational seat *assignment* (every player in the
-  // game gets one, whether or not they have anything here) — matching
-  // SeatCluster's own "any actual inPlay card at this location" check
-  // below, not just presence in the map, is what tells us if the row
-  // will really render anything.
-  const seatHasCards = (seat: SeatName): boolean =>
-    (seats.get(seat) ?? []).some((playerId) =>
-      state.cards.some((c) => c.zone === "inPlay" && c.locationId === locationId && c.controller === playerId),
-    );
-  const row2Empty = !seatHasCards("bl") && !seatHasCards("br");
-
   return (
     <div className="location-view-bg" onClick={pickLocksNavigation ? undefined : onBackgroundClick}>
       {/* The *entire* strip above the grid is what actually sends you back
@@ -156,8 +144,20 @@ export function LocationView({
           </button>
         )}
       </div>
-      <div className="location-view-grid" style={row2Empty ? { gridTemplateRows: "380px 0px minmax(100px, auto)" } : undefined}>
-        <Seat {...seatProps} seat="tl" playerIds={seats.get("tl") ?? []} />
+      <div className="location-view-grid">
+        {/* tl+bl (and tr+br) stack inside one flanking column instead of
+            each owning a separate grid row — the row bl/br used to own
+            was what pushed bottomCenter's row down by however much it
+            needed, varying by who was seated there (see this component's
+            git history). Stacking them here instead means bottomCenter's
+            own row always starts exactly row-gap below the image, for
+            every location, regardless of who's at bl/br — see
+            .location-corner's own comment for the hugging-the-image
+            alignment this also enables. */}
+        <div className="location-corner location-corner-left">
+          <Seat {...seatProps} seat="tl" playerIds={seats.get("tl") ?? []} />
+          <Seat {...seatProps} seat="bl" playerIds={seats.get("bl") ?? []} />
+        </div>
         <div
           className={`location-image-wrap${isDropTarget ? " location-image-drop-target" : ""}`}
           onClick={(e) => e.stopPropagation()}
@@ -183,13 +183,13 @@ export function LocationView({
             />
           )}
         </div>
-        <Seat {...seatProps} seat="tr" playerIds={seats.get("tr") ?? []} />
-        <Seat {...seatProps} seat="bl" playerIds={seats.get("bl") ?? []} />
-        <div />
-        <Seat {...seatProps} seat="br" playerIds={seats.get("br") ?? []} />
+        <div className="location-corner location-corner-right">
+          <Seat {...seatProps} seat="tr" playerIds={seats.get("tr") ?? []} />
+          <Seat {...seatProps} seat="br" playerIds={seats.get("br") ?? []} />
+        </div>
         {/* bottomCenter's own grid-column:1/4 spans the whole row on its
             own — no filler cells needed here, and adding any would push
-            it into a phantom extra row (auto-placement fills row 3's
+            it into a phantom extra row (auto-placement fills row 2's
             first cell before reaching this spanning item), adding dead
             vertical space between the location image and the cards
             below it. */}
@@ -206,6 +206,7 @@ interface SeatProps {
   readonly locationId: string;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  readonly startingPlayerId: PlayerId;
   readonly onSelectCard?: (card: FilteredCardInstance) => void;
   readonly canDrag?: (card: FilteredCardInstance) => boolean;
   readonly onCardDragStart?: (card: FilteredCardInstance) => void;
@@ -230,6 +231,7 @@ function SeatCluster({
   locationId,
   humanPlayerId,
   botPlayerIds,
+  startingPlayerId,
   onSelectCard,
   canDrag,
   onCardDragStart,
@@ -249,7 +251,7 @@ function SeatCluster({
   return (
     <div className="seat-cluster">
       <span className="seat-cluster-label" style={{ color }}>
-        {playerLabel(state, playerId, humanPlayerId, botPlayerIds)}
+        {playerLabel(state, playerId, humanPlayerId, botPlayerIds, startingPlayerId)}
       </span>
       <div className="seat-cluster-cards">
         {cards.map((card, i) => {

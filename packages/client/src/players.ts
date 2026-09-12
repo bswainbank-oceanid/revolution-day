@@ -62,17 +62,22 @@ export function handCountFor(state: FilteredGameState, playerId: PlayerId): numb
   return state.cards.filter((c) => c.zone === "hand" && c.controller === playerId).length;
 }
 
-// No real names yet — "Player N"/"Bot N" by play (seat) order, so turn
-// order stays legible even before names exist; "(You)" is appended
-// separately since who's human doesn't depend on seat position.
+// No real names yet — "Player N"/"Bot N" by turn/play order (1 = whoever
+// the engine's own random roll picked to go first this game, 2 = next in
+// rotation, etc. — see playersInPlayOrder), not raw seatIndex (mere array
+// position at setup, unrelated to who actually goes first) — so the
+// number matches what the player actually sees happen at the table.
+// "(You)" is appended separately since who's human doesn't depend on
+// turn order.
 export function playerLabel(
   state: FilteredGameState,
   playerId: PlayerId,
   humanPlayerId: PlayerId,
   botPlayerIds: readonly PlayerId[],
+  startingPlayerId: PlayerId,
 ): string {
-  const seatIndex = state.players.find((p) => p.id === playerId)?.seatIndex ?? 0;
+  const playOrderIndex = playersInPlayOrder(state, startingPlayerId).findIndex((p) => p.id === playerId);
   const kind = botPlayerIds.includes(playerId) ? "Bot" : "Player";
   const suffix = playerId === humanPlayerId ? " (You)" : "";
-  return `${kind} ${seatIndex + 1}${suffix}`;
+  return `${kind} ${playOrderIndex + 1}${suffix}`;
 }

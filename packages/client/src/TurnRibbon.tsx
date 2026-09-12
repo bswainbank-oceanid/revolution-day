@@ -24,7 +24,15 @@ export function TurnRibbon({ state, humanPlayerId, botPlayerIds, startingPlayerI
       </div>
       <div className="player-panels">
         {playersInPlayOrder(state, startingPlayerId).map((p) => (
-          <PlayerPanel key={p.id} state={state} playerId={p.id} humanPlayerId={humanPlayerId} botPlayerIds={botPlayerIds} seatIndex={p.seatIndex} />
+          <PlayerPanel
+            key={p.id}
+            state={state}
+            playerId={p.id}
+            humanPlayerId={humanPlayerId}
+            botPlayerIds={botPlayerIds}
+            startingPlayerId={startingPlayerId}
+            seatIndex={p.seatIndex}
+          />
         ))}
       </div>
     </div>
@@ -36,12 +44,14 @@ function PlayerPanel({
   playerId,
   humanPlayerId,
   botPlayerIds,
+  startingPlayerId,
   seatIndex,
 }: {
   readonly state: FilteredGameState;
   readonly playerId: PlayerId;
   readonly humanPlayerId: PlayerId;
   readonly botPlayerIds: readonly PlayerId[];
+  readonly startingPlayerId: PlayerId;
   readonly seatIndex: number;
 }) {
   const isCurrentTurn = state.turn.currentPlayerId === playerId;
@@ -51,7 +61,7 @@ function PlayerPanel({
   return (
     <div className={`player-panel${isCurrentTurn ? " player-panel-active" : ""}`} style={{ borderColor: isCurrentTurn ? "var(--gold)" : undefined }}>
       {isCurrentTurn && <span className="current-turn-tag">CURRENT TURN</span>}
-      <h3 style={{ color }}>{playerLabel(state, playerId, humanPlayerId, botPlayerIds)}</h3>
+      <h3 style={{ color }}>{playerLabel(state, playerId, humanPlayerId, botPlayerIds, startingPlayerId)}</h3>
       <p className="leader-name">{leaderNameFor(state, playerId)}</p>
       <div className="hand-fan">
         {Array.from({ length: Math.min(handCount, 6) }).map((_, i) => (

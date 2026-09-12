@@ -112,6 +112,7 @@ function App() {
     session?.state ?? null,
     session?.humanPlayerId ?? null,
     session?.botPlayerIds ?? null,
+    session?.startingPlayerId ?? null,
     handleCamera,
     checkOpponentTurns,
     session?.initialState ?? null,
@@ -229,6 +230,7 @@ function App() {
           state={session.state}
           humanPlayerId={session.humanPlayerId}
           botPlayerIds={session.botPlayerIds}
+          startingPlayerId={session.startingPlayerId}
         />
         <BotCountPicker botCount={botCount} onChange={setBotCount} disabled={loading} />
         <button type="button" onClick={() => startNewGame(botCount)} disabled={loading}>
@@ -257,7 +259,7 @@ function App() {
   const controllerLabel = viewedCard?.controller
     ? viewedCard.controller === humanPlayerId
       ? "You"
-      : playerLabel(state, viewedCard.controller, humanPlayerId, botPlayerIds)
+      : playerLabel(state, viewedCard.controller, humanPlayerId, botPlayerIds, startingPlayerId)
     : null;
 
   const pickActive = !!selection.cardPick || !!selection.locationPick;
@@ -382,6 +384,7 @@ function App() {
           state={state}
           humanPlayerId={humanPlayerId}
           botPlayerIds={botPlayerIds}
+          startingPlayerId={startingPlayerId}
           log={log}
           initialState={session.initialState}
           act={act}
@@ -406,6 +409,7 @@ function App() {
             locationId={view.locationId}
             humanPlayerId={humanPlayerId}
             botPlayerIds={botPlayerIds}
+            startingPlayerId={startingPlayerId}
             onBackgroundClick={interactionLocked ? undefined : goToCity}
             onSelectCard={interactionLocked ? undefined : selectCard}
             canDrag={canDrag}
@@ -438,6 +442,7 @@ function App() {
             log={log}
             humanPlayerId={humanPlayerId}
             botPlayerIds={botPlayerIds}
+            startingPlayerId={startingPlayerId}
             initialState={session.initialState}
             revealedLength={playback.revealedLogLength}
           />
