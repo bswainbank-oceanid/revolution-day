@@ -1396,18 +1396,22 @@ describe("applyAction: protected-targeting reveal window", () => {
     expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("inPlay");
   });
 
-  it("lets the re-choice target the same (still Protected) character with no new window", () => {
+  it("rejects re-choosing the same target once the reveal actually protects it, and does not reopen a window either", () => {
     const { state, declarer, otherB, target, hiddenProtector } = setupWindowScenario();
     const activated = act(state, declarer, { type: "chooseTargets", targetIds: [target.id] });
     const returned = act(activated, otherB, { type: "revealBlended", cardIds: [hiddenProtector.id] });
 
-    // Head of Security is *still* Protected (hiddenProtector, now revealed,
-    // would normally shield it) — but this re-choice bypasses that check
-    // entirely and does not reopen a window.
-    const resolved = act(returned, declarer, { type: "chooseTargets", targetIds: [target.id] });
+    // hiddenProtector (Secret Police, Regime, non-Protected) is now visible
+    // and really does shield Head of Security (Regime, Protected) — the
+    // re-choice must respect that, same as any fresh declaration would.
+    expect(() => act(returned, declarer, { type: "chooseTargets", targetIds: [target.id] })).toThrow();
 
+    // The declaring player instead re-chooses the newly-revealed protector
+    // itself — legal, and still doesn't reopen a second window.
+    const resolved = act(returned, declarer, { type: "chooseTargets", targetIds: [hiddenProtector.id] });
     expect(resolved.resolutionStack).toHaveLength(0);
-    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === hiddenProtector.id)!.zone).toBe("eliminated");
+    expect(resolved.cards.find((c) => c.id === target.id)!.zone).toBe("inPlay");
   });
 
   it("triggers the same hand-back even from a reveal of an unrelated faction", () => {

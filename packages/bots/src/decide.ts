@@ -530,24 +530,24 @@ function abilityHasEliminateEffect(def: AbilityDefinition): boolean {
 // named helper (packages/client/src/targetDecision.ts) and reducer.ts's
 // declareEliminateTargets, so bots never consider a target the server
 // would actually reject, or miss one it would accept.
-// `forceBypassProtection` — set when this is a re-choice after a
-// Protected-targeting reveal window (frame.reselectingAfterReveal) —
-// mirrors reducer.ts's declareEliminateTargets, which is called with
-// bypassProtectionOverride:true for that exact case ("that re-choice is
-// final by design, not a fresh declaration"). Without it, this pool could
-// wrongly exclude a candidate a freshly-revealed card now appears to
-// protect, even though the server accepts it unconditionally on a
-// re-choice — stranding the bot the same way an empty pool would.
+// A post-reveal re-choice (frame.reselectingAfterReveal) is NOT a
+// protection bypass — mirrors reducer.ts's declareEliminateTargets, which
+// only bypasses for the DSL's own `ignoreProtected` (Wife's true bypass).
+// The bot's re-choice must pick among currently *legal* candidates same as
+// a fresh declaration: a reveal that actually introduced a protector
+// correctly removes the original Protected target from this pool, same as
+// the server would reject re-declaring it. Only the reveal *window* itself
+// never reopens a second time for the same declaration — a separate
+// concern, tracked in reducer.ts, not here.
 function eliminateCandidatePool(
   state: FilteredGameState,
   cardData: CardData,
   sourceCard: FilteredCardInstance,
   actingPlayerId: PlayerId,
   effect: Extract<EffectNode, { verb: "eliminate" }>,
-  forceBypassProtection = false,
 ): FilteredCardInstance[] {
   if (effect.target.ref !== "filter") return [];
-  const bypassProtection = (effect.ignoreProtected ?? false) || forceBypassProtection;
+  const bypassProtection = effect.ignoreProtected ?? false;
   const realCards = candidateInPlayCards(state, cardData, effect.target, sourceCard).filter(
     (c) => bypassProtection || isLegalEliminationTargetFiltered(state, cardData, c, actingPlayerId),
   );
@@ -1687,16 +1687,7 @@ function decideChooseTargets(
 
   switch (effect.verb) {
     case "eliminate": {
-      const targetIds = decideEliminateTargetIds(
-        state,
-        playerId,
-        cardData,
-        sourceCard,
-        effect,
-        objective,
-        rng,
-        frame.reselectingAfterReveal ?? false,
-      );
+      const targetIds = decideEliminateTargetIds(state, playerId, cardData, sourceCard, effect, objective, rng);
       return { type: "chooseTargets", targetIds };
     }
     case "reveal":
@@ -1728,13 +1719,12 @@ function decideEliminateTargetIds(
   effect: Extract<EffectNode, { verb: "eliminate" }>,
   objective: PresidentObjective,
   rng: Rng,
-  forceBypassProtection = false,
 ): readonly string[] {
   if (effect.target.ref === "self" || effect.target.ref === "binding") return [];
   if (effect.target.ref !== "filter") return [];
   if (effect.target.selection === "random") return []; // engine draws automatically
 
-  const pool = eliminateCandidatePool(state, cardData, sourceCard, playerId, effect, forceBypassProtection);
+  const pool = eliminateCandidatePool(state, cardData, sourceCard, playerId, effect);
   // "Targets are randomly chosen from opposing cards. Don't target your
   // own cards" — normally a hard exclusion, not just a preference:
   // abilityHasAvailableFirstTarget already refuses to activate an eliminate

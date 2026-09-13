@@ -216,18 +216,22 @@ describe("decideBotAction: eliminate targeting", () => {
     }
   });
 
-  // Regression: reducer.ts's declareEliminateTargets bypasses
-  // Protected-immunity entirely for a re-choice after a Protected-
-  // targeting reveal window (bypassProtectionOverride, driven by
-  // AbilityResolutionFrame.reselectingAfterReveal — "that re-choice is
-  // final by design, not a fresh declaration"), but eliminateCandidatePool
-  // had no idea that field existed and kept filtering by protection
-  // anyway. With a real protector still present, the previously-protected
-  // target stayed wrongly excluded from the pool even though the engine
-  // would accept it unconditionally — a real user hit this using
-  // Insurgent Sniper on the President after an unrelated reveal put the
-  // ability into reselectingAfterReveal.
-  it("bypasses Protected-immunity entirely when reselecting after a reveal window", () => {
+  // Regression, corrected 2026-09-13: an earlier version of this fix made
+  // eliminateCandidatePool bypass Protected-immunity entirely whenever
+  // reselectingAfterReveal was set, mirroring what reducer.ts's
+  // declareEliminateTargets did at the time. That turned out to be wrong —
+  // caught from a live game where a bot's Republican Guard declared a
+  // Protected leader, the human revealed a genuine same-faction shield in
+  // response, and the bot's re-choice still targeted the (now actually
+  // shielded) leader instead of the shield. The real rule: a post-reveal
+  // re-choice must still respect Protected-immunity normally — only the
+  // reveal *window itself* never reopens a second time for the same
+  // declaration, which is a separate concern (see reducer.ts). So a
+  // reselect with a real protector present must exclude the Protected
+  // target from the pool exactly like a fresh declaration would (same
+  // scenario as "excludes a Protected card..." above, just reached via
+  // reselectingAfterReveal instead of a first-time declaration).
+  it("still excludes a Protected card from the pool when reselecting after a reveal window", () => {
     let state = freshGame(["a", "b", "c", "d", "e", "f", "g", "h"]); // 8 players — Head of Security guaranteed dealt
     const guard = findByDefRef(state, "Republican Guard");
     const player = state.turn.currentPlayerId;
@@ -239,7 +243,7 @@ describe("decideBotAction: eliminate targeting", () => {
     )!;
     state = place(state, guard.id, loc, player);
     state = place(state, target.id, loc, other);
-    state = place(state, protector.id, loc, other); // would normally shield target
+    state = place(state, protector.id, loc, other); // genuinely shields target
     state = { ...state, turn: { ...state.turn, currentPlayerId: player, phase: "action" } };
 
     const frame: AbilityResolutionFrame = {
@@ -254,16 +258,12 @@ describe("decideBotAction: eliminate targeting", () => {
     state = { ...state, resolutionStack: [frame] };
     const filtered = filterForPlayer(state, player);
 
-    const seenTargetIds = new Set<string>();
     for (const rng of [zero, near1, (): number => 0.5]) {
       const action = decideBotAction(filtered, player, cardData, rng);
       expect(action).toMatchObject({ type: "chooseTargets" });
-      for (const id of (action as { targetIds: readonly string[] }).targetIds) seenTargetIds.add(id);
+      const targetIds = (action as { targetIds: readonly string[] }).targetIds;
+      expect(targetIds).not.toContain(target.id);
     }
-    // Without the fix, `target` stays wrongly excluded no matter the
-    // roll — every pick lands on `protector` instead, and target is
-    // never reachable at all.
-    expect(seenTargetIds.has(target.id)).toBe(true);
   });
 
   // Regression: eliminate targeting used to fall back to the acting

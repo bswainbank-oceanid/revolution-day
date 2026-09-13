@@ -90,7 +90,7 @@ function computeAutoAction(state: FilteredGameState, humanPlayerId: PlayerId): A
   const definition = getAbilityEffects(sourceCard.defRef, frame.abilityIndex);
   const effect = definition?.effects[frame.effectIndex ?? 0];
   if (!effect) return null;
-  const trivial = computeTrivialChooseTargets(state, sourceCard, humanPlayerId, effect, frame.reselectingAfterReveal ?? false);
+  const trivial = computeTrivialChooseTargets(state, sourceCard, humanPlayerId, effect);
   if (!trivial) return null;
   return trivial.locationIds
     ? { type: "chooseTargets", targetIds: trivial.targetIds, locationIds: trivial.locationIds }

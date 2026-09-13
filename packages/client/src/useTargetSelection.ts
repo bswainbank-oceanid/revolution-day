@@ -138,14 +138,7 @@ export function useTargetSelection(
         ? getAbilityEffects(sourceCard.defRef, topFrame.abilityIndex)?.effects[topFrame.effectIndex ?? 0]
         : undefined;
       if (sourceCard && effect) {
-        const pending = computePendingRealChoice(
-          state,
-          sourceCard,
-          humanPlayerId,
-          effect,
-          selectedTargetIds,
-          topFrame.reselectingAfterReveal ?? false,
-        );
+        const pending = computePendingRealChoice(state, sourceCard, humanPlayerId, effect, selectedTargetIds);
         if (!pending) {
           // computePendingRealChoice has no picker for every verb — draw,
           // gainActions, and if are always trivial (see
@@ -157,7 +150,7 @@ export function useTargetSelection(
           // later. Without this check, that brief, entirely expected gap
           // read as "unsupported ability" instead of the nothing-to-see
           // transient it actually is.
-          const trivial = computeTrivialChooseTargets(state, sourceCard, humanPlayerId, effect, topFrame.reselectingAfterReveal ?? false);
+          const trivial = computeTrivialChooseTargets(state, sourceCard, humanPlayerId, effect);
           if (trivial) {
             awaitingTrivialResolution = true;
           } else {

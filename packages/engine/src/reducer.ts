@@ -1108,20 +1108,19 @@ function applyEffect(
     return applyRandomEliminateEffect(state, frame, cardData, sourceCard, effect, targetIds);
   }
 
-  // A target chosen after a reveal window already ran once this
-  // resolution bypasses Protected-immunity entirely (no window, ever) —
-  // that re-choice is final by design, not a fresh declaration.
-  const declared = declareEliminateTargets(
-    state,
-    cardData,
-    effect,
-    sourceCard,
-    actingPlayerId,
-    targetIds,
-    frame.reselectingAfterReveal ?? false,
-  );
+  const declared = declareEliminateTargets(state, cardData, effect, sourceCard, actingPlayerId, targetIds);
 
-  if (declared.protectedActive && hasRevealOpportunity(state, declared.locationId, actingPlayerId)) {
+  // Once the protected-targeting reveal pass has already run once for this
+  // declaration (frame.reselectingAfterReveal), it never reopens — "once
+  // the pass completes, it is not repeated" (card_data.json's
+  // protected_targeting_rules). The re-choice above still had to be a
+  // currently *legal* target (declareEliminateTargets doesn't bypass
+  // protection for a reselect, only for the DSL's own ignoreProtected) —
+  // this only stops a second window, not a second chance to dodge
+  // protection. A legal re-choice can still carry the Protected attribute
+  // (e.g. no protector actually present, so it was legal despite that) and
+  // would otherwise satisfy `declared.protectedActive` on its own.
+  if (declared.protectedActive && !(frame.reselectingAfterReveal ?? false) && hasRevealOpportunity(state, declared.locationId, actingPlayerId)) {
     const updatedFrame: AbilityResolutionFrame = { ...frame, targetIds: declared.targetIds };
     const windowFrame = buildProtectedTargetingWindowFrame(
       state,
@@ -1479,10 +1478,15 @@ function protectionReachableIds(
 // is currently active for it — shared by direct ability resolution
 // (chooseTargets) and a Response's inline target declaration
 // (useResponse), since both are "declare a target for an eliminate
-// effect" at heart. bypassProtectionOverride covers both a post-reveal
-// re-choice (reselectingAfterReveal) and the DSL's own ignoreProtected —
-// either way, the guard-protection check (not the two-player rule, for
-// president targets) is skipped entirely.
+// effect" at heart. The only thing that bypasses the guard-protection
+// check entirely is the DSL's own `ignoreProtected` (Wife's "eliminate the
+// President, ignores protected"). A post-reveal re-choice
+// (reselectingAfterReveal) is NOT a bypass — the acting player picks among
+// currently *legal* targets same as any fresh declaration (a reveal that
+// reintroduces a protector makes the original Protected target illegal
+// again, same as it would for a brand-new declaration); see the call site
+// in applyChooseTargets for how the *window* (not the legality check)
+// still correctly never reopens a second time for the same declaration.
 // Handles multi-target declarations (Death Squad's "eliminate one or two
 // targets") as well as the single-target case — every declared target
 // shares one locationId (every currently-encoded multi-target ability is
@@ -1508,12 +1512,11 @@ function declareEliminateTargets(
   actingCard: CardInstance,
   actingPlayerId: PlayerId,
   targetIds: readonly string[],
-  bypassProtectionOverride: boolean,
 ): { targetIds: string[]; locationId: string; protectedActive: boolean } {
   if (effect.target.ref !== "filter") {
     throw new Error("Only filter-based targeting is interpreted so far");
   }
-  const bypassProtection = (effect.ignoreProtected ?? false) || bypassProtectionOverride;
+  const bypassProtection = effect.ignoreProtected ?? false;
 
   // The President is folded into the same eligible-id pool as real cards
   // rather than being a separate path — per card_data.json's
@@ -2219,15 +2222,7 @@ function applyAlarmAction(
   const revealedCards = state.cards.map((c) => (c.id === card.id ? { ...c, faceUp: true } : c));
   const withReveal = { ...state, cards: revealedCards };
 
-  const declared = declareEliminateTargets(
-    withReveal,
-    cardData,
-    effect,
-    card,
-    actingPlayerId,
-    action.targetIds,
-    false,
-  );
+  const declared = declareEliminateTargets(withReveal, cardData, effect, card, actingPlayerId, action.targetIds);
 
   if (declared.protectedActive && hasRevealOpportunity(withReveal, declared.locationId, actingPlayerId)) {
     // Pause the alarm pass — frame stays exactly as-is, nextIndex

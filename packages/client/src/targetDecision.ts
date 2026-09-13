@@ -75,25 +75,24 @@ export function resolveCard(state: FilteredGameState, cardId: string): FilteredC
 // declareEliminateTargets validates protection against the *whole*
 // declared batch, not per-candidate in isolation (see its own comment).
 //
-// `forceBypassProtection` — set when this is a re-choice after a
-// Protected-targeting reveal window (AbilityResolutionFrame.
-// reselectingAfterReveal) — mirrors reducer.ts's declareEliminateTargets,
-// which is called with bypassProtectionOverride:true for that exact case
-// ("that re-choice is final by design, not a fresh declaration"). Without
-// it, a candidate a freshly-revealed card now appears to protect would
-// stay wrongly excluded from the picker even though the server accepts it
-// unconditionally on a re-choice — the picker would have no legal way to
-// complete the selection at all.
+// A post-reveal re-choice (AbilityResolutionFrame.reselectingAfterReveal)
+// is NOT a protection bypass — mirrors reducer.ts's declareEliminateTargets,
+// which only bypasses for the DSL's own `ignoreProtected` (Wife's true
+// bypass). The re-choice picks among currently *legal* candidates same as
+// a fresh declaration: a reveal that actually introduced a protector
+// correctly removes the original Protected target from this pool, same as
+// the server would reject re-declaring it. Only the *window itself* never
+// reopens a second time for the same declaration — that's tracked
+// separately, in useTargetSelection.ts/reducer.ts, not here.
 function eliminateCandidatePool(
   state: FilteredGameState,
   sourceCard: FilteredCardInstance,
   actingPlayerId: PlayerId,
   effect: Extract<EffectNode, { verb: "eliminate" }>,
   alreadySelectedIds: readonly string[] = [],
-  forceBypassProtection = false,
 ): FilteredCardInstance[] {
   if (effect.target.ref !== "filter") return [];
-  const bypassProtection = (effect.ignoreProtected ?? false) || forceBypassProtection;
+  const bypassProtection = effect.ignoreProtected ?? false;
   const realCards = candidateInPlayCards(state, cardData, effect.target, sourceCard).filter(
     (c) => bypassProtection || isLegalEliminationTargetFiltered(state, cardData, c, actingPlayerId, alreadySelectedIds),
   );
@@ -131,16 +130,11 @@ interface TrivialResult {
 // Returns the auto-submittable (targetIds, locationIds) when the current
 // effect needs no real player choice, or null when a real UI decision is
 // required (or the effect is out of scope — see the module doc).
-//
-// `reselectingAfterReveal` — mirrors AbilityResolutionFrame's own field of
-// the same name; only meaningful for "eliminate" (see eliminateCandidatePool's
-// forceBypassProtection comment).
 export function computeTrivialChooseTargets(
   state: FilteredGameState,
   sourceCard: FilteredCardInstance,
   actingPlayerId: PlayerId,
   effect: EffectNode,
-  reselectingAfterReveal = false,
 ): TrivialResult | null {
   switch (effect.verb) {
     case "draw":
@@ -160,7 +154,7 @@ export function computeTrivialChooseTargets(
       if (effect.target.ref === "self" || effect.target.ref === "binding") return { targetIds: [] };
       if (effect.target.ref !== "filter") return null;
       if (effect.target.selection === "random") return { targetIds: [] };
-      const pool = eliminateCandidatePool(state, sourceCard, actingPlayerId, effect, [], reselectingAfterReveal);
+      const pool = eliminateCandidatePool(state, sourceCard, actingPlayerId, effect);
       if (!isTrivialSelection(effect.target.count, pool.length)) return null;
       return { targetIds: trivialSelectionIds(effect.target.count, pool) };
     }
@@ -215,20 +209,18 @@ export type PendingRealChoice = PendingCardPick | PendingLocationPick;
 //
 // `selectedIds` — the human's current partial selection within this same
 // pick, if any (see eliminateCandidatePool's comment) — only meaningful
-// for "eliminate"; every other verb ignores it. `reselectingAfterReveal` —
-// see computeTrivialChooseTargets's own comment; same meaning here.
+// for "eliminate"; every other verb ignores it.
 export function computePendingRealChoice(
   state: FilteredGameState,
   sourceCard: FilteredCardInstance,
   actingPlayerId: PlayerId,
   effect: EffectNode,
   selectedIds: readonly string[] = [],
-  reselectingAfterReveal = false,
 ): PendingRealChoice | null {
   switch (effect.verb) {
     case "eliminate": {
       if (effect.target.ref !== "filter") return null;
-      const candidates = eliminateCandidatePool(state, sourceCard, actingPlayerId, effect, selectedIds, reselectingAfterReveal);
+      const candidates = eliminateCandidatePool(state, sourceCard, actingPlayerId, effect, selectedIds);
       return { kind: "cards", candidates, count: effect.target.count, locationScope: effect.target.location, poolSource: "inPlay" };
     }
     case "reveal":
