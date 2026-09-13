@@ -130,6 +130,18 @@ export function resolveEligibleHandCards(
   actingPlayerId: PlayerId,
 ): CardInstance[] {
   return state.cards.filter((card) => {
+    // A Motorcade card is never a legal candidate here, regardless of the
+    // selector's own kind/faction filter — it has no faction to filter on
+    // (getFaction returns undefined for it) and a bare "play" effect has
+    // no `kind` restriction of its own, so an unfiltered selector (e.g.
+    // Celebrity's reactive-passive window, which restricts to neither a
+    // kind nor a faction) would otherwise let it through. Motorcade is
+    // never "played" via this generic mechanism — it's discarded and
+    // resolved through the dedicated playMotorcade action/reducer path
+    // (move the President, or his post-elimination secondary effect), not
+    // by being placed inPlay as an ordinary card the way this filter's
+    // matches are.
+    if (card.kind === "motorcade") return false;
     if (card.zone !== "hand" || card.controller !== actingPlayerId) return false;
     if (selector.kind && card.kind !== selector.kind) return false;
     if (selector.faction && getFaction(cardData, card) !== selector.faction) return false;

@@ -6,6 +6,7 @@ import type {
   GameState,
   MotorcadeInterceptionWindowFrame,
   PlayerId,
+  ReactivePassiveWindowFrame,
 } from "@rev-day/engine";
 import { describe, expect, it } from "vitest";
 import { decideBotAction } from "./decide";
@@ -2339,5 +2340,51 @@ describe("decideBotAction: Puppet-Master's strategy (plays like Head of Security
     const mid = (): number => 0.5;
     const results = [zero, mid].map((rng) => decideBotAction(filtered, player, cardData, rng));
     expect(results.some((a) => !("cardId" in a) || a.cardId !== motorcade.id)).toBe(true);
+  });
+});
+
+describe("decideBotAction: reactivePassiveWindow (Celebrity/Martyr)", () => {
+  // Regression: this frame's own candidate pool was computed inline here,
+  // independent of the engine's resolveEligibleHandCards/candidateHandCards
+  // (which now explicitly exclude a Motorcade card from any generic "play
+  // a hand card" pool — it's only ever played via the dedicated
+  // playMotorcade action). Celebrity's own window has no faction
+  // restriction at all, so nothing else here would have stopped a
+  // Motorcade card from being offered — and had this not been fixed, the
+  // engine would now reject the resulting playReactive submission outright
+  // (declareEliminateTargets-style validateTargets throw), stranding the
+  // bot mid-turn.
+  it("never offers a Motorcade card as a playReactive candidate, even with no faction restriction", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const player = state.turn.currentPlayerId;
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    state = {
+      ...state,
+      // The Motorcade is the *only* hand card left — isolates the pool so
+      // there's nothing else that could produce a playReactive action,
+      // making "always passes" an unambiguous signal that the pool is
+      // correctly empty (motorcade excluded), not just that some other
+      // rng-driven choice happened to avoid it.
+      cards: state.cards.map((c) => {
+        if (c.id === motorcade.id) return { ...c, zone: "hand" as const, controller: player };
+        if (c.zone === "hand" && c.controller === player) return { ...c, zone: "discard" as const };
+        return c;
+      }),
+      turn: { ...state.turn, currentPlayerId: player, phase: "action" },
+    };
+    const frame: ReactivePassiveWindowFrame = {
+      kind: "reactivePassiveWindow",
+      sourceCardId: "irrelevant-for-this-decision",
+      locationId: state.board[0]!.id,
+      order: [player],
+      nextIndex: 0,
+      // faction omitted entirely — mirrors Celebrity's own unrestricted scope.
+    };
+    state = { ...state, resolutionStack: [frame] };
+    const filtered = filterForPlayer(state, player);
+
+    for (const rng of [zero, near1, (): number => 0.5]) {
+      expect(decideBotAction(filtered, player, cardData, rng)).toEqual({ type: "passReactive" });
+    }
   });
 });

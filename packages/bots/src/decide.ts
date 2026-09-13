@@ -2300,6 +2300,12 @@ function decideReactiveAction(
   rng: Rng,
 ): Action {
   const pool = state.cards.filter((c) => {
+    // Mirrors resolveEligibleHandCards/candidateHandCards (engine) — a
+    // Motorcade card is never a legal playReactive candidate (no faction
+    // of its own, so an unfiltered window like Celebrity's would
+    // otherwise let it through); it's only ever played via the dedicated
+    // playMotorcade action, and the engine now rejects it here.
+    if (c.kind === "motorcade") return false;
     if (c.zone !== "hand" || c.controller !== playerId) return false;
     if (frame.faction && knownFaction(cardData, c) !== frame.faction) return false;
     return true;

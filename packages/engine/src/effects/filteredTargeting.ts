@@ -231,6 +231,13 @@ export function candidateHandCards(
   viewerId: string,
 ): FilteredCardInstance[] {
   return state.cards.filter((card) => {
+    // Mirrors resolveEligibleHandCards (targeting.ts) — a Motorcade card
+    // is never a legal "play" candidate here regardless of the selector's
+    // own kind/faction filter (it has no faction, and an unfiltered
+    // selector like Celebrity's reactive-passive window has no kind
+    // restriction either), since it's never played via this generic
+    // mechanism — only through the dedicated playMotorcade action.
+    if (card.kind === "motorcade") return false;
     if (card.zone !== "hand" || card.controller !== viewerId) return false;
     if (selector.kind && card.kind !== selector.kind) return false;
     if (selector.faction && knownFaction(cardData, card) !== selector.faction) return false;

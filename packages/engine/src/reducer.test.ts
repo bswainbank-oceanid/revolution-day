@@ -2250,6 +2250,27 @@ describe("applyAction: passives", () => {
     expect(state.resolutionStack).toHaveLength(0);
   });
 
+  it("never lets a Motorcade card be played via Celebrity's reactive window, even with no faction restriction", () => {
+    let state = freshGame(["a", "b", "c"]);
+    const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
+    const celebrity = state.cards.find((c) => c.defRef === "Celebrity")!;
+    const motorcade = state.cards.find((c) => c.kind === "motorcade")!;
+    const loc = state.board[0]!.id;
+    const player = state.turn.currentPlayerId;
+    const other = state.players.find((p) => p.id !== player)!.id;
+    state = placeInPlay(state, guard.id, loc, player);
+    state = placeInPlay(state, celebrity.id, loc, other);
+    state = placeInHand(state, motorcade.id, other);
+    state = act(state, player, { type: "draw" });
+    state = act(state, player, { type: "activateAbility", cardId: guard.id, abilityIndex: 0 });
+    state = act(state, player, { type: "chooseTargets", targetIds: [celebrity.id] });
+
+    // Celebrity's window has no faction restriction at all (frame.faction
+    // is undefined) — nothing besides the Motorcade-kind exclusion itself
+    // stops it from otherwise passing straight through.
+    expect(() => act(state, other, { type: "playReactive", cardIds: [motorcade.id] })).toThrow();
+  });
+
   it("Martyr's reactive passive is scoped to its controller only, and only rebel cards", () => {
     let state = freshGame(["a", "b", "c"]);
     const guard = state.cards.find((c) => c.defRef === "Republican Guard")!;
