@@ -263,15 +263,15 @@ h3 {
    very bottom (.check-opponent-turns) — see ActivateAbilityBox.tsx.
    Lives in its own region-actionbox grid cell (GameCanvas.css) — same
    row, and same 250px height, as the hand strip, immediately left of
-   Game Chat/Log. Columns keep their original widths (226px left, 316px
-   right — 226 + 316 + 2*0.75rem padding is exactly region-actionbox's
-   566px column width, so the box fills its region exactly with no
-   leftover gap); each is now a single flex column spanning the full
-   height instead of being split into its own two rows. */
+   Game Chat/Log. Columns are 325px/217px — a 60/40 split, per request —
+   of the 542px available after padding (325 + 217 + 2*0.75rem padding is
+   exactly region-actionbox's 566px column width, so the box fills its
+   region exactly with no leftover gap); each is now a single flex column
+   spanning the full height instead of being split into its own two rows. */
 .activate-ability-box {
   height: 100%;
   display: grid;
-  grid-template-columns: 226px 316px;
+  grid-template-columns: 325px 217px;
   grid-template-rows: 1fr;
   padding: 0.75rem;
   box-sizing: border-box;
