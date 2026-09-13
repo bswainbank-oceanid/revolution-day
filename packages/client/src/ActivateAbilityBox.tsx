@@ -129,6 +129,17 @@ interface ActivateAbilityBoxProps {
   // "choose a location" hint instead.
   readonly moveModeCardId: string | null;
   readonly onStartMove: (cardId: string) => void;
+  // Motorcade's post-elimination secondary effect ("move a card you
+  // control to any location") — same moveModeCardId/"choose a highlighted
+  // location or click elsewhere to cancel" mechanic as onStartMove above
+  // (isMovingThisCard below doesn't care which one started it), just
+  // unrestricted by adjacency and paid for by discarding a Motorcade card
+  // from hand instead of the normal action budget. This component only
+  // decides whether to *show* the button (President eliminated, a real
+  // turn action available, and a Motorcade card actually in hand) —
+  // App.tsx owns which Motorcade card gets spent (any one — they're
+  // fungible) and the resulting playMotorcade dispatch.
+  readonly onStartMotorcadeMove: (cardId: string, motorcadeHandCardId: string) => void;
   // Why the last submitted action was rejected (useGame.ts's own
   // actionError — a 400 from applyAction, an actual illegal move, not a
   // network/session problem) — takes over the action stack instead of
@@ -166,6 +177,7 @@ export function ActivateAbilityBox({
   actionPlayerId,
   moveModeCardId,
   onStartMove,
+  onStartMotorcadeMove,
   actionError,
 }: ActivateAbilityBoxProps) {
   const {
@@ -436,8 +448,27 @@ export function ActivateAbilityBox({
     // pays for it (see App.tsx's own comment on cardQualifiesForPlayGrant),
     // so this doesn't need the activate-grant carve-out canActivate has.
     const canMove = !!card && card.defRef !== null && isOwnCard && canTakeTurnAction && state.turn.actionsRemaining > 0;
+    // Motorcade's post-elimination secondary effect — same budget/turn
+    // gating as playing any hand card (see App.tsx's playMotorcade
+    // reducer.ts guard: normal action budget only, no restricted grant
+    // ever covers a Motorcade), plus its own two extra conditions: the
+    // President must actually be eliminated (otherwise Motorcade does its
+    // primary effect instead — advance him — which is played by dragging
+    // it from hand, not from here), and a Motorcade card must actually be
+    // in hand to spend. Which one gets spent doesn't matter (fungible).
+    const hasTakenFirstTurn = state.players.find((p) => p.id === humanPlayerId)?.hasTakenFirstTurn ?? false;
+    const motorcadeInHand = hasTakenFirstTurn
+      ? state.cards.find((c) => c.kind === "motorcade" && c.zone === "hand" && c.controller === humanPlayerId)
+      : undefined;
+    const canMoveViaMotorcade =
+      !!card &&
+      isOwnCard &&
+      canTakeTurnAction &&
+      state.turn.actionsRemaining > 0 &&
+      state.president.status === "eliminated" &&
+      !!motorcadeInHand;
     const isMovingThisCard = !!card && moveModeCardId === card.id;
-    const hasAnyOption = abilities.length > 0 || canMove;
+    const hasAnyOption = abilities.length > 0 || canMove || canMoveViaMotorcade;
 
     abilityActions = (
       <>
@@ -464,6 +495,16 @@ export function ActivateAbilityBox({
             {canMove && (
               <button type="button" className="ability-button" disabled={disabled} onClick={() => onStartMove(card.id)}>
                 Move
+              </button>
+            )}
+            {canMoveViaMotorcade && (
+              <button
+                type="button"
+                className="ability-button"
+                disabled={disabled}
+                onClick={() => onStartMotorcadeMove(card.id, motorcadeInHand!.id)}
+              >
+                Move Anywhere (play Motorcade)
               </button>
             )}
           </>

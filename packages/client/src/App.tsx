@@ -133,6 +133,13 @@ function App() {
   // explicit cancel (CityView's onCancelMove), or implicitly by selectCard
   // below the moment a *different* card gets viewed.
   const [moveCardId, setMoveCardId] = useState<string | null>(null);
+  // Non-null only when the pending move above is actually the Motorcade's
+  // post-elimination secondary effect ("move a card you control to any
+  // location") rather than a normal Move — holds the hand Motorcade card's
+  // id to spend once a destination is chosen. Null means moveCardId (if
+  // set at all) is a normal, action-budget, adjacency-only move. Cleared
+  // alongside moveCardId everywhere that resets it.
+  const [motorcadeCardId, setMotorcadeCardId] = useState<string | null>(null);
   const selection = useTargetSelection(session?.state ?? null, session?.humanPlayerId ?? null, act);
   const handleCamera = useCallback(
     (target: CameraTarget) => {
@@ -180,7 +187,13 @@ function App() {
       // Viewing a different card while a move is pending reads as "never
       // mind" — same "elsewhere" cancellation CityView's own clicks give
       // the move (see onCancelMove below).
-      setMoveCardId((prev) => (prev && prev !== card.id ? null : prev));
+      setMoveCardId((prev) => {
+        if (prev && prev !== card.id) {
+          setMotorcadeCardId(null);
+          return null;
+        }
+        return prev;
+      });
       if (card.zone === "inPlay" && card.locationId) goToLocation(card.locationId);
     },
     [goToLocation],
@@ -331,22 +344,49 @@ function App() {
     playGrantActive && (playGrant!.faction === null || knownFaction(cardData, card) === playGrant!.faction);
   // The "Move" button's own pending selection — same adjacency rule as a
   // dragged in-play card (see allowedDropLocationIds below), just driven
-  // by a click-to-start button instead of a drag gesture.
+  // by a click-to-start button instead of a drag gesture. Doubles as the
+  // Motorcade's post-elimination secondary effect ("move a card you
+  // control to any location") when motorcadeCardId is also set — same
+  // pending-destination mechanic, just with the adjacency restriction
+  // lifted and a different action dispatched on completion (see
+  // chooseMoveTarget below).
   const moveModeActive = moveCardId !== null;
   const moveCard = moveCardId ? resolveCard(state, moveCardId) : null;
   const moveCandidateLocationIds = new Set<string>();
-  if (moveCard?.zone === "inPlay" && moveCard.locationId) {
+  if (motorcadeCardId) {
+    for (const l of state.board) moveCandidateLocationIds.add(l.id);
+  } else if (moveCard?.zone === "inPlay" && moveCard.locationId) {
     for (const id of adjacentLocationIds(state.board, moveCard.locationId)) moveCandidateLocationIds.add(id);
   }
   const startMove = (cardId: string) => {
     setMoveCardId(cardId);
+    setMotorcadeCardId(null);
+    goToCity();
+  };
+  // The human already views/selects the in-play card being moved before
+  // this fires (same as the normal Move button) — no separate "which
+  // card" step needed. `motorcadeCardId` is whichever Motorcade card in
+  // hand will be spent; which one doesn't matter, they're fungible.
+  const startMotorcadeMove = (cardId: string, motorcadeHandCardId: string) => {
+    setMoveCardId(cardId);
+    setMotorcadeCardId(motorcadeHandCardId);
     goToCity();
   };
   const chooseMoveTarget = (locationId: string) => {
-    if (moveCardId && moveCandidateLocationIds.has(locationId)) act({ type: "moveCard", cardId: moveCardId, toLocationId: locationId });
+    if (moveCardId && moveCandidateLocationIds.has(locationId)) {
+      if (motorcadeCardId) {
+        act({ type: "playMotorcade", cardId: motorcadeCardId, moveOwnCardId: moveCardId, moveToLocationId: locationId });
+      } else {
+        act({ type: "moveCard", cardId: moveCardId, toLocationId: locationId });
+      }
+    }
     setMoveCardId(null);
+    setMotorcadeCardId(null);
   };
-  const cancelMove = () => setMoveCardId(null);
+  const cancelMove = () => {
+    setMoveCardId(null);
+    setMotorcadeCardId(null);
+  };
 
   const canDrag = (card: FilteredCardInstance): boolean =>
     !interactionLocked &&
@@ -358,7 +398,7 @@ function App() {
       : state.turn.actionsRemaining > 0) &&
     card.controller === humanPlayerId &&
     card.defRef !== null &&
-    (card.kind !== "motorcade" || hasTakenFirstTurn) &&
+    (card.kind !== "motorcade" || (hasTakenFirstTurn && state.president.status !== "eliminated")) &&
     (card.zone === "hand" || card.zone === "inPlay");
 
   // Highlighting is exact, not trial-and-error: a hand card's legal
@@ -368,7 +408,12 @@ function App() {
   // highlights every location, since the drop location is never actually
   // used (only where you release the drag, as a "play it" gesture) — a
   // Motorcade never qualifies for a restricted play grant anyway (no
-  // faction of its own), same as under the old encoding.
+  // faction of its own), same as under the old encoding. Only draggable at
+  // all pre-elimination (see canDrag above) — post-elimination its
+  // secondary effect has a real destination that matters (which of your
+  // own cards, and where), so it's played via ActivateAbilityBox's "Move
+  // via Motorcade" button instead (reusing the Move flow's own
+  // destination-pick, see startMotorcadeMove/chooseMoveTarget).
   const allowedDropLocationIds = new Set<string>();
   if (draggedCard?.kind === "motorcade") {
     for (const l of state.board) allowedDropLocationIds.add(l.id);
@@ -441,6 +486,7 @@ function App() {
           actionPlayerId={actionPlayerId}
           moveModeCardId={moveCardId}
           onStartMove={startMove}
+          onStartMotorcadeMove={startMotorcadeMove}
           actionError={actionError}
         />
       }
