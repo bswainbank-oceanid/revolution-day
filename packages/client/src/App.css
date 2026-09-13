@@ -520,10 +520,22 @@ h3 {
 
 .location-view-bg {
   cursor: pointer;
-  /* Safety net, not the normal case: if a location ever has enough
-     stacked player clusters that the grid's content genuinely needs more
-     than the 85% height below the heading, this pane scrolls instead of
-     silently clipping cards against region-center's own overflow:hidden. */
+  /* Flex column so the header sizes to its own real content
+     (location-view-header is flex:0 0 auto) and the grid gets exactly
+     whatever height is actually left (location-view-grid is flex:1) —
+     replaces an earlier fixed "height:92%" on the grid, which assumed a
+     constant header footprint. The header's real height varies (the
+     Return button only renders when not mid-pick), so that fixed 92%
+     was sometimes a few px more than the pane's true remaining space,
+     forcing this pane to scroll on essentially every visit rather than
+     only when content genuinely warranted it. overflow-y stays as a
+     last-resort safety net — if a location ever has enough stacked
+     player clusters that the grid's own content still exceeds its
+     flex-allotted share, this pane scrolls instead of silently clipping
+     cards against region-center's own overflow:hidden — but no longer
+     fires in the ordinary case. */
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
 }
 /* The strip above the grid is the *entire* actually-clickable area (the
@@ -535,6 +547,7 @@ h3 {
    padding via negative margins so the tinted band really does span the
    same full width the click actually covers. */
 .location-view-header {
+  flex: 0 0 auto;
   padding: 0.4rem 0.5rem;
   margin: -0.5rem -0.5rem 0;
 }
@@ -602,7 +615,14 @@ h3 {
   align-content: start;
   row-gap: 20px;
   column-gap: 0;
-  height: 92%;
+  /* Was a fixed "92%" guess at the leftover space below the header — see
+     .location-view-bg's own comment for why that forced a scrollbar on
+     essentially every visit. flex:1 (location-view-bg is now a flex
+     column) sizes this to whatever's actually left after the header,
+     exactly, so align-content:start's own "don't stretch row 2" still
+     holds without the grid's own box being oversized to begin with. */
+  flex: 1;
+  min-height: 0;
   cursor: default;
 }
 .location-image-wrap {
