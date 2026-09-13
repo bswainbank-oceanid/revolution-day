@@ -84,12 +84,17 @@ interface ActivateAbilityBoxProps {
   readonly initialState: FilteredGameState;
   readonly act: (action: Action) => void;
   readonly selection: ReturnType<typeof useTargetSelection>;
-  // While bot-turn playback is stepping, `state` here is the currently-
-  // narrated intermediate state, not the true pending decision — showing
-  // its resolutionStack-derived branches (Pass, Done, ...) would be
-  // misleading even though they're disabled, so this takes over first.
-  // While playing, `playbackCaption` carries the "who/how targeted" text
-  // for whatever the Card Viewer is currently showing.
+  // True while playback is narrating a beat that isn't the human's own to
+  // keep acting through (an opponent's beat, or a turn-boundary reset —
+  // see useTurnPlayback's own locksInteraction) — `state` here is the
+  // currently-narrated intermediate state then, not the true pending
+  // decision, so showing its resolutionStack-derived branches (Pass,
+  // Done, ...) would be misleading even though they're disabled; this
+  // takes over first. False for the human's own beats even while one is
+  // technically still pacing in the background, so their own real
+  // buttons stay live throughout their own turn. While true,
+  // `playbackCaption` carries the "who/how targeted" text for whatever
+  // the Card Viewer is currently showing.
   readonly isPlaying?: boolean;
   readonly playbackCaption?: string | null;
   // True while a previous action is still in flight — every button here

@@ -158,6 +158,11 @@ interface Beat {
   // activations, targets, alarm responses, a later *voluntary* draw spent
   // from actionsRemaining) still pauses.
   readonly skipPause: boolean;
+  // True only for the synthetic turn-start-to-City-View reset beat below
+  // — it names no card and has nothing to actually look at, so it always
+  // advances immediately regardless of whose entry it's attributed to
+  // (see the main pacing effect's own use of this).
+  readonly isTurnBoundary: boolean;
 }
 
 // A "chain" tracks one still-open cascade of resolution (an ability that
@@ -214,6 +219,7 @@ function buildBeats(
         cameraTarget: computeCameraTarget(entry, priorState, viewerCardId),
         caption,
         skipPause: isOpeningDraw,
+        isTurnBoundary: false,
       });
     });
 
@@ -231,6 +237,7 @@ function buildBeats(
           cameraTarget: computeCameraTarget(entry, priorState, closed.initiatorCardId),
           caption: null,
           skipPause: false,
+          isTurnBoundary: false,
         });
       }
     }
@@ -253,8 +260,20 @@ function buildBeats(
     const priorCurrentPlayerId = i > 0 ? log[i - 1]!.resultingState.turn.currentPlayerId : null;
     const newCurrentPlayerId = entry.resultingState.turn.currentPlayerId;
     if (i > 0 && priorCurrentPlayerId !== humanPlayerId && newCurrentPlayerId === humanPlayerId) {
-      beats.push({ entryIndex: i, viewerCardId: null, cameraTarget: { kind: "city" }, caption: null, skipPause: true });
+      beats.push({ entryIndex: i, viewerCardId: null, cameraTarget: { kind: "city" }, caption: null, skipPause: true, isTurnBoundary: true });
       turnStartCount++;
+    }
+
+    // The reverse boundary — leaving the human's own turn (their last
+    // action already earned its own real pacing delay, see
+    // isHumanBeatBeforeHandoff below) — also resets to City View, so the
+    // camera doesn't jump straight from their own card's location to
+    // wherever the next player's first action happens with no transition
+    // at all. Not counted in turnStartCount — that signal is specifically
+    // for "a new turn started *for the human*" (App.tsx's own resting-view
+    // reset), not this one.
+    if (priorCurrentPlayerId === humanPlayerId && newCurrentPlayerId !== humanPlayerId) {
+      beats.push({ entryIndex: i, viewerCardId: null, cameraTarget: { kind: "city" }, caption: null, skipPause: true, isTurnBoundary: true });
     }
   }
 
@@ -265,9 +284,22 @@ export interface TurnPlaybackResult {
   // Never null once a session exists — falls back to the true final state
   // whenever playback has nothing (yet) to narrate.
   readonly displayState: FilteredGameState | null;
-  // True while stepping through beats — callers should lock manual
-  // navigation/interaction for this window.
+  // True while stepping through beats at all — camera ownership, the
+  // resting-view-reset effects, and the Game Over screen's own timing all
+  // key off this broad signal, regardless of whose beat it is. It does
+  // *not* mean interaction should be locked, though — see
+  // locksInteraction below for that specific question.
   readonly isPlaying: boolean;
+  // True only while the *current* beat genuinely isn't the human's own to
+  // keep acting through — an opponent's beat, or a turn-boundary reset
+  // (see Beat.isTurnBoundary). False for the human's own action beats
+  // even while isPlaying is still true and one is technically pacing in
+  // the background — they should never be blocked from immediately
+  // taking their next action just because a prior beat of their own
+  // hasn't finished its own (possibly still-undetermined, see
+  // isHumanBeatBeforeHandoff) hold yet. This is what callers should
+  // actually gate manual navigation/interaction on.
+  readonly locksInteraction: boolean;
   // Overrides the Card Viewer's own selection while a beat names a card;
   // null when there's nothing to override (fall back to normal viewing).
   readonly playbackViewerCardId: string | null;
@@ -359,28 +391,69 @@ export function useTurnPlayback(
   const awaitingContinue = checkOpponentTurns && !!currentBeat && isOpponentBeat && !currentBeat.skipPause;
   const continueBeat = useCallback(() => setBeatIndex((i) => i + 1), []);
 
+  // A human beat only earns the real pacing delay once it's the *last*
+  // one before control passes to someone else (or play just ends here) —
+  // between their own consecutive actions (draw, then play, then play
+  // again), there's nothing to wait for: they already know what they just
+  // did, and an artificial hold there only makes them wait a second time,
+  // after the fact, for no reason. The moment the *next* beat belongs to
+  // a different actor, though, this is the one beat where they should get
+  // a real moment to see their own last move before the view changes —
+  // so this still needs the full delay, same as any bot beat.
+  //
+  // "Departing" can't just compare actingPlayerId, though: the automatic
+  // end-of-turn action once actionsRemaining hits 0 (see useGame.ts's
+  // runUntilHumanDecision) is still submitted *as* the human — it's the
+  // one that actually flips turn.currentPlayerId away from them, and it
+  // produces no beat of its own, but the synthetic "leaving the human's
+  // turn" beat built for it right above shares its actingPlayerId too.
+  // Comparing plain actorId would see that beat as "same actor, keep
+  // going" and wrongly skip the delay on the human's real last action.
+  // isTurnBoundary is the reliable signal instead — it's true for that
+  // beat regardless of whose entry it's attributed to.
+  const nextBeat = beatIndex + 1 < beats.length ? beats[beatIndex + 1] : null;
+  const nextEntry = nextBeat && log ? log[nextBeat.entryIndex] : null;
+  const isDeparting =
+    !nextBeat || nextBeat.isTurnBoundary || (!!nextEntry && !!currentEntry && nextEntry.actingPlayerId !== currentEntry.actingPlayerId);
+  const isHumanBeatBeforeHandoff = !isOpponentBeat && !currentBeat?.isTurnBoundary && !!currentEntry && isDeparting;
+
   useEffect(() => {
     if (!currentBeat) return;
     onCamera(currentBeat.cameraTarget);
     if (checkOpponentTurns && isOpponentBeat && !currentBeat.skipPause) return; // paused — advanced only by continueBeat()
     const advance = () => setBeatIndex((i) => i + 1);
     if (PACING_DELAY_MS === 0) {
-      advance();
+      advance(); // test mode — fully synchronous, no yield, for speed
       return;
     }
-    const timer = setTimeout(advance, PACING_DELAY_MS);
+    // The synthetic turn-start-to-City-View beat names no card and has
+    // nothing to actually look at — it never earns its own delay, no
+    // matter whose entry it's attributed to (see Beat.isTurnBoundary's
+    // own comment); a bot's own beat always does (so the human can watch
+    // and follow what it did); a human's own beat only does at the
+    // handoff point described above.
+    //
+    // Always routed through setTimeout, never a synchronous advance() —
+    // even a "no delay" beat still needs to yield to the event loop (and
+    // so to a real browser paint) before the next one replaces it, or two
+    // fast beats back to back can get batched into a single render with
+    // no paint in between, and the first one's camera move never actually
+    // becomes visible.
+    const shouldPace = !currentBeat.isTurnBoundary && (isOpponentBeat || isHumanBeatBeforeHandoff);
+    const timer = setTimeout(advance, shouldPace ? PACING_DELAY_MS : 0);
     return () => clearTimeout(timer);
     // Deliberately keyed only on progress through the beat queue (plus
-    // checkOpponentTurns/isOpponentBeat, which gate whether this effect
-    // schedules anything at all), not on onCamera's identity (App.tsx's
-    // closure changes every render).
+    // checkOpponentTurns/isOpponentBeat/isHumanBeatBeforeHandoff, which
+    // gate whether this effect schedules anything at all), not on
+    // onCamera's identity (App.tsx's closure changes every render).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beatIndex, beats.length, checkOpponentTurns, isOpponentBeat]);
+  }, [beatIndex, beats.length, checkOpponentTurns, isOpponentBeat, isHumanBeatBeforeHandoff]);
 
   if (!log || !finalState || !humanPlayerId) {
     return {
       displayState: null,
       isPlaying: false,
+      locksInteraction: false,
       playbackViewerCardId: null,
       playbackCaption: null,
       playbackActorId: null,
@@ -394,6 +467,7 @@ export function useTurnPlayback(
   const displayEntryIndex = currentBeat ? currentBeat.entryIndex : beatIndex > 0 ? beats[beatIndex - 1]!.entryIndex : -1;
   const displayState = displayEntryIndex >= 0 ? (log[displayEntryIndex]?.resultingState ?? finalState) : finalState;
   const isPlaying = beatIndex < beats.length;
+  const locksInteraction = !!currentBeat && (isOpponentBeat || currentBeat.isTurnBoundary);
   const playbackViewerCardId = currentBeat ? currentBeat.viewerCardId : null;
   const playbackCaption = currentBeat ? currentBeat.caption : null;
   // Reveal only through whichever entry the *currently shown* beat
@@ -406,6 +480,7 @@ export function useTurnPlayback(
   return {
     displayState,
     isPlaying,
+    locksInteraction,
     playbackViewerCardId,
     playbackCaption,
     playbackActorId,

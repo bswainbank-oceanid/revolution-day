@@ -242,7 +242,13 @@ function App() {
 
   const { humanPlayerId, botPlayerIds, startingPlayerId, log } = session;
   const state = playback.displayState ?? session.state;
-  const interactionLocked = loading || playback.isPlaying;
+  // Not playback.isPlaying directly — that's true for the human's own
+  // beats too, even while one is technically still pacing in the
+  // background (see isHumanBeatBeforeHandoff's own comment); they should
+  // never be blocked from acting again just because of that. locksInteraction
+  // is false for exactly those beats, true for an opponent's or a
+  // turn-boundary reset.
+  const interactionLocked = loading || playback.locksInteraction;
   // Whoever is "acting" right now — the current beat's actor while
   // playback narrates it, otherwise decider(state)'s real pending
   // decision (the current player, or whoever's responding/intercepting/
@@ -389,7 +395,7 @@ function App() {
           initialState={session.initialState}
           act={act}
           selection={selection}
-          isPlaying={playback.isPlaying}
+          isPlaying={playback.locksInteraction}
           playbackCaption={playback.playbackCaption}
           disabled={interactionLocked || moveModeActive}
           checkOpponentTurns={checkOpponentTurns}

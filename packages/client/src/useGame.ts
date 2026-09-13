@@ -193,8 +193,22 @@ export function useGame(): UseGameResult {
           setSession({ ...session, state: result.state, gameOver: result.gameOver, log: [...session.log, ownEntry] });
           return;
         }
+        // Show the human's own result the moment *its own* request comes
+        // back, rather than waiting on runUntilHumanDecision too — that
+        // call can make several more round-trips of its own (one bot turn
+        // at a time, however many bots there are) before it's the human's
+        // turn again, and bundling all of that into a single state update
+        // meant their own card only ever appeared already bundled together
+        // with everything every bot did afterward, with no way to show it
+        // separately first. useTurnPlayback's own beat-by-beat pacing only
+        // gets a chance to work correctly if these arrive as two separate
+        // log updates, not one.
+        setSession({ ...session, state: result.state, gameOver: null, log: [...session.log, ownEntry] });
         const { state, gameOver, entries } = await runUntilHumanDecision(session.gameId, session.humanPlayerId, result.state);
-        setSession({ ...session, state, gameOver, log: [...session.log, ownEntry, ...entries] });
+        // Functional form — session has already moved on from the
+        // `session` this closure captured (the update just above), so
+        // building on that stale value here would silently drop it.
+        setSession((prev) => (prev ? { ...prev, state, gameOver, log: [...prev.log, ...entries] } : prev));
       } catch (err) {
         // A 400 is applyAction rejecting the specific move just attempted
         // (an illegal action, not a session problem) — the Action Box
