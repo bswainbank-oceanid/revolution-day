@@ -247,91 +247,99 @@ h3 {
   font-size: 0.9rem;
   line-height: 1;
 }
-/* 2x2 grid: TL current player/actions remaining, BL turn-flow controls,
-   TR live resolution-stack breadcrumb (or last action), BR the pending
-   choice's own buttons — see ActivateAbilityBox.tsx. Lives in its own
-   region-actionbox grid cell (GameCanvas.css) now — same row, and same
-   250px height, as the hand strip, immediately left of Game Chat/Log —
-   rather than stacked under Card Viewer in the left column. TL/BL keep
-   their original ~226px width; TR/BR are 40% wider (226 * 1.4 ≈ 316px) —
-   226px + 316px + 2*0.75rem padding is exactly region-actionbox's 566px
-   column width, so the box fills its region exactly with no leftover
-   gap. The much shorter available height (was ~655px shared with Card
-   Viewer's column, now a flat 250px) is why every quadrant scrolls its
-   own overflow rather than assuming it'll always fit. */
+/* Two sections, per request (merged down from an earlier 2x2 quadrant
+   layout): Left is "Actions" — the pending choice's own buttons on top
+   (.activate-ability-actions), Draw/End Turn anchored underneath
+   (.activate-ability-turn-flow). Right is "Info" — current
+   player/actions remaining on top (.activate-ability-status), the live
+   resolution-stack breadcrumb (or last action) below that
+   (.activate-ability-stack), and Check Opponent's Turns locked to the
+   very bottom (.check-opponent-turns) — see ActivateAbilityBox.tsx.
+   Lives in its own region-actionbox grid cell (GameCanvas.css) — same
+   row, and same 250px height, as the hand strip, immediately left of
+   Game Chat/Log. Columns keep their original widths (226px left, 316px
+   right — 226 + 316 + 2*0.75rem padding is exactly region-actionbox's
+   566px column width, so the box fills its region exactly with no
+   leftover gap); each is now a single flex column spanning the full
+   height instead of being split into its own two rows. */
 .activate-ability-box {
   height: 100%;
   display: grid;
   grid-template-columns: 226px 316px;
-  /* Row 1 (TL/TR) used to be "auto" — sized to fit its own content, which
-     meant a tall TL/TR (a multi-line breadcrumb, the gold President/
-     leader-eliminated announcement) stole height from row 2's 1fr,
-     leaving Draw/End Turn/Check Opponent's Turns squeezed into needing a
-     scrollbar of their own. A fixed row 1 height guarantees row 2 always
-     gets the rest of the box, no matter what row 1 is showing — row 1
-     scrolls internally instead (already had overflow-y:auto) in the rare
-     case its own content doesn't fit 84px. */
-  grid-template-rows: 84px 1fr;
+  grid-template-rows: 1fr;
   padding: 0.75rem;
   box-sizing: border-box;
 }
-.activate-ability-tl {
+.activate-ability-left {
   grid-column: 1;
   grid-row: 1;
-  padding: 0 0.6rem 0.5rem 0;
-  border-right: 1px solid var(--border-white);
-  border-bottom: 1px solid var(--border-white);
-  min-height: 0;
-  overflow-y: auto;
-}
-.activate-ability-bl {
-  grid-column: 1;
-  grid-row: 2;
-  padding: 0.5rem 0.6rem 0 0;
+  padding: 0 0.6rem 0 0;
   border-right: 1px solid var(--border-white);
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
 }
-.activate-ability-tr {
+.activate-ability-actions {
+  /* A long Response/Activate Ability button list scrolls within this
+     section instead of falling off the bottom of the (fixed-height,
+     overflow:hidden) region-actionbox. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.1rem;
+}
+.activate-ability-turn-flow {
+  flex: 0 0 auto;
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--border-white);
+  display: flex;
+  flex-direction: column;
+}
+.activate-ability-right {
   grid-column: 2;
   grid-row: 1;
-  padding: 0 0 0.5rem 0.6rem;
-  border-bottom: 1px solid var(--border-white);
+  padding: 0 0 0 0.6rem;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+}
+/* A fixed-ish (flex:0 0 auto, own scroll if it somehow overflows) block
+   rather than "auto" so a tall status (a multi-line breadcrumb, the gold
+   President/leader-eliminated announcement) can't steal all the room
+   the stack below it needs — mirrors the same reasoning the old fixed
+   84px row used. */
+.activate-ability-status {
+  flex: 0 0 auto;
+  max-height: 40%;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-white);
+  overflow-y: auto;
+  text-align: center;
+}
+.activate-ability-stack {
+  flex: 1;
+  min-height: 0;
+  padding: 0.5rem 0;
   overflow-y: auto;
 }
 /* .hint's own font-size rule would otherwise win over inheriting this
-   quadrant's smaller size (an element's own matching rule always beats
+   section's smaller size (an element's own matching rule always beats
    an ancestor's, regardless of specificity) — shrunk explicitly here,
-   same reasoning as the fixed row-1 height above: this quadrant has far
-   less room than .hint's other contexts (Bottom Right, the Game Log). */
-.activate-ability-tr .hint {
+   same reasoning as .activate-ability-status's own max-height: this
+   section has far less room than .hint's other contexts (Actions, the
+   Game Log). */
+.activate-ability-stack .hint {
   font-size: 0.75rem;
 }
 /* Sized down from the shared 1.15rem — that size was tuned for the Game
-   Log's much roomier column, not this quadrant's fixed 84px row (see
-   .activate-ability-box's grid-template-rows). Selector specificity
-   (two classes vs. one) is what lets this win over the shared rule
-   despite both using !important. */
-.activate-ability-tr .president-eliminated-line,
-.activate-ability-tr .leader-eliminated-line {
+   Log's much roomier column, not this section's own tight budget.
+   Selector specificity (two classes vs. one) is what lets this win over
+   the shared rule despite both using !important. */
+.activate-ability-stack .president-eliminated-line,
+.activate-ability-stack .leader-eliminated-line {
   font-size: 0.85rem !important;
-}
-.activate-ability-br {
-  grid-column: 2;
-  grid-row: 2;
-  padding: 0.5rem 0 0 0.6rem;
-  min-width: 0;
-  /* A long Response/Activate Ability button list scrolls within this
-     quadrant instead of falling off the bottom of the (fixed-height,
-     overflow:hidden) region-actionbox — needs min-height:0 too, since a
-     grid item's default min-height is its content's own size, which
-     would otherwise defeat overflow-y here entirely. */
-  min-height: 0;
-  overflow-y: auto;
 }
 .ability-button {
   display: block;
@@ -937,6 +945,11 @@ h3 {
   margin-top: 0.4rem;
 }
 .check-opponent-turns {
+  /* Locked to the bottom of .activate-ability-right's own flex column —
+     flex:0 0 auto keeps it from ever shrinking to make room for
+     .activate-ability-stack above it, which has the flexible space and
+     its own scroll instead. */
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;

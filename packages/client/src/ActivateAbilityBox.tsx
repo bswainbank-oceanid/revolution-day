@@ -35,10 +35,10 @@ function frameActorId(frame: ResolutionFrame): PlayerId {
   return frame.kind === "abilityResolution" ? frame.actingPlayerId : frame.order[frame.nextIndex]!;
 }
 
-// One breadcrumb line per resolution-stack frame — "current action stack"
-// in the Upper Right quadrant. Deliberately terse (this is a small
-// sidebar, not the Game Log): names the card where one's involved, and
-// who the *next* decision in that frame belongs to.
+// One breadcrumb line per resolution-stack frame — the Info section's own
+// "current action stack". Deliberately terse (this is a small sidebar,
+// not the Game Log): names the card where one's involved, and who the
+// *next* decision in that frame belongs to.
 function describeFrame(
   state: FilteredGameState,
   frame: ResolutionFrame,
@@ -73,7 +73,7 @@ interface ActivateAbilityBoxProps {
   // needed to number every other player by turn order (see players.ts's
   // playerLabel), not raw seatIndex.
   readonly startingPlayerId: PlayerId;
-  // For the Upper Right quadrant's "most recent action" fallback once the
+  // For the action stack's "most recent action" fallback once the
   // resolution stack is empty — see describeFrame's own comment for the
   // stack-non-empty case.
   readonly log: readonly LogEntry[];
@@ -106,8 +106,8 @@ interface ActivateAbilityBoxProps {
   readonly disabled?: boolean;
   // "Check Opponent's Turns" — see useTurnPlayback's own comments. A
   // persistent setting, not tied to any particular pending decision, so
-  // it (and the Continue button it reveals) renders in a fixed spot in
-  // the Bottom Left quadrant regardless of which branch below is active.
+  // it (and the Continue button it reveals) renders locked to the bottom
+  // of the Info section regardless of which branch below is active.
   readonly checkOpponentTurns: boolean;
   readonly onCheckOpponentTurnsChange: (checked: boolean) => void;
   readonly awaitingContinue: boolean;
@@ -115,9 +115,9 @@ interface ActivateAbilityBoxProps {
   // The current player, or whoever's responding/intercepting/reacting
   // mid-turn (App.tsx's own decider()/playbackActorId resolution) — the
   // whole box's base text color, matching the Game Log's own per-line
-  // color-coding. The Upper Right breadcrumb overrides this per line,
-  // since a nested frame can belong to a *different* player than the one
-  // who opened it.
+  // color-coding. The action stack's own breadcrumb overrides this per
+  // line, since a nested frame can belong to a *different* player than
+  // the one who opened it.
   readonly actionPlayerId: PlayerId;
   // The "Move" entry in the ability list — moveModeCardId is App.tsx's
   // own client-only pending state (non-null while CityView is showing
@@ -131,20 +131,21 @@ interface ActivateAbilityBoxProps {
   readonly onStartMove: (cardId: string) => void;
   // Why the last submitted action was rejected (useGame.ts's own
   // actionError — a 400 from applyAction, an actual illegal move, not a
-  // network/session problem) — takes over the Upper Right quadrant
-  // instead of failing silently, until the next action attempt clears it.
+  // network/session problem) — takes over the action stack instead of
+  // failing silently, until the next action attempt clears it.
   readonly actionError?: string | null;
 }
 
-// Four fixed quadrants (per the user's own spec): Upper Left is who's
-// deciding and their remaining actions: Bottom Left is turn-level flow
-// (Draw/End Turn, Check Opponent's Turns) — both always rendered
-// regardless of what's pending, same as the old always-visible status
-// header. Upper Right is the current action log (the resolution stack as
-// a breadcrumb, or just the most recent logged action once it's empty).
-// Bottom Right is whatever's actually clickable about the pending
-// decision — ability/response/intercept buttons and their explanatory
-// heading/hints.
+// Two sections (per the user's own spec, merged down from an earlier
+// 2x2 quadrant layout): Left is "Actions" — whatever's actually
+// clickable about the pending decision (ability/response/intercept
+// buttons and their explanatory heading/hints) on top, with turn-level
+// flow (Draw/End Turn) anchored underneath it, always rendered
+// regardless of what's pending. Right is "Info" — who's deciding and
+// their remaining actions on top, the live action stack (the resolution
+// stack as a breadcrumb, or just the most recent logged action once it's
+// empty) below that, and Check Opponent's Turns locked to the very
+// bottom, below everything else.
 export function ActivateAbilityBox({
   card,
   state,
@@ -193,18 +194,18 @@ export function ActivateAbilityBox({
   const turnsLeftText =
     actionPlayerId === humanPlayerId && state.turn.currentPlayerId === humanPlayerId ? endgameTurnsLeftText(state) : null;
 
-  // Upper Left: always visible — actions-remaining context doesn't
+  // Right, top: always visible — actions-remaining context doesn't
   // disappear just because a pick/alarm/intercept window opened on top
   // of it.
-  const upperLeft = (
+  const turnStatus = (
     <div className="activate-ability-status">
       <p className="current-player-label">{playerLabel(state, actionPlayerId, humanPlayerId, botPlayerIds, startingPlayerId)}</p>
       <div className="actions-remaining-row">
         <p className="actions-remaining-label">ACTIONS REMAINING</p>
         {/* Shares the label's own line instead of stacking below it — a
-            separate line pushed this quadrant's content past its fixed
-            84px row height (see .activate-ability-box's own grid-
-            template-rows comment), forcing it to scroll internally. */}
+            separate line pushed this section's content past its fixed
+            height (see .activate-ability-status's own comment), forcing
+            it to scroll internally. */}
         {turnsLeftText && <span className="endgame-turns-left">{turnsLeftText}</span>}
       </div>
       <p className="actions-remaining-count">{state.turn.actionsRemaining}</p>
@@ -214,12 +215,11 @@ export function ActivateAbilityBox({
     </div>
   );
 
-  // Bottom Left: "Your Turn Options" — Draw/End Turn are always rendered
-  // (disabled via the same canDraw/canEndTurn either way), not only in
-  // the default no-pending-decision branch, so this quadrant's contents
-  // never shift around; Check Opponent's Turns is the same
-  // persistent-setting reasoning as before.
-  const bottomLeft = (
+  // Left, bottom: "Your Turn Options" — Draw/End Turn are always
+  // rendered (disabled via the same canDraw/canEndTurn either way), not
+  // only in the default no-pending-decision branch, so this section's
+  // contents never shift around.
+  const turnFlowButtons = (
     <>
       <button type="button" className="flow-button" disabled={disabled || !canDraw} onClick={() => act({ type: "draw" })}>
         Draw
@@ -227,25 +227,27 @@ export function ActivateAbilityBox({
       <button type="button" className="flow-button" disabled={disabled || !canEndTurn} onClick={() => act({ type: "endTurn" })}>
         End Turn
       </button>
-      <div className="check-opponent-turns">
-        <label className="check-opponent-turns-label">
-          <input
-            type="checkbox"
-            checked={checkOpponentTurns}
-            onChange={(e) => onCheckOpponentTurnsChange(e.target.checked)}
-          />
-          Check Opponent's Turns
-        </label>
-        {checkOpponentTurns && (
-          <button type="button" className="flow-button" disabled={!awaitingContinue} onClick={onContinue}>
-            Continue
-          </button>
-        )}
-      </div>
     </>
   );
 
-  // Upper Right: the live resolution stack as a color-coded breadcrumb —
+  // Right, bottom: locked to the very bottom of the Info section,
+  // regardless of what's above it — a persistent viewing setting, not
+  // tied to any particular pending decision.
+  const checkOpponentsTurnsBlock = (
+    <div className="check-opponent-turns">
+      <label className="check-opponent-turns-label">
+        <input type="checkbox" checked={checkOpponentTurns} onChange={(e) => onCheckOpponentTurnsChange(e.target.checked)} />
+        Check Opponent's Turns
+      </label>
+      {checkOpponentTurns && (
+        <button type="button" className="flow-button" disabled={!awaitingContinue} onClick={onContinue}>
+          Continue
+        </button>
+      )}
+    </div>
+  );
+
+  // Right, middle: the live resolution stack as a color-coded breadcrumb —
   // each line can belong to a *different* player than whoever opened the
   // outer frame (e.g. you activate an ability, an opponent's alarm
   // response is now what's actually pending), so each line sets its own
@@ -255,13 +257,13 @@ export function ActivateAbilityBox({
   // actually advance (the attempted action was rejected), so whatever
   // would otherwise show here is still exactly accurate, but explaining
   // the rejection is the more urgent thing to say right now.
-  let upperRight: ReactNode;
+  let actionStack: ReactNode;
   if (actionError) {
-    upperRight = <p className="hint action-error">{actionError}</p>;
+    actionStack = <p className="hint action-error">{actionError}</p>;
   } else if (isPlaying) {
-    upperRight = <p className="hint">{playbackCaption ?? "Watching the turn play out…"}</p>;
+    actionStack = <p className="hint">{playbackCaption ?? "Watching the turn play out…"}</p>;
   } else if (state.resolutionStack.length > 0) {
-    upperRight = (
+    actionStack = (
       <ul className="action-log-stack">
         {state.resolutionStack.map((frame, i) => (
           <li key={i} style={{ color: playerColorFor(state, frameActorId(frame)) }}>
@@ -276,7 +278,7 @@ export function ActivateAbilityBox({
     const presidentDown = lastEntry ? presidentEliminatedInEntry(priorState, lastEntry.resultingState) : false;
     const leaderDown = lastEntry && !presidentDown ? leaderEliminatedInEntry(priorState, lastEntry.resultingState) : false;
     const specialClass = presidentDown ? "president-eliminated-line" : leaderDown ? "leader-eliminated-line" : null;
-    upperRight = lastEntry ? (
+    actionStack = lastEntry ? (
       <p
         className={specialClass ? `hint ${specialClass}` : "hint"}
         style={specialClass ? undefined : { color: playerColorFor(lastEntry.resultingState, lastEntry.actingPlayerId) }}
@@ -288,18 +290,18 @@ export function ActivateAbilityBox({
     );
   }
 
-  // Bottom Right: the pending decision's own heading/hints and every
+  // Left, top: the pending decision's own heading/hints and every
   // card-specific button (ability/response/intercept/target-mode/Done) —
-  // everything except the turn-level Draw/End Turn, which live in Bottom
-  // Left instead.
-  let bottomRight: ReactNode;
+  // everything except the turn-level Draw/End Turn, which sit underneath
+  // it instead (turnFlowButtons above).
+  let abilityActions: ReactNode;
 
   if (isPlaying) {
-    bottomRight = <p className="hint">Watching the turn play out…</p>;
+    abilityActions = <p className="hint">Watching the turn play out…</p>;
   } else if (unsupportedAbility) {
-    bottomRight = <p className="hint">This ability isn't supported by the client yet.</p>;
+    abilityActions = <p className="hint">This ability isn't supported by the client yet.</p>;
   } else if (remoteAbilityPick) {
-    bottomRight = (
+    abilityActions = (
       <>
         <h3>CHOOSE AN ABILITY</h3>
         <p className="hint">Activating {cardName(state, remoteAbilityPick.card.id)}'s ability:</p>
@@ -325,7 +327,7 @@ export function ActivateAbilityBox({
     );
   } else if (cardPick || locationPick) {
     const selectedCount = cardPick?.selectedIds.length ?? 0;
-    bottomRight = (
+    abilityActions = (
       <>
         <h3>{respondingWith ? "RESPOND" : isPickingRemoteCard ? "CHOOSE A CARD TO ACTIVATE" : "CHOOSE TARGETS"}</h3>
         {cardPick && (
@@ -353,7 +355,7 @@ export function ActivateAbilityBox({
     );
   } else if (topFrame?.kind === "alarmResolution" && !respondingWith) {
     const responses = card && card.controller === humanPlayerId ? usableResponseAbilities(state, card, topFrame.triggeringCardId, topFrame.locationId, humanPlayerId) : [];
-    bottomRight = (
+    abilityActions = (
       <>
         <h3>RESPOND</h3>
         <p className="hint">Respond, or pass.</p>
@@ -389,7 +391,7 @@ export function ActivateAbilityBox({
       card.locationId === topFrame.presidentLocationId &&
       card.defRef !== null &&
       getPassive(card.defRef)?.kind === "motorcadeInterception";
-    bottomRight = (
+    abilityActions = (
       <>
         <h3>INTERCEPT MOTORCADE</h3>
         <p className="hint">Intercept, or let it through.</p>
@@ -431,7 +433,7 @@ export function ActivateAbilityBox({
     const isMovingThisCard = !!card && moveModeCardId === card.id;
     const hasAnyOption = abilities.length > 0 || canMove;
 
-    bottomRight = (
+    abilityActions = (
       <>
         {hasAnyOption && <h3>ACTIVATE ABILITY</h3>}
         {isMovingThisCard ? (
@@ -466,10 +468,15 @@ export function ActivateAbilityBox({
 
   return (
     <div className="activate-ability-box" style={{ color: actionColor }}>
-      <div className="activate-ability-tl">{upperLeft}</div>
-      <div className="activate-ability-bl">{bottomLeft}</div>
-      <div className="activate-ability-tr">{upperRight}</div>
-      <div className="activate-ability-br">{bottomRight}</div>
+      <div className="activate-ability-left">
+        <div className="activate-ability-actions">{abilityActions}</div>
+        <div className="activate-ability-turn-flow">{turnFlowButtons}</div>
+      </div>
+      <div className="activate-ability-right">
+        {turnStatus}
+        <div className="activate-ability-stack">{actionStack}</div>
+        {checkOpponentsTurnsBlock}
+      </div>
     </div>
   );
 }
