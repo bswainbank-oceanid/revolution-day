@@ -558,40 +558,39 @@ h3 {
   display: grid;
   /* The middle column used to be "2fr" (~590px, far wider than the
      square location image actually renders at) — the image centered
-     inside it, leaving a ~125px gap of empty column on each side before
-     even reaching the flanking columns' own edge. Fixed to exactly row
-     1's own height (340px, since every location image is a 1:1 square —
-     see the img's own max-width/max-height) so the flanking columns'
-     inner edge lands exactly at the image's real edge, not partway
-     across empty column space — see .location-corner's own comment for
-     why that match matters. */
-  grid-template-columns: 1fr 340px 1fr;
+     inside it, leaving a gap of empty column on each side before even
+     reaching the flanking columns' own edge. Fixed to exactly row 1's own
+     height (408px — the location image's own 340px base size, then +20%
+     per request, since every location image is a 1:1 square — see the
+     img's own max-width/max-height) so the flanking columns' inner edge
+     lands exactly at the image's real edge, not partway across empty
+     column space — see .location-corner's own comment for why that match
+     matters. */
+  grid-template-columns: 1fr 408px 1fr;
   /* Row 1 (the location image) used to be plain "auto", capped only by
-     the img's own max-height (416px) — with a ~540px total budget, that
-     left the bl/br/bottomCenter rows entirely dependent on grid's
-     leftover-space stretch to get any height at all, which varied by
-     location and could overflow. A large, fixed row 1 fixed that, but
-     row 2 (bl/br, in an earlier version of this layout) still pushed
-     bottomCenter down by however much its own content needed — varying
-     by location, and forcing this pane to scroll once occupied at all
-     (340+100+100=540px already at the ~540px budget's own edge with
-     nothing to spare). bl/br now stack inside the flanking columns
-     alongside tl/tr instead (see the JSX and .location-corner below), so
-     there's only one row below the image, and it starts at a small fixed
-     gap from it regardless of who's seated anywhere else. */
-  grid-template-rows: 340px auto;
+     the img's own max-height — that left the bl/br/bottomCenter rows
+     entirely dependent on grid's leftover-space stretch to get any height
+     at all, which varied by location and could overflow. A large, fixed
+     row 1 fixed that, but row 2 (bl/br, in an earlier version of this
+     layout) still pushed bottomCenter down by however much its own
+     content needed — varying by location, and forcing this pane to
+     scroll once occupied at all. bl/br now stack inside the flanking
+     columns alongside tl/tr instead (see the JSX and .location-corner
+     below), so there's only one row below the image, and it starts at a
+     small fixed gap from it regardless of who's seated anywhere else. */
+  grid-template-rows: 408px auto;
   /* Grid's default align-content ("normal") behaves as "stretch" — with
-     row 2 sized "auto" and this container's own height (92% of a ~635px
-     pane) leaving well over 100px of genuine leftover space beyond what
-     340px + row-gap + row 2's own content actually needs, row 2's track
-     was silently stretching to absorb all of it, and
-     .location-seat-bottomCenter's own align-items:center (inherited from
-     .location-seat) then centered the label+cards *within* that inflated
-     track — landing them roughly half the leftover space below row 1,
-     not merely row-gap below it. Pinning content to the start of the
-     grid's own box stops row 2 from stretching at all, so it sizes to
-     exactly its own content and row-gap becomes the real, only distance
-     between the image and the label above the cards. */
+     row 2 sized "auto" and this container's own height leaving genuine
+     leftover space beyond what row 1 + row-gap + row 2's own content
+     actually needs, row 2's track was silently stretching to absorb all
+     of it, and .location-seat-bottomCenter's own align-items:center
+     (inherited from .location-seat) then centered the label+cards
+     *within* that inflated track — landing them roughly half the
+     leftover space below row 1, not merely row-gap below it. Pinning
+     content to the start of the grid's own box stops row 2 from
+     stretching at all, so it sizes to exactly its own content and
+     row-gap becomes the real, only distance between the image and the
+     label above the cards. */
   align-content: start;
   row-gap: 20px;
   column-gap: 0;
@@ -608,7 +607,7 @@ h3 {
   align-items: flex-start;
   justify-content: center;
   /* Grid items stretch to fill their cell's block size by default, so
-     this matches row 1's own 340px track — no need to repeat the number. */
+     this matches row 1's own 408px track — no need to repeat the number. */
   height: 100%;
 }
 .location-image-wrap img {
@@ -621,8 +620,10 @@ h3 {
   outline-offset: -3px;
 }
 .location-president-marker {
+  /* Same width as .mini-card (below), per request — was a smaller,
+     independent 40px before. */
   position: absolute;
-  width: 40px;
+  width: 72px;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%) rotate(-6deg);
@@ -679,10 +680,8 @@ h3 {
   display: inline-block;
 }
 .mini-card {
-  /* Sized to fit rows 2/3's 100px floor (card + label + margin) so a
-     single-cluster seat sits at a fixed, consistent height rather than
-     forcing that floor even taller — see .location-view-grid's comment. */
-  width: 60px;
+  /* Base 60px, +20% per request. */
+  width: 72px;
   border: 2px solid;
   border-radius: 3px;
   display: block;
