@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { candidateHandCards, cardData, getAbilityEffects } from "@rev-day/engine";
 import type { Action, FilteredCardInstance, FilteredGameState, LocationScope, PlayerId, TargetCount } from "@rev-day/engine";
-import { computePendingRealChoice, computeResponseCandidates, usableActivateAbilities } from "./targetDecision";
+import { computePendingRealChoice, computeResponseCandidates, computeTrivialChooseTargets, usableActivateAbilities } from "./targetDecision";
 
 export interface ActiveCardPick {
   readonly candidates: readonly FilteredCardInstance[];
@@ -48,6 +48,13 @@ interface UseTargetSelectionResult {
   readonly viewCardsMode: boolean;
   readonly setViewCardsMode: (v: boolean) => void;
   readonly unsupportedAbility: boolean;
+  // True for the brief window where the current resolutionStack frame is
+  // an always-trivial effect (draw/gainActions/if) that useGame.ts's own
+  // runUntilHumanDecision hasn't auto-submitted yet — see this file's own
+  // comment where it's set. Never a real ask; ActivateAbilityBox shows a
+  // neutral "resolving" hint instead of either a picker or the (wrong)
+  // "unsupported" message.
+  readonly awaitingTrivialResolution: boolean;
   readonly remoteAbilityPick: ActiveRemoteAbilityPick | null;
   // True only during stage 1 of an activateRemote choice (picking which
   // card to activate) — lets ActivateAbilityBox show a distinct header
@@ -120,6 +127,7 @@ export function useTargetSelection(
   let cardPick: ActiveCardPick | null = null;
   let locationPick: ActiveLocationPick | null = null;
   let unsupportedAbility = false;
+  let awaitingTrivialResolution = false;
   let remoteAbilityPick: ActiveRemoteAbilityPick | null = null;
   let isPickingRemoteCard = false;
 
@@ -139,7 +147,22 @@ export function useTargetSelection(
           topFrame.reselectingAfterReveal ?? false,
         );
         if (!pending) {
-          unsupportedAbility = true;
+          // computePendingRealChoice has no picker for every verb — draw,
+          // gainActions, and if are always trivial (see
+          // computeTrivialChooseTargets, which handles them unconditionally)
+          // and never need one, but the frame these effects pause on is
+          // real: it's on the resolutionStack the instant the ability
+          // activates, and only disappears once useGame.ts's own
+          // runUntilHumanDecision round-trip auto-submits it a moment
+          // later. Without this check, that brief, entirely expected gap
+          // read as "unsupported ability" instead of the nothing-to-see
+          // transient it actually is.
+          const trivial = computeTrivialChooseTargets(state, sourceCard, humanPlayerId, effect, topFrame.reselectingAfterReveal ?? false);
+          if (trivial) {
+            awaitingTrivialResolution = true;
+          } else {
+            unsupportedAbility = true;
+          }
         } else if (pending.kind === "cards" && effect.verb === "activateRemote" && !pendingRemoteCardId) {
           // Stage 1: pick which card to activate. Submitting sets
           // pendingRemoteCardId instead of dispatching an action — the
@@ -235,6 +258,7 @@ export function useTargetSelection(
     viewCardsMode,
     setViewCardsMode,
     unsupportedAbility,
+    awaitingTrivialResolution,
     remoteAbilityPick,
     isPickingRemoteCard,
   };

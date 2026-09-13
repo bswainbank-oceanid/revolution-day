@@ -176,6 +176,7 @@ export function ActivateAbilityBox({
     viewCardsMode,
     setViewCardsMode,
     unsupportedAbility,
+    awaitingTrivialResolution,
     remoteAbilityPick,
     isPickingRemoteCard,
   } = selection;
@@ -298,6 +299,11 @@ export function ActivateAbilityBox({
 
   if (isPlaying) {
     abilityActions = <p className="hint">Watching the turn play out…</p>;
+  } else if (awaitingTrivialResolution) {
+    // Momentary — an always-trivial effect step (draw/gainActions/if) that
+    // useGame.ts's own runUntilHumanDecision hasn't auto-submitted yet, not
+    // a real ask. See useTargetSelection.ts's own comment.
+    abilityActions = <p className="hint">Resolving…</p>;
   } else if (unsupportedAbility) {
     abilityActions = <p className="hint">This ability isn't supported by the client yet.</p>;
   } else if (remoteAbilityPick) {
