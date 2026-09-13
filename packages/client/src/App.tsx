@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FilteredCardInstance, FilteredGameState } from "@rev-day/engine";
 import { adjacentLocationIds, asCardInstance, cardData, getAllowedLocationTypes, knownFaction } from "@rev-day/engine";
 import "./App.css";
@@ -83,6 +83,27 @@ function BotCountPicker({
   );
 }
 
+// 6+ total players (bots + the human) is when a normal single deck starts
+// running short — see setup.ts's secondDeck option.
+const SECOND_DECK_DEFAULT_THRESHOLD = 6;
+
+function SecondDeckCheckbox({
+  checked,
+  onChange,
+  disabled,
+}: {
+  readonly checked: boolean;
+  readonly onChange: (checked: boolean) => void;
+  readonly disabled: boolean;
+}) {
+  return (
+    <label className="second-deck-checkbox">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} disabled={disabled} />
+      Second Deck (adds a full duplicate set of non-leader cards, plus 5 more Motorcade cards)
+    </label>
+  );
+}
+
 function App() {
   const { session, loading, error, actionError, startNewGame, act } = useGame();
   const { view, goToCity, goToLocation } = useViewNavigation();
@@ -90,6 +111,19 @@ function App() {
   // so the lobby remembers the player's last choice instead of silently
   // reverting to the default every time.
   const [botCount, setBotCount] = useState(DEFAULT_BOT_COUNT);
+  const [secondDeck, setSecondDeck] = useState(() => botCount + 1 >= SECOND_DECK_DEFAULT_THRESHOLD);
+  // Once the player has manually touched the checkbox, their choice sticks
+  // across further bot-count changes instead of the 6+ default silently
+  // overwriting it — the threshold only sets the *initial* value.
+  const secondDeckTouched = useRef(false);
+  useEffect(() => {
+    if (secondDeckTouched.current) return;
+    setSecondDeck(botCount + 1 >= SECOND_DECK_DEFAULT_THRESHOLD);
+  }, [botCount]);
+  const handleSecondDeckChange = useCallback((checked: boolean) => {
+    secondDeckTouched.current = true;
+    setSecondDeck(checked);
+  }, []);
   const [viewedCardId, setViewedCardId] = useState<string | null>(null);
   const [draggedCard, setDraggedCard] = useState<FilteredCardInstance | null>(null);
   const [checkOpponentTurns, setCheckOpponentTurns] = useState(false);
@@ -211,8 +245,9 @@ function App() {
           Solo vs. bots — this session is you plus {botCount} bot{botCount === 1 ? "" : "s"}.
         </p>
         <BotCountPicker botCount={botCount} onChange={setBotCount} disabled={loading} />
+        <SecondDeckCheckbox checked={secondDeck} onChange={handleSecondDeckChange} disabled={loading} />
         {error && <p className="error">{error}</p>}
-        <button type="button" onClick={() => startNewGame(botCount)} disabled={loading}>
+        <button type="button" onClick={() => startNewGame(botCount, secondDeck)} disabled={loading}>
           {loading ? "Starting…" : "New Game"}
         </button>
       </main>
@@ -233,7 +268,8 @@ function App() {
           startingPlayerId={session.startingPlayerId}
         />
         <BotCountPicker botCount={botCount} onChange={setBotCount} disabled={loading} />
-        <button type="button" onClick={() => startNewGame(botCount)} disabled={loading}>
+        <SecondDeckCheckbox checked={secondDeck} onChange={handleSecondDeckChange} disabled={loading} />
+        <button type="button" onClick={() => startNewGame(botCount, secondDeck)} disabled={loading}>
           {loading ? "Starting…" : "Play Again"}
         </button>
       </main>

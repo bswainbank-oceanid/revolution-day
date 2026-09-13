@@ -65,10 +65,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-export function createGame(playerIds: readonly PlayerId[], viewerId: PlayerId, seed?: number): Promise<GameRow> {
+export function createGame(
+  playerIds: readonly PlayerId[],
+  viewerId: PlayerId,
+  seed?: number,
+  secondDeck?: boolean,
+): Promise<GameRow> {
   return request<GameRow>(`/games?viewerId=${encodeURIComponent(viewerId)}`, {
     method: "POST",
-    body: JSON.stringify({ playerIds, seed }),
+    body: JSON.stringify({ playerIds, seed, secondDeck }),
   });
 }
 

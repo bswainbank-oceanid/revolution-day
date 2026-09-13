@@ -14,10 +14,17 @@ export interface SetupOptions {
   readonly playerIds: readonly PlayerId[];
   readonly seed: number;
   readonly cardData: CardData;
+  // A full duplicate set of non-leader cards (every non_leader_cards entry's
+  // own `copies` doubled) for a longer game with more players — but only 5
+  // additional Motorcade cards, not a full second set of 9 (per request:
+  // "5 additional motorcade cards will be added instead of 9"), so the
+  // Motorcade total is 14, not 18. Leaders are untouched either way — still
+  // exactly one dealt per player from the fixed set of 8.
+  readonly secondDeck?: boolean;
 }
 
 export function setupGame(options: SetupOptions): GameState {
-  const { playerIds, seed, cardData } = options;
+  const { playerIds, seed, cardData, secondDeck = false } = options;
   if (playerIds.length < 2 || playerIds.length > 8) {
     throw new Error(`Revolution Day supports 2-8 players, got ${playerIds.length}`);
   }
@@ -40,7 +47,7 @@ export function setupGame(options: SetupOptions): GameState {
   }));
 
   const nonLeaderInstances: CardInstance[] = cardData.non_leader_cards.flatMap((card) =>
-    Array.from({ length: card.copies }, () => ({
+    Array.from({ length: secondDeck ? card.copies * 2 : card.copies }, () => ({
       id: newId("card"),
       defRef: card.name,
       kind: "nonLeader" as const,
@@ -49,16 +56,14 @@ export function setupGame(options: SetupOptions): GameState {
     })),
   );
 
-  const motorcadeInstances: CardInstance[] = Array.from(
-    { length: cardData.motorcade.count_in_deck },
-    () => ({
-      id: newId("motorcade"),
-      defRef: cardData.motorcade.name,
-      kind: "motorcade" as const,
-      zone: "deck" as const,
-      controller: null,
-    }),
-  );
+  const motorcadeCount = cardData.motorcade.count_in_deck + (secondDeck ? 5 : 0);
+  const motorcadeInstances: CardInstance[] = Array.from({ length: motorcadeCount }, () => ({
+    id: newId("motorcade"),
+    defRef: cardData.motorcade.name,
+    kind: "motorcade" as const,
+    zone: "deck" as const,
+    controller: null,
+  }));
 
   const deckShuffle = shuffle(rng, [...nonLeaderInstances, ...motorcadeInstances]);
   rng = deckShuffle.rng;

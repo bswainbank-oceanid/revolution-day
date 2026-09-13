@@ -98,7 +98,7 @@ export function buildApp(options?: { logger?: boolean }) {
   app.get("/health", async () => ({ status: "ok" }));
 
   app.post("/games", async (request, reply) => {
-    const body = request.body as { playerIds?: PlayerId[]; seed?: number } | undefined;
+    const body = request.body as { playerIds?: PlayerId[]; seed?: number; secondDeck?: boolean } | undefined;
     const playerIds = body?.playerIds;
     if (!playerIds || playerIds.length < 2 || playerIds.length > 8) {
       return reply.code(400).send({ error: "playerIds must have 2-8 entries" });
@@ -107,7 +107,7 @@ export function buildApp(options?: { logger?: boolean }) {
 
     let state: GameState;
     try {
-      state = setupGame({ playerIds, seed, cardData });
+      state = setupGame({ playerIds, seed, cardData, secondDeck: body?.secondDeck });
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }

@@ -56,4 +56,37 @@ describe("setupGame", () => {
     const nine = Array.from({ length: 9 }, (_, i) => `p${i}`);
     expect(() => setupGame({ playerIds: nine, seed: 1, cardData })).toThrow();
   });
+
+  describe("secondDeck", () => {
+    it("doubles every non-leader card's copies but adds only 5 Motorcade cards, not a full second set", () => {
+      const state = setupGame({ playerIds: ["a", "b", "c"], seed: 1, cardData, secondDeck: true });
+      const nonLeaderTotal = cardData.non_leader_cards.reduce((sum, c) => sum + c.copies, 0);
+      const expectedMotorcade = cardData.motorcade.count_in_deck + 5;
+      const nonLeaderCards = state.cards.filter((c) => c.kind === "nonLeader");
+      const motorcadeCards = state.cards.filter((c) => c.kind === "motorcade");
+      expect(nonLeaderCards).toHaveLength(nonLeaderTotal * 2);
+      expect(motorcadeCards).toHaveLength(expectedMotorcade);
+      for (const card of cardData.non_leader_cards) {
+        expect(nonLeaderCards.filter((c) => c.defRef === card.name)).toHaveLength(card.copies * 2);
+      }
+    });
+
+    it("leaves leaders untouched — still exactly one dealt per player from the fixed set of 8", () => {
+      const state = setupGame({ playerIds: ["a", "b", "c"], seed: 1, cardData, secondDeck: true });
+      const leaders = state.cards.filter((c) => c.kind === "leader");
+      expect(leaders).toHaveLength(3);
+      expect(new Set(leaders.map((c) => c.controller))).toEqual(new Set(["a", "b", "c"]));
+    });
+
+    it("defaults to off when omitted", () => {
+      const state = setupGame({ playerIds: ["a", "b", "c"], seed: 1, cardData });
+      expect(state.cards).toHaveLength(3 + deckEligibleTotal);
+    });
+
+    it("is still fully deterministic for a given seed", () => {
+      const a = setupGame({ playerIds: ["a", "b", "c", "d"], seed: 99, cardData, secondDeck: true });
+      const b = setupGame({ playerIds: ["a", "b", "c", "d"], seed: 99, cardData, secondDeck: true });
+      expect(a).toEqual(b);
+    });
+  });
 });

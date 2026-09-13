@@ -373,17 +373,24 @@ function computeOppositionLeaderMode(state: FilteredGameState, playerId: PlayerI
 // reasonable proxy for "rounds completed", on the same not-literally-
 // exact-but-good-enough footing as shouldDeployHeadOfSecurityNow's own
 // deck-size threshold.
-function startingDeckSize(cardData: CardData, playerCount: number): number {
-  const nonLeaderTotal = cardData.non_leader_cards.reduce((sum, c) => sum + c.copies, 0);
+//
+// Deliberately computed from the actual card instances in state rather
+// than cardData's own fixed counts — card instances are never removed
+// from state.cards, only zone-changed (see reducer.ts), so counting every
+// nonLeader/motorcade instance here already reflects a Second Deck game's
+// larger true starting size (setup.ts's secondDeck option) with no need
+// to separately plumb that flag into the bots package at all.
+function startingDeckSize(state: FilteredGameState, playerCount: number): number {
+  const nonLeaderTotal = state.cards.filter((c) => c.kind === "nonLeader" || c.kind === "motorcade").length;
   const dealt = playerCount < 6 ? 4 * playerCount : 0;
-  return nonLeaderTotal + cardData.motorcade.count_in_deck - dealt;
+  return nonLeaderTotal - dealt;
 }
 
-function estimatedRoundsElapsed(state: FilteredGameState, cardData: CardData): number {
+function estimatedRoundsElapsed(state: FilteredGameState): number {
   const playerCount = state.players.length;
   if (playerCount === 0) return 0;
   const currentDeckSize = state.cards.filter((c) => c.zone === "deck").length;
-  const drawn = startingDeckSize(cardData, playerCount) - currentDeckSize;
+  const drawn = startingDeckSize(state, playerCount) - currentDeckSize;
   return Math.floor(drawn / playerCount);
 }
 
@@ -400,7 +407,7 @@ function shouldDeployOppositionLeaderNow(state: FilteredGameState, cardData: Car
     (c) => c.zone === "hand" && c.controller === playerId && knownFaction(cardData, c) === "Rebel",
   ).length;
   if (rebelsInHand >= OPPOSITION_LEADER_HAND_REBEL_THRESHOLD) return true;
-  return estimatedRoundsElapsed(state, cardData) >= OPPOSITION_LEADER_DEPLOY_ROUND;
+  return estimatedRoundsElapsed(state) >= OPPOSITION_LEADER_DEPLOY_ROUND;
 }
 
 // "Play her to 4" — location 4 (1-indexed) is board position index 3,

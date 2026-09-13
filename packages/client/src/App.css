@@ -56,6 +56,17 @@
   cursor: not-allowed;
 }
 
+.second-deck-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  margin: 0.75rem 0;
+  font-size: 0.85rem;
+  opacity: 0.9;
+  cursor: pointer;
+}
+
 .error {
   color: var(--marker-crimson);
   font-weight: 600;

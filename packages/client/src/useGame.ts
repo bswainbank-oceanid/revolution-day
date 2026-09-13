@@ -60,7 +60,7 @@ interface UseGameResult {
   // Cleared automatically at the start of the next act() call, success or
   // failure, same as `error` above.
   readonly actionError: string | null;
-  readonly startNewGame: (botCount: number) => Promise<void>;
+  readonly startNewGame: (botCount: number, secondDeck?: boolean) => Promise<void>;
   readonly act: (action: Action) => Promise<void>;
 }
 
@@ -154,7 +154,7 @@ export function useGame(): UseGameResult {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const startNewGame = useCallback(async (botCount: number) => {
+  const startNewGame = useCallback(async (botCount: number, secondDeck?: boolean) => {
     setLoading(true);
     setError(null);
     try {
@@ -168,7 +168,7 @@ export function useGame(): UseGameResult {
       // and thus who the top ribbon starts with — would otherwise always
       // be the human. Shuffle so any seat, human or bot, can lead.
       const seatOrder = shuffle([humanPlayerId, ...botPlayerIds]);
-      const row = await createGame(seatOrder, humanPlayerId);
+      const row = await createGame(seatOrder, humanPlayerId, undefined, secondDeck);
       const startingPlayerId = row.state.turn.currentPlayerId;
       const initialState = row.state;
       const { state, gameOver, entries } = await runUntilHumanDecision(row.id, humanPlayerId, row.state);
