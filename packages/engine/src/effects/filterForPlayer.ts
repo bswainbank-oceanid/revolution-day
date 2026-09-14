@@ -15,16 +15,17 @@ export interface FilteredGameState extends Omit<GameState, "rng" | "cards"> {
   readonly cards: readonly FilteredCardInstance[];
 }
 
-// Deliberately minimal, built for the bot package's decision-making
-// rather than a full human-facing client (see rev_day_engine_design
-// memory's known gaps). One documented simplification: `eliminated`/
-// `discard` cards are treated as fully revealed, even though a card that
-// died while still blended should technically stay hidden until game
-// end ("all blended characters are revealed at the end of the game") —
-// the reducer already discards the "was it face-down when it died" fact
-// (clears `faceUp` on elimination), so tracking that properly would need
-// new state. Harmless for a bot, which never targets already-dead cards;
-// would matter for a real human-facing client later.
+// `eliminated`/`discard` cards are always treated as fully revealed here,
+// regardless of whether they were still blended (face-down) the instant
+// before — confirmed as the actual intended ruling (not just a
+// bot-decision-making shortcut): elimination itself reveals a card
+// immediately, rather than deferring to the printed "all blended
+// characters are revealed at the end of the game" rule, which only
+// describes what happens to whatever's *still alive and blended* by then.
+// The reducer already discards the "was it face-down when it died" fact
+// (clears `faceUp` on elimination), so there'd be no state left to key a
+// deferred reveal off of even if the game end-only reading were wanted
+// instead.
 function isHiddenFromViewer(card: CardInstance, viewerId: PlayerId): boolean {
   if (card.controller === viewerId) return false; // always see your own cards
   if (card.zone === "deck") return true; // nobody sees deck contents

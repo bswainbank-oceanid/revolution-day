@@ -156,10 +156,16 @@ function eliminationCause(
 // "— eliminated {card} at {location} via {source}'s {Activate|Response}
 // ability" per newly-eliminated card — location comes from priorState
 // since eliminateCard clears locationId once a card is actually
-// eliminated (see reducer.ts). Self-eliminations (the interceptor
-// sacrificing itself, Suicide Bomber's own second effect) skip the "via"
-// clause — "eliminated X via X" doesn't add anything a reader doesn't
-// already know from naming the card once.
+// eliminated (see reducer.ts). The *name*, though, is read from
+// resultingState, not priorState: a card that was still blended (face-down,
+// identity hidden from this viewer) the instant before dying is fully
+// revealed the instant it does — filterForPlayer never redacts an
+// eliminated/discard card's defRef, regardless of faceUp (see its own
+// comment) — so naming it from priorState would wrongly fall back to "a
+// card" for exactly the cards this note matters most for. Self-eliminations
+// (the interceptor sacrificing itself, Suicide Bomber's own second effect)
+// skip the "via" clause — "eliminated X via X" doesn't add anything a
+// reader doesn't already know from naming the card once.
 function describeEliminations(priorState: FilteredGameState, resultingState: FilteredGameState, action: Action): string {
   const eliminatedIds = newlyEliminatedCardIds(priorState, resultingState);
   if (eliminatedIds.length === 0) return "";
@@ -170,7 +176,8 @@ function describeEliminations(priorState: FilteredGameState, resultingState: Fil
       // into a pseudo-card with the same shape — the President's own
       // elimination reads identically to a real card's below.
       const priorCard = resolveCard(priorState, id);
-      const name = id === PRESIDENT_TARGET_ID ? "the President" : (priorCard?.defRef ?? cardName(priorState, id));
+      const resultCard = resolveCard(resultingState, id);
+      const name = id === PRESIDENT_TARGET_ID ? "the President" : (resultCard?.defRef ?? cardName(resultingState, id));
       const at = locationName(priorState, priorCard?.locationId);
       const atClause = at ? ` at ${at}` : "";
       if (!cause || cause.sourceCardId === id) return ` — eliminated ${name}${atClause}.`;
