@@ -67,6 +67,63 @@
   cursor: pointer;
 }
 
+.how-to-play {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-white);
+  text-align: left;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.how-to-play h3 {
+  margin: 1.25rem 0 0.4rem;
+  font-size: 0.95rem;
+  color: var(--gold);
+}
+
+.how-to-play p {
+  margin: 0.6rem 0;
+}
+
+.how-to-play ul {
+  margin: 0.3rem 0;
+  padding-left: 1.4rem;
+}
+
+.how-to-play li {
+  margin: 0.2rem 0;
+}
+
+.how-to-play-icon-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.how-to-play-icon-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+
+.how-to-play-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.how-to-play-alarm {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.how-to-play a {
+  color: var(--gold);
+}
+
 .error {
   color: var(--marker-crimson);
   font-weight: 600;

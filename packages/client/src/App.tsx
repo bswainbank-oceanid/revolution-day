@@ -10,6 +10,7 @@ import { GameChat } from "./GameChat";
 import { GameLog } from "./GameLog";
 import { GameOverScreen } from "./GameOverScreen";
 import { HandStrip } from "./HandStrip";
+import { HowToPlay } from "./HowToPlay";
 import { LocationView } from "./LocationView";
 import { decider } from "./decider";
 import { playerLabel } from "./players";
@@ -264,6 +265,7 @@ function App() {
         <button type="button" onClick={() => startNewGame(botCount, secondDeck)} disabled={loading}>
           {loading ? "Starting…" : "New Game"}
         </button>
+        <HowToPlay />
       </main>
     );
   }
