@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "typecheck": "tsc --noEmit",
@@ -17,13 +18,13 @@
     "@rev-day/bots": "*",
     "@rev-day/engine": "*",
     "drizzle-orm": "^0.45.2",
-    "fastify": "^5.12.1"
+    "fastify": "^5.12.1",
+    "tsx": "^4.23.12"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
     "drizzle-kit": "^0.31.10",
     "oxlint": "^1.75.0",
-    "tsx": "^4.23.12",
     "typescript": "^5.6.3",
     "vitest": "^4.1.11"
   }

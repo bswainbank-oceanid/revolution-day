@@ -6,7 +6,12 @@ import type { Action, FilteredGameState, PlayerId, WinConditionExplanation } fro
 // passes viewerId, so the client only ever receives the filtered view —
 // never the raw ground-truth GameState, even though the server would
 // hand it over if asked.
-const BASE_URL = "http://localhost:3001";
+//
+// VITE_API_BASE_URL is baked in at build time (Vite convention — only
+// import.meta.env.VITE_* vars are exposed to client code), so a deployed
+// build points at its real server instead of localhost; set it in
+// whatever hosts the client build (see DEPLOY.md).
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001";
 
 export class ApiError extends Error {
   readonly status: number;
