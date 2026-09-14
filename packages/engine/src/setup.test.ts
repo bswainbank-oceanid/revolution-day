@@ -88,5 +88,14 @@ describe("setupGame", () => {
       const b = setupGame({ playerIds: ["a", "b", "c", "d"], seed: 99, cardData, secondDeck: true });
       expect(a).toEqual(b);
     });
+
+    it("waives the 6+ players 'no draw up to 5' rule — everyone gets a full 5-card opening hand", () => {
+      const playerIds = ["a", "b", "c", "d", "e", "f"];
+      const state = setupGame({ playerIds, seed: 1, cardData, secondDeck: true });
+      for (const playerId of playerIds) {
+        const hand = state.cards.filter((c) => c.zone === "hand" && c.controller === playerId);
+        expect(hand).toHaveLength(5);
+      }
+    });
   });
 });

@@ -8,8 +8,9 @@ import { createRng, nextInt, shuffle, type RngState } from "./state/rng";
 // and shuffle the 8 leaders, deal one per player secretly (the rest are
 // set aside, never entering the draw deck), shuffle everything else into
 // the draw deck, deal 4 more cards per player for a 5-card opening hand
-// (skipped at 6+ players — no draw up to 5, per the existing ruling), then
-// randomly determine the starting player.
+// (skipped at 6+ players — no draw up to 5, per the existing ruling, unless
+// secondDeck is on — see its own comment below), then randomly determine
+// the starting player.
 export interface SetupOptions {
   readonly playerIds: readonly PlayerId[];
   readonly seed: number;
@@ -20,6 +21,12 @@ export interface SetupOptions {
   // "5 additional motorcade cards will be added instead of 9"), so the
   // Motorcade total is 14, not 18. Leaders are untouched either way — still
   // exactly one dealt per player from the fixed set of 8.
+  //
+  // Also waives the 6+ players "no draw up to 5" restriction below — the
+  // original rule exists to keep a normal single deck from running short
+  // with more players drawing from it; a second deck has enough cards to
+  // support a full opening hand at any player count, so every player deals
+  // in the same 4 extra cards for a 5-card hand regardless of playerIds.length.
   readonly secondDeck?: boolean;
 }
 
@@ -71,7 +78,7 @@ export function setupGame(options: SetupOptions): GameState {
 
   const dealtHandCards: CardInstance[] = [];
   let deckIndex = 0;
-  if (playerIds.length < 6) {
+  if (playerIds.length < 6 || secondDeck) {
     for (const playerId of playerIds) {
       for (let i = 0; i < 4 && deckIndex < shuffledDeck.length; i++) {
         const card = shuffledDeck[deckIndex]!;

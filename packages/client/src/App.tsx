@@ -99,7 +99,8 @@ function SecondDeckCheckbox({
   return (
     <label className="second-deck-checkbox">
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} disabled={disabled} />
-      Second Deck (adds a full duplicate set of non-leader cards, plus 5 more Motorcade cards)
+      Second Deck (adds a full duplicate set of non-leader cards, plus 5 more Motorcade cards, and gives every
+      player a full opening hand even at 6+ players)
     </label>
   );
 }
