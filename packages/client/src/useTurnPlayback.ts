@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { asCardInstance, cardData, getAbilities } from "@rev-day/engine";
+import { asCardInstance, cardData, getAbilities, PRESIDENT_TARGET_ID } from "@rev-day/engine";
 import type { Action, FilteredGameState, PlayerId } from "@rev-day/engine";
 import { PACING_DELAY_MS } from "./pacing";
 import { cardName, describeEntry } from "./gameText";
@@ -93,6 +93,43 @@ function computeViewerCardSequence(entry: LogEntry, priorState: FilteredGameStat
     case "passReactive":
       return [];
   }
+}
+
+// Whether `id` (a real card, or the President sentinel) just transitioned
+// to eliminated between these two states — mirrors gameText.ts's own
+// newlyEliminatedCardIds, just for a single already-known id rather than
+// scanning for every newly-eliminated card.
+function wasNewlyEliminated(priorState: FilteredGameState, resultingState: FilteredGameState, id: string): boolean {
+  if (id === PRESIDENT_TARGET_ID) {
+    return priorState.president.status !== "eliminated" && resultingState.president.status === "eliminated";
+  }
+  const before = priorState.cards.find((c) => c.id === id);
+  const after = resultingState.cards.find((c) => c.id === id);
+  return before?.zone !== "eliminated" && after?.zone === "eliminated";
+}
+
+// Every card (plus the President sentinel) newly eliminated between these
+// two states — used to catch an elimination a beat's own explicit target
+// list doesn't name at all. Secret Police's ability is the concrete case:
+// "reveal a blended target; if rebel, eliminate it; if regime, eliminate
+// this card instead" is a reveal effect followed by an `if` effect, each
+// its own chooseTargets step (confirmed directly against the engine) —
+// the `if` step is what actually performs the eliminate, submitted with
+// empty targetIds (computeTrivialChooseTargets's own "if" case; it needs
+// no target, just to advance), so *neither* branch's outcome — not even
+// "eliminate the revealed target" — was ever named by that entry's own
+// action.targetIds. Both branches produced no beat for whichever card
+// actually died.
+function newlyEliminatedIds(priorState: FilteredGameState, resultingState: FilteredGameState): readonly string[] {
+  const ids: string[] = [];
+  for (const card of resultingState.cards) {
+    if (card.zone !== "eliminated") continue;
+    if (priorState.cards.find((c) => c.id === card.id)?.zone !== "eliminated") ids.push(card.id);
+  }
+  if (priorState.president.status !== "eliminated" && resultingState.president.status === "eliminated") {
+    ids.push(PRESIDENT_TARGET_ID);
+  }
+  return ids;
 }
 
 function findDrawnCardId(priorState: FilteredGameState, resultingState: FilteredGameState, playerId: PlayerId): string | null {
@@ -205,7 +242,15 @@ function buildBeats(
     // City View reset players actually see happens separately, as the
     // turn-start beat below once play reaches the human.
     const sequence = action.type === "endTurn" ? [] : computeViewerCardSequence(entry, priorState);
-    const beatCards = sequence.length > 0 ? sequence : action.type === "endTurn" ? [] : [null];
+    const explicitBeatCards = sequence.length > 0 ? sequence : action.type === "endTurn" ? [] : [null];
+    // Append a beat for any elimination this entry's own explicit target
+    // list doesn't already cover — see newlyEliminatedIds' own comment
+    // (Secret Police's self-elimination branch is the concrete case).
+    const uncoveredEliminations =
+      action.type === "endTurn"
+        ? []
+        : newlyEliminatedIds(priorState, entry.resultingState).filter((id) => !explicitBeatCards.includes(id));
+    const beatCards = [...explicitBeatCards, ...uncoveredEliminations];
     let entryInitiatorCardId: string | null = null;
     beatCards.forEach((viewerCardId, idx) => {
       if (idx === 0) entryInitiatorCardId = viewerCardId;
@@ -226,11 +271,23 @@ function buildBeats(
     const priorLen = priorState.resolutionStack.length;
     const resultLen = entry.resultingState.resolutionStack.length;
 
+    // If this entry's own beat(s) just showed a card (or the President)
+    // getting eliminated — revealing a blended one in the process, see
+    // filterForPlayer.ts's own elimination-reveal ruling — the chain
+    // reversion below must not immediately supersede that with a "return
+    // to whichever card started this resolution" beat: without this, the
+    // just-revealed, just-eliminated card flashes by for exactly one beat
+    // and is instantly replaced, which in practice reads as never having
+    // shown up at all. Let the elimination be the last thing shown for
+    // this entry instead — closing the chain still happens (so the next
+    // entry starts clean), it just doesn't earn its own reversion beat.
+    const eliminatedSomethingJustShown = beatCards.some((id) => id !== null && wasNewlyEliminated(priorState, entry.resultingState, id));
+
     // Close every chain this entry brought back down to (or below) its own
     // opening depth — innermost first.
     while (chainStack.length > 0 && resultLen <= chainStack[chainStack.length - 1]!.baseline) {
       const closed = chainStack.pop()!;
-      if (closed.initiatorCardId) {
+      if (closed.initiatorCardId && !eliminatedSomethingJustShown) {
         beats.push({
           entryIndex: i,
           viewerCardId: closed.initiatorCardId,
